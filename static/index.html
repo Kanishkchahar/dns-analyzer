@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DNS Analyzer</title>
+  <meta name="description" content="Analyze DNS records and detect misconfigurations for any domain." />
+
+  <!-- Geist font from Vercel CDN -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Geist:wght@400;600;700&family=Geist+Mono:wght@400;600;700&display=swap"
+    rel="stylesheet"
+  />
+
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- Skip link for keyboard / screen reader users -->
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <header class="app-header" role="banner">
+    <div class="header-inner">
+      <a class="logo" href="/" aria-label="DNS Analyzer home">
+        <!-- DNS icon -->
+        <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <circle cx="11" cy="11" r="10" stroke="#65B9E8" stroke-width="1.5"/>
+          <path d="M11 1C11 1 7 6 7 11s4 10 4 10" stroke="#65B9E8" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M11 1C11 1 15 6 15 11s-4 10-4 10" stroke="#65B9E8" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M1.5 11h19" stroke="#65B9E8" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M2 7h18M2 15h18" stroke="#65B9E8" stroke-width="1" stroke-linecap="round" opacity="0.5"/>
+        </svg>
+        DNS Analyzer
+      </a>
+      <span class="logo-tagline">v1</span>
+    </div>
+  </header>
+
+  <main id="main-content">
+
+    <!-- ── Hero / Input ── -->
+    <section class="hero" aria-labelledby="hero-title">
+      <h1 class="hero-title" id="hero-title">DNS Lookup<br>&amp; Analyzer</h1>
+      <p class="hero-sub">
+        Enter any domain to fetch its DNS records and run misconfiguration checks
+        — A, AAAA, MX, NS, TXT, CNAME, SOA, all concurrently.
+      </p>
+
+      <div class="input-row" role="search">
+        <label for="domain-input" class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Domain name</label>
+        <input
+          id="domain-input"
+          class="domain-input"
+          type="text"
+          placeholder="example.com or https://example.com/path"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="none"
+          spellcheck="false"
+          aria-label="Domain to analyze"
+        />
+        <button
+          id="analyze-btn"
+          class="btn-analyze"
+          type="button"
+          aria-label="Run DNS analysis"
+        >
+          <div class="spinner" aria-hidden="true"></div>
+          <span class="btn-text">Analyze</span>
+        </button>
+      </div>
+
+      <!-- Error banner -->
+      <div id="error-banner" class="error-banner" role="alert" aria-live="assertive">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <circle cx="8" cy="8" r="7" stroke="#E36D6D" stroke-width="1.5"/>
+          <path d="M8 5v3.5M8 10.5v.5" stroke="#E36D6D" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span id="error-msg"></span>
+      </div>
+    </section>
+
+    <!-- ── Results ── -->
+    <section id="results" aria-label="Analysis results" aria-live="polite">
+
+      <!-- Download bar -->
+      <div class="download-bar">
+        <p>Results for <span id="result-domain"></span></p>
+        <button class="btn-download" id="download-btn" type="button">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M7 1v8M4 6l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M2 10v1.5a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          Download Report
+        </button>
+      </div>
+
+      <!-- Summary badges -->
+      <div class="summary-section" aria-label="Summary">
+        <p class="summary-heading">Summary</p>
+        <div class="summary-badges">
+          <div class="badge badge-errors" id="badge-errors">
+            <span class="count" id="count-errors">0</span>
+            <span class="label">Errors</span>
+          </div>
+          <div class="badge badge-warnings" id="badge-warnings">
+            <span class="count" id="count-warnings">0</span>
+            <span class="label">Warnings</span>
+          </div>
+          <div class="badge badge-info" id="badge-info">
+            <span class="count" id="count-info">0</span>
+            <span class="label">Info</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Findings list -->
+      <div class="findings-section">
+        <h2 class="section-title">Findings</h2>
+        <div id="findings-list" role="list" aria-label="Findings"></div>
+      </div>
+
+      <!-- DNS Records -->
+      <div class="records-section">
+        <h2 class="section-title">DNS Records</h2>
+        <div class="records-grid" id="records-grid"></div>
+      </div>
+
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
