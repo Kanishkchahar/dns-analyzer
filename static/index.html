@@ -133,9 +133,20 @@
         </button>
       </div>
 
-      <!-- Summary badges -->
-      <div class="summary-section" aria-label="Summary">
-        <p class="summary-heading">Summary</p>
+      <!-- Section Jump Navigation -->
+      <nav class="jump-nav" id="jump-nav" aria-label="Section navigation">
+        <a href="#summary-section" class="jump-pill active">Overview</a>
+        <a href="#email-score-section" class="jump-pill">Email Health</a>
+        <a href="#email-auth-section" class="jump-pill">Authentication</a>
+        <a href="#security-suite-section" class="jump-pill">Threat Defense</a>
+        <a href="#remediation-section" class="jump-pill">Remediation</a>
+        <a href="#findings-section" class="jump-pill">Findings</a>
+        <a href="#records-section" class="jump-pill">DNS Records</a>
+      </nav>
+
+      <!-- Summary badges & Executive Posture Matrix -->
+      <div class="summary-section" id="summary-section" aria-label="Summary">
+        <p class="summary-heading">Executive Overview</p>
         <div class="summary-badges">
           <div class="badge badge-errors" id="badge-errors">
             <span class="count" id="count-errors">0</span>
@@ -148,6 +159,38 @@
           <div class="badge badge-info" id="badge-info">
             <span class="count" id="count-info">0</span>
             <span class="label">Info</span>
+          </div>
+        </div>
+
+        <!-- Posture Matrix -->
+        <div class="posture-matrix" id="posture-matrix">
+          <div class="posture-card">
+            <div class="posture-icon" id="posture-routing-icon">🌐</div>
+            <div class="posture-info">
+              <span class="posture-label">DNS Routing</span>
+              <span class="posture-val" id="posture-routing">Evaluating...</span>
+            </div>
+          </div>
+          <div class="posture-card">
+            <div class="posture-icon" id="posture-redundancy-icon">🛡️</div>
+            <div class="posture-info">
+              <span class="posture-label">NS Redundancy</span>
+              <span class="posture-val" id="posture-redundancy">Evaluating...</span>
+            </div>
+          </div>
+          <div class="posture-card">
+            <div class="posture-icon" id="posture-email-icon">✉️</div>
+            <div class="posture-info">
+              <span class="posture-label">Email Defense</span>
+              <span class="posture-val" id="posture-email">Evaluating...</span>
+            </div>
+          </div>
+          <div class="posture-card">
+            <div class="posture-icon" id="posture-dnssec-icon">🔐</div>
+            <div class="posture-info">
+              <span class="posture-label">DNSSEC Cryptography</span>
+              <span class="posture-val" id="posture-dnssec">Evaluating...</span>
+            </div>
           </div>
         </div>
       </div>
@@ -201,22 +244,40 @@
       </div>
 
       <!-- Findings list -->
-      <div class="findings-section">
+      <div class="findings-section" id="findings-section">
         <div class="findings-header">
           <h2 class="section-title" style="margin-bottom:0">Findings</h2>
-          <div class="filter-group" role="tablist" aria-label="Filter findings by severity">
-            <button class="filter-chip active" type="button" data-filter="all" role="tab" aria-selected="true">All</button>
-            <button class="filter-chip" type="button" data-filter="error" role="tab" aria-selected="false">Errors</button>
-            <button class="filter-chip" type="button" data-filter="warning" role="tab" aria-selected="false">Warnings</button>
-            <button class="filter-chip" type="button" data-filter="info" role="tab" aria-selected="false">Info</button>
+          <div class="findings-controls">
+            <div class="findings-search-wrap">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <circle cx="7" cy="7" r="5"/>
+                <path d="M11 11l4 4"/>
+              </svg>
+              <input
+                type="text"
+                id="findings-search"
+                class="findings-search"
+                placeholder="Search findings (e.g. spf, mx, ttl)..."
+                aria-label="Search findings by keyword"
+              />
+            </div>
+            <div class="filter-group" role="tablist" aria-label="Filter findings by severity">
+              <button class="filter-chip active" type="button" data-filter="all" role="tab" aria-selected="true">All</button>
+              <button class="filter-chip" type="button" data-filter="error" role="tab" aria-selected="false">Errors</button>
+              <button class="filter-chip" type="button" data-filter="warning" role="tab" aria-selected="false">Warnings</button>
+              <button class="filter-chip" type="button" data-filter="info" role="tab" aria-selected="false">Info</button>
+            </div>
           </div>
         </div>
         <div id="findings-list" role="list" aria-label="Findings"></div>
       </div>
 
       <!-- DNS Records -->
-      <div class="records-section">
-        <h2 class="section-title">DNS Records</h2>
+      <div class="records-section" id="records-section">
+        <div class="records-header-row">
+          <h2 class="section-title" style="margin-bottom:0">DNS Records</h2>
+          <span class="records-meta-tag">7 Zone Record Types</span>
+        </div>
         <div class="records-grid" id="records-grid"></div>
       </div>
 

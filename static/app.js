@@ -20,6 +20,8 @@ const countInfo    = document.getElementById("count-info");
 const badgeErrors  = document.getElementById("badge-errors");
 const badgeWarnings= document.getElementById("badge-warnings");
 const badgeInfo    = document.getElementById("badge-info");
+const findingsSearch = document.getElementById("findings-search");
+let findingsSearchQuery = "";
 
 // Accessibility & Help modal DOM refs
 const shortcutsBtn     = document.getElementById("shortcuts-btn");
@@ -318,6 +320,13 @@ badgeInfo.addEventListener("click", () => {
   applyFindingsFilter(currentFilter === "info" ? "all" : "info");
 });
 
+if (findingsSearch) {
+  findingsSearch.addEventListener("input", (e) => {
+    findingsSearchQuery = e.target.value.toLowerCase().trim();
+    renderFindingsList();
+  });
+}
+
 downloadBtn.addEventListener("click", () => {
   if (!currentDomain) return;
   const url = `/api/report/${encodeURIComponent(currentDomain)}`;
@@ -459,6 +468,9 @@ function renderResults(data) {
   badgeErrors.classList.toggle("zero", data.summary.errors === 0);
   badgeWarnings.classList.toggle("zero", data.summary.warnings === 0);
 
+  // Executive Posture Matrix
+  renderPostureMatrix(data);
+
   // Render findings with default filter "all"
   applyFindingsFilter("all");
 
@@ -483,6 +495,76 @@ function renderResults(data) {
   results.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+// ── Executive Posture Matrix ──────────────────────────────────
+function renderPostureMatrix(data) {
+  const routingEl = document.getElementById("posture-routing");
+  const redundancyEl = document.getElementById("posture-redundancy");
+  const emailEl = document.getElementById("posture-email");
+  const dnssecEl = document.getElementById("posture-dnssec");
+
+  if (!routingEl || !redundancyEl || !emailEl || !dnssecEl) return;
+
+  // 1. DNS Routing (A / AAAA)
+  const aRecs = data.records?.A?.records || [];
+  const aaaaRecs = data.records?.AAAA?.records || [];
+  if (aRecs.length > 0 && aaaaRecs.length > 0) {
+    routingEl.textContent = `Dual-Stack (${aRecs.length} IPv4, ${aaaaRecs.length} IPv6)`;
+    routingEl.className = "posture-val ok";
+  } else if (aRecs.length > 0) {
+    routingEl.textContent = `IPv4 Reachable (${aRecs.length} host${aRecs.length === 1 ? "" : "s"})`;
+    routingEl.className = "posture-val ok";
+  } else if (aaaaRecs.length > 0) {
+    routingEl.textContent = `IPv6 Only (${aaaaRecs.length} host${aaaaRecs.length === 1 ? "" : "s"})`;
+    routingEl.className = "posture-val ok";
+  } else {
+    routingEl.textContent = "Unresolvable (No A/AAAA)";
+    routingEl.className = "posture-val danger";
+  }
+
+  // 2. Nameserver Redundancy
+  const nsRecs = data.records?.NS?.records || [];
+  if (nsRecs.length >= 2) {
+    redundancyEl.textContent = `Fault-Tolerant (${nsRecs.length} NS hosts)`;
+    redundancyEl.className = "posture-val ok";
+  } else if (nsRecs.length === 1) {
+    redundancyEl.textContent = "Single NS (SPOF Risk)";
+    redundancyEl.className = "posture-val warn";
+  } else {
+    redundancyEl.textContent = "Missing Authoritative NS";
+    redundancyEl.className = "posture-val danger";
+  }
+
+  // 3. Email Authentication
+  const dmarc = data.email_auth?.dmarc;
+  const spf = data.email_auth?.spf;
+  if (dmarc && (dmarc.policy === "reject" || dmarc.policy === "quarantine")) {
+    emailEl.textContent = `Enforced (${dmarc.policy})`;
+    emailEl.className = "posture-val ok";
+  } else if (dmarc && dmarc.policy === "none") {
+    emailEl.textContent = "Audit Mode (p=none)";
+    emailEl.className = "posture-val warn";
+  } else if (spf) {
+    emailEl.textContent = "SPF Only (No DMARC)";
+    emailEl.className = "posture-val warn";
+  } else {
+    emailEl.textContent = "Unprotected (Spoof Risk)";
+    emailEl.className = "posture-val danger";
+  }
+
+  // 4. DNSSEC
+  const dnssec = data.security?.dnssec;
+  if (dnssec && dnssec.status === "secured") {
+    dnssecEl.textContent = "Cryptographically Signed";
+    dnssecEl.className = "posture-val ok";
+  } else if (dnssec && dnssec.status === "incomplete_chain") {
+    dnssecEl.textContent = "Incomplete DS Chain";
+    dnssecEl.className = "posture-val warn";
+  } else {
+    dnssecEl.textContent = "Unsigned Zone";
+    dnssecEl.className = "posture-val warn";
+  }
+}
+
 // ── Findings Filter & List ────────────────────────────────────
 function applyFindingsFilter(filter) {
   currentFilter = filter;
@@ -504,14 +586,25 @@ function applyFindingsFilter(filter) {
 
 function renderFindingsList() {
   findingsList.innerHTML = "";
-  const filtered = currentFilter === "all"
+  let filtered = currentFilter === "all"
     ? currentFindings
     : currentFindings.filter((f) => f.severity === currentFilter);
 
+  if (findingsSearchQuery) {
+    filtered = filtered.filter((f) =>
+      (f.message && f.message.toLowerCase().includes(findingsSearchQuery)) ||
+      (f.record_type && f.record_type.toLowerCase().includes(findingsSearchQuery)) ||
+      (f.severity && f.severity.toLowerCase().includes(findingsSearchQuery))
+    );
+  }
+
   if (filtered.length === 0) {
-    const emptyMsg = currentFilter === "all"
+    let emptyMsg = currentFilter === "all"
       ? "No issues found — DNS configuration looks healthy."
       : `No ${currentFilter} findings detected.`;
+    if (findingsSearchQuery) {
+      emptyMsg = `No findings match "${findingsSearchQuery}".`;
+    }
     findingsList.innerHTML = `
       <div class="no-issues" role="status">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -546,7 +639,94 @@ function renderFinding(f) {
   return div;
 }
 
-// ── Record card ───────────────────────────────────────────────
+// ── Smart Data Helpers ────────────────────────────────────────
+function detectMxProvider(host) {
+  if (!host) return null;
+  const h = host.toLowerCase();
+  if (h.includes("google") || h.includes("aspmx")) return "Google Workspace";
+  if (h.includes("outlook") || h.includes("microsoft") || h.includes("office365")) return "Microsoft 365";
+  if (h.includes("pphosted") || h.includes("proofpoint")) return "Proofpoint";
+  if (h.includes("mimecast")) return "Mimecast";
+  if (h.includes("zoho")) return "Zoho Mail";
+  if (h.includes("cloudflare")) return "Cloudflare Mail";
+  if (h.includes("mailgun")) return "Mailgun";
+  if (h.includes("sendgrid")) return "SendGrid";
+  if (h.includes("amazonses") || h.includes("aws")) return "Amazon SES";
+  if (h.includes("secureserver") || h.includes("godaddy")) return "GoDaddy Mail";
+  if (h.includes("protonmail") || h.includes("proton")) return "Proton Mail";
+  return null;
+}
+
+function detectNsProvider(host) {
+  if (!host) return null;
+  const h = host.toLowerCase();
+  if (h.includes("cloudflare")) return "Cloudflare DNS";
+  if (h.includes("awsdns") || h.includes("route53")) return "AWS Route 53";
+  if (h.includes("googledomains") || h.includes("google")) return "Google Cloud DNS";
+  if (h.includes("azure-dns")) return "Azure DNS";
+  if (h.includes("registrar-servers") || h.includes("namecheap")) return "Namecheap";
+  if (h.includes("domaincontrol") || h.includes("godaddy")) return "GoDaddy DNS";
+  if (h.includes("digitalocean")) return "DigitalOcean";
+  if (h.includes("linode") || h.includes("akamai")) return "Akamai/Linode";
+  if (h.includes("he.net") || h.includes("hurricane")) return "Hurricane Electric";
+  return null;
+}
+
+function classifyTxt(val) {
+  if (!val) return "TXT";
+  const s = String(val).toLowerCase();
+  if (s.startsWith("v=spf1")) return "SPF Policy";
+  if (s.includes("google-site-verification")) return "Google Verify";
+  if (s.includes("ms=ms") || s.includes("microsoft")) return "Microsoft Verify";
+  if (s.includes("apple-domain-verification")) return "Apple Verify";
+  if (s.includes("facebook-domain-verification")) return "Meta Verify";
+  if (s.includes("stripe-verification")) return "Stripe";
+  if (s.includes("github-verification")) return "GitHub";
+  if (s.includes("docusign")) return "DocuSign";
+  if (s.includes("atlassian")) return "Atlassian";
+  if (s.includes("adobe")) return "Adobe";
+  return "General TXT";
+}
+
+function formatSeconds(secs) {
+  const n = parseInt(secs, 10);
+  if (isNaN(n)) return `${secs}s`;
+  if (n < 60) return `${n}s`;
+  if (n < 3600) return `${n}s (${Math.round(n / 60)} mins)`;
+  if (n < 86400) return `${n}s (${+(n / 3600).toFixed(1)} hrs)`;
+  return `${n}s (${+(n / 86400).toFixed(1)} days)`;
+}
+
+function formatSoaEmail(rname) {
+  if (!rname) return "";
+  const parts = String(rname).split(".");
+  if (parts.length > 1) {
+    const user = parts[0].replace(/\\/g, "");
+    const domain = parts.slice(1).join(".").replace(/\.$/, "");
+    return `${user}@${domain}`;
+  }
+  return rname;
+}
+
+function makeInlineCopyBtn(text) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "record-copy-btn";
+  btn.setAttribute("aria-label", "Copy value to clipboard");
+  btn.setAttribute("title", "Copy value");
+  btn.innerHTML = `
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+      <rect x="3.5" y="3.5" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.2"/>
+      <path d="M2.5 8.5H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h5.5a1 1 0 0 1 1 1v.5" stroke="currentColor" stroke-width="1.2"/>
+    </svg>`;
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    copyToClipboard(text, btn);
+  });
+  return btn;
+}
+
+// ── Smart Record Card Rendering ───────────────────────────────
 function renderRecordCard(rtype, entry) {
   const card = document.createElement("div");
   card.className = "record-card";
@@ -556,9 +736,19 @@ function renderRecordCard(rtype, entry) {
   const statusClass = isOk ? "status-ok" : "status-fail";
   const ttlStr = isOk && entry.ttl != null ? `TTL ${entry.ttl}s` : "";
 
+  let countLabel = "";
+  if (isOk && entry.records) {
+    if (Array.isArray(entry.records)) {
+      countLabel = `${entry.records.length} record${entry.records.length === 1 ? "" : "s"}`;
+    }
+  }
+
   card.innerHTML = `
     <div class="record-card-header">
-      <span class="record-type-label">${escapeHtml(rtype)}</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="record-type-label">${escapeHtml(rtype)}</span>
+        ${countLabel ? `<span class="records-meta-tag">${countLabel}</span>` : ""}
+      </div>
       <div style="display:flex;align-items:center;gap:10px;">
         ${ttlStr ? `<span class="record-ttl">${escapeHtml(ttlStr)}</span>` : ""}
         <span class="record-status ${statusClass}">${escapeHtml(statusLabel)}</span>
@@ -578,41 +768,65 @@ function renderRecordCard(rtype, entry) {
     const rec = entry.records;
     const fields = [
       ["Primary NS", rec.mname],
-      ["Responsible", rec.rname],
+      ["Admin Contact", formatSoaEmail(rec.rname)],
       ["Serial", rec.serial],
-      ["Refresh", `${rec.refresh}s`],
-      ["Retry", `${rec.retry}s`],
-      ["Expire", `${rec.expire}s`],
-      ["Minimum TTL", `${rec.minimum}s`],
+      ["Refresh Interval", formatSeconds(rec.refresh)],
+      ["Retry Interval", formatSeconds(rec.retry)],
+      ["Expire Limit", formatSeconds(rec.expire)],
+      ["Minimum TTL", formatSeconds(rec.minimum)],
     ];
     for (const [label, val] of fields) {
       const row = document.createElement("div");
       row.className = "record-row";
       row.innerHTML = `<span class="record-label">${escapeHtml(label)}</span><span class="record-value">${escapeHtml(String(val))}</span>`;
+      row.appendChild(makeInlineCopyBtn(String(val)));
       body.appendChild(row);
     }
   } else if (rtype === "MX") {
     for (const r of entry.records) {
       const row = document.createElement("div");
       row.className = "record-row";
-      const resolvePill = `<span class="resolve-pill ${r.resolves ? "resolve-yes" : "resolve-no"}">${r.resolves ? "resolves" : "unresolved"}</span>`;
+      const resolvePill = `<span class="resolve-pill ${r.resolves ? "resolve-yes" : "resolve-no"}">${r.resolves ? "✓ resolves" : "✗ unresolvable"}</span>`;
+      const provider = detectMxProvider(r.host);
       row.innerHTML = `
-        <span class="record-label">P${escapeHtml(String(r.priority))}</span>
+        <span class="record-label">Priority ${escapeHtml(String(r.priority))}</span>
         <span class="record-value">${escapeHtml(r.host)}</span>
+        ${provider ? `<span class="record-provider-pill">${escapeHtml(provider)}</span>` : ""}
         ${resolvePill}
       `;
+      row.appendChild(makeInlineCopyBtn(r.host));
       body.appendChild(row);
     }
   } else if (rtype === "NS") {
     for (const r of entry.records) {
       const row = document.createElement("div");
       row.className = "record-row";
-      const resolvePill = `<span class="resolve-pill ${r.resolves ? "resolve-yes" : "resolve-no"}">${r.resolves ? "resolves" : "unresolved"}</span>`;
+      const resolvePill = `<span class="resolve-pill ${r.resolves ? "resolve-yes" : "resolve-no"}">${r.resolves ? "✓ resolves" : "✗ unresolvable"}</span>`;
+      const provider = detectNsProvider(r.host);
       row.innerHTML = `
         <span class="record-value">${escapeHtml(r.host)}</span>
+        ${provider ? `<span class="record-provider-pill">${escapeHtml(provider)}</span>` : ""}
         ${resolvePill}
       `;
+      row.appendChild(makeInlineCopyBtn(r.host));
       body.appendChild(row);
+    }
+  } else if (rtype === "TXT") {
+    const records = Array.isArray(entry.records) ? entry.records : [entry.records];
+    if (records.length === 0) {
+      body.innerHTML = `<div class="record-empty">No records returned.</div>`;
+    } else {
+      for (const r of records) {
+        const row = document.createElement("div");
+        row.className = "record-row";
+        const category = classifyTxt(r);
+        row.innerHTML = `
+          <span class="record-category-pill">${escapeHtml(category)}</span>
+          <span class="record-value">${escapeHtml(String(r))}</span>
+        `;
+        row.appendChild(makeInlineCopyBtn(String(r)));
+        body.appendChild(row);
+      }
     }
   } else {
     const records = Array.isArray(entry.records) ? entry.records : [entry.records];
@@ -623,6 +837,7 @@ function renderRecordCard(rtype, entry) {
         const row = document.createElement("div");
         row.className = "record-row";
         row.innerHTML = `<span class="record-value">${escapeHtml(String(r))}</span>`;
+        row.appendChild(makeInlineCopyBtn(String(r)));
         body.appendChild(row);
       }
     }
@@ -1036,3 +1251,4 @@ function escapeHtml(str) {
 
 // ── Initialize ─────────────────────────────────────────────────
 renderRecentChips();
+initJumpNav();

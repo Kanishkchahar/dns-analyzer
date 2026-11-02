@@ -484,6 +484,56 @@ main {
 .badge-info     .count { color: var(--accent); }
 .badge.zero     .count { color: var(--text-muted); }
 
+/* ── Posture Matrix (Executive Health Grid) ── */
+.posture-matrix {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin-top: 20px;
+}
+.posture-card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.posture-card:hover {
+  border-color: rgba(101, 185, 232, 0.35);
+}
+.posture-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+.posture-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.posture-label {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.posture-val {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.posture-val.ok     { color: var(--success); }
+.posture-val.warn   { color: var(--warning); }
+.posture-val.danger { color: var(--danger); }
+
 /* ── Findings Section ── */
 .findings-section { margin-bottom: 48px; }
 .findings-header {
@@ -493,6 +543,43 @@ main {
   gap: 16px;
   margin-bottom: 20px;
   flex-wrap: wrap;
+}
+.findings-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.findings-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.findings-search-wrap svg {
+  position: absolute;
+  left: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.findings-search {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 100px;
+  color: var(--text-primary);
+  font-family: 'Geist', sans-serif;
+  font-size: 12px;
+  padding: 6px 14px 6px 30px;
+  width: 210px;
+  outline: none;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.findings-search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(101, 185, 232, 0.15);
+  width: 250px;
+}
+.findings-search::placeholder {
+  color: var(--text-muted);
 }
 .filter-group {
   display: flex;
@@ -596,6 +683,21 @@ main {
 
 /* ── Records Grid ── */
 .records-section { margin-bottom: 48px; }
+.records-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.records-meta-tag {
+  font-size: 11px;
+  font-family: 'Geist Mono', monospace;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  padding: 3px 10px;
+  border-radius: 100px;
+}
 .records-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
@@ -605,7 +707,13 @@ main {
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.03);
   overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.record-card:hover {
+  border-color: rgba(101, 185, 232, 0.25);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 .record-card-header {
   display: flex;
@@ -643,10 +751,14 @@ main {
 .record-card-body { padding: 0; }
 .record-row {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--hairline);
+  transition: background-color 0.1s ease;
+}
+.record-row:hover {
+  background-color: rgba(255, 255, 255, 0.02);
 }
 .record-row:last-child { border-bottom: none; }
 .record-value {
@@ -675,6 +787,51 @@ main {
 .resolve-yes { background: rgba(99,185,149,0.15); color: var(--success); }
 .resolve-no  { background: rgba(227,109,109,0.12); color: var(--danger); }
 
+.record-provider-pill {
+  font-size: 10px;
+  font-family: 'Geist Mono', monospace;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: rgba(101, 185, 232, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(101, 185, 232, 0.25);
+  white-space: nowrap;
+}
+.record-category-pill {
+  font-size: 10px;
+  font-family: 'Geist Mono', monospace;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--text-secondary);
+  border: 1px solid var(--hairline);
+  white-space: nowrap;
+}
+.record-copy-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.5;
+  transition: all 0.15s ease;
+  margin-left: auto;
+}
+.record-copy-btn:hover {
+  opacity: 1;
+  color: var(--accent);
+  background: var(--raised);
+  border-color: var(--hairline);
+}
+.record-row:hover .record-copy-btn {
+  opacity: 0.85;
+}
+
 .record-empty {
   padding: 16px;
   color: var(--text-muted);
@@ -693,11 +850,52 @@ main {
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
-  margin-bottom: 40px;
+  margin-bottom: 20px;
   flex-wrap: wrap;
 }
 .download-bar p { font-size: 14px; color: var(--text-muted); }
 .download-bar p span { color: var(--text-primary); font-family: 'Geist Mono', monospace; }
+
+/* ── Sticky Jump Navigation ── */
+.jump-nav {
+  position: sticky;
+  top: 56px;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  margin-bottom: 32px;
+  background: rgba(12, 13, 14, 0.90);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid rgba(42, 46, 52, 0.5);
+}
+.jump-nav::-webkit-scrollbar { display: none; }
+.jump-pill {
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 14px;
+  border-radius: 100px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  white-space: nowrap;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.jump-pill:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  background: var(--raised);
+}
+.jump-pill.active {
+  color: var(--accent);
+  background: rgba(101, 185, 232, 0.12);
+  border-color: rgba(101, 185, 232, 0.35);
+}
 
 .btn-download {
   background: transparent;

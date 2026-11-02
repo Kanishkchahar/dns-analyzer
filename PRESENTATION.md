@@ -59,6 +59,7 @@ bash run.sh
 8. 📈 **SPF Lookup Meter Bar**: *"Visual meter displaying real-time lookups against RFC 7208 limit of 10 with automatic flattening recommendations."*
 9. 📥 **Offline Download Report**: *"Single-file standalone report with all CSS embedded, opening completely offline."*
 10. ♿ **Radical Ease of Access**: *"Keyboard-first navigation (`/`, `?`, `1-4`, `f`, `d`), persistent search history, URL auto-sanitization, and plain-English tooltips for non-technical users."*
+11. 🧠 **Executive Posture Matrix & Smart Provider Intelligence**: *"4-quadrant high-level health matrix (Routing, Redundancy, Email Defense, DNSSEC), live findings text search, auto-detected providers (Google Workspace, Microsoft 365, Cloudflare), and humanized durations."*
 
 ---
 
