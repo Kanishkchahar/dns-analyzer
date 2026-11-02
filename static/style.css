@@ -117,8 +117,30 @@ main {
   gap: 10px;
   max-width: 640px;
 }
-.domain-input {
+.input-wrapper {
+  position: relative;
   flex: 1;
+  display: flex;
+  align-items: center;
+}
+.input-wrapper .domain-input {
+  width: 100%;
+  padding-right: 40px;
+}
+.input-kbd-hint {
+  position: absolute;
+  right: 12px;
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  padding: 2px 7px;
+  font-size: 11px;
+  font-family: 'Geist Mono', monospace;
+  pointer-events: none;
+  line-height: 1.2;
+}
+.domain-input {
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
@@ -141,6 +163,40 @@ main {
   border-color: var(--danger);
 }
 
+/* ── Quick Chips ── */
+.quick-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.chips-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.chip {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  color: var(--text-secondary);
+  border-radius: 100px;
+  padding: 4px 12px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.2, 0, 0, 1);
+}
+.chip:hover {
+  background: var(--raised);
+  border-color: var(--accent);
+  color: var(--accent);
+  transform: translateY(-1px);
+}
+.chip:active {
+  transform: scale(0.96);
+}
+
 /* ── Analyze button ── */
 .btn-analyze {
   background: var(--accent);
@@ -154,10 +210,11 @@ main {
   display: flex;
   align-items: center;
   gap: 8px;
-  transition: background 0.15s, opacity 0.15s;
+  transition: background 0.15s, transform 0.1s, opacity 0.15s;
   white-space: nowrap;
 }
 .btn-analyze:hover { background: var(--accent-hover); }
+.btn-analyze:active { transform: scale(0.97); }
 .btn-analyze:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Spinner ── */
@@ -238,12 +295,38 @@ main {
   flex-direction: column;
   align-items: center;
   gap: 2px;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.15s cubic-bezier(0.2, 0, 0, 1), border-color 0.15s, box-shadow 0.15s;
+}
+.badge:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+.badge:active {
+  transform: scale(0.97);
+}
+.badge.active-filter {
+  box-shadow: 0 0 0 2px rgba(101, 185, 232, 0.4);
+}
+.badge-errors.active-filter {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px rgba(227, 109, 109, 0.4);
+}
+.badge-warnings.active-filter {
+  border-color: var(--warning);
+  box-shadow: 0 0 0 2px rgba(224, 164, 88, 0.4);
+}
+.badge-info.active-filter {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(101, 185, 232, 0.4);
 }
 .badge .count {
   font-family: 'Geist Mono', monospace;
   font-size: 28px;
   font-weight: 700;
   line-height: 1.1;
+  font-feature-settings: 'tnum' on;
 }
 .badge .label {
   font-size: 11px;
@@ -259,6 +342,44 @@ main {
 
 /* ── Findings Section ── */
 .findings-section { margin-bottom: 48px; }
+.findings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.filter-group {
+  display: flex;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 100px;
+  padding: 3px;
+}
+.filter-chip {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 13px;
+  border-radius: 100px;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.2, 0, 0, 1);
+}
+.filter-chip:hover {
+  color: var(--text-primary);
+}
+.filter-chip.active {
+  background: var(--raised);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.filter-chip:active {
+  transform: scale(0.96);
+}
 #findings-list { display: flex; flex-direction: column; gap: 8px; }
 
 .finding-item {
@@ -590,6 +711,111 @@ main {
   word-break: break-all;
   margin: 8px 0;
   line-height: 1.5;
+}
+.copy-block-wrapper {
+  position: relative;
+  margin: 8px 0;
+}
+.copy-block-wrapper .copy-block {
+  margin: 0;
+  padding-right: 80px;
+}
+.copy-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: rgba(20, 22, 25, 0.85);
+  backdrop-filter: blur(4px);
+  border: 1px solid var(--hairline);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  font-family: 'Geist', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 9px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s cubic-bezier(0.2, 0, 0, 1);
+}
+.copy-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--surface);
+}
+.copy-btn:active {
+  transform: scale(0.95);
+}
+.copy-btn.copied {
+  color: var(--success);
+  border-color: var(--success);
+  background: rgba(99, 185, 149, 0.1);
+}
+
+/* ── SPF Lookup Progress Meter ── */
+.lookup-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  margin: 6px 0 10px;
+}
+.lookup-meter-track {
+  height: 6px;
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: 100px;
+  overflow: hidden;
+}
+.lookup-meter-fill {
+  height: 100%;
+  border-radius: 100px;
+  transition: width 0.6s cubic-bezier(0.2, 0, 0, 1), background-color 0.3s;
+}
+.lookup-meter-fill.meter-ok {
+  background: var(--success);
+}
+.lookup-meter-fill.meter-warn {
+  background: var(--warning);
+}
+.lookup-meter-fill.meter-danger {
+  background: var(--danger);
+  box-shadow: 0 0 8px rgba(227, 109, 109, 0.6);
+}
+.lookup-meter-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'Geist Mono', monospace;
+}
+
+/* ── Toast Notification ── */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  color: var(--text-primary);
+  padding: 12px 18px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  transform: translateY(80px);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.25s cubic-bezier(0.2, 0, 0, 1), opacity 0.25s;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.toast.visible {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
 }
 .pill {
   font-size: 10px;

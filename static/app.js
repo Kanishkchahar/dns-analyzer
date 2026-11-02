@@ -32,6 +32,65 @@ const emailAuthCards    = document.getElementById("email-auth-cards");
 
 // ── State ─────────────────────────────────────────────────────
 let currentDomain = "";
+let currentFindings = [];
+let currentFilter = "all";
+
+// ── Toast & Clipboard Helpers ─────────────────────────────────
+function showToast(message) {
+  const toast = document.getElementById("toast");
+  if (!toast) return;
+  toast.innerHTML = `
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="7" cy="7" r="6" stroke="#63B995" stroke-width="1.5"/>
+      <path d="M4.5 7l2 2 3-3" stroke="#63B995" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span>${escapeHtml(message)}</span>
+  `;
+  toast.classList.add("visible");
+  clearTimeout(toast._timeout);
+  toast._timeout = setTimeout(() => {
+    toast.classList.remove("visible");
+  }, 2200);
+}
+
+function copyToClipboard(text, btnElement) {
+  navigator.clipboard.writeText(text).then(() => {
+    if (btnElement) {
+      const originalHtml = btnElement.innerHTML;
+      btnElement.classList.add("copied");
+      btnElement.innerHTML = `
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M2.5 6l2.5 2.5 4.5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg> Copied!`;
+      setTimeout(() => {
+        btnElement.classList.remove("copied");
+        btnElement.innerHTML = originalHtml;
+      }, 1800);
+    }
+    showToast("Copied to clipboard!");
+  }).catch((err) => {
+    console.error("Clipboard write error:", err);
+    showToast("Failed to copy");
+  });
+}
+
+function makeCopyBlock(text) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "copy-block-wrapper";
+  wrapper.innerHTML = `
+    <div class="copy-block">${escapeHtml(text)}</div>
+    <button class="copy-btn" type="button" aria-label="Copy to clipboard">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+        <rect x="3.5" y="3.5" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.2"/>
+        <path d="M2.5 8.5H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h5.5a1 1 0 0 1 1 1v.5" stroke="currentColor" stroke-width="1.2"/>
+      </svg>
+      <span>Copy</span>
+    </button>
+  `;
+  const btn = wrapper.querySelector(".copy-btn");
+  btn.addEventListener("click", () => copyToClipboard(text, btn));
+  return wrapper;
+}
 
 // ── URL -> domain extraction ───────────────────────────────────
 function extractDomain(raw) {
@@ -50,6 +109,41 @@ function extractDomain(raw) {
 analyzeBtn.addEventListener("click", runAnalysis);
 domainInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") runAnalysis();
+});
+
+// Quick-pick sample chips
+document.querySelectorAll(".chip").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    domainInput.value = chip.dataset.domain;
+    runAnalysis();
+  });
+});
+
+// Keyboard shortcut '/' to focus domain search
+window.addEventListener("keydown", (e) => {
+  if (e.key === "/" && document.activeElement !== domainInput) {
+    e.preventDefault();
+    domainInput.focus();
+    domainInput.select();
+  }
+});
+
+// Findings filter tabs
+document.querySelectorAll(".filter-chip").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    applyFindingsFilter(btn.dataset.filter);
+  });
+});
+
+// Summary badges click toggles severity filters
+badgeErrors.addEventListener("click", () => {
+  applyFindingsFilter(currentFilter === "error" ? "all" : "error");
+});
+badgeWarnings.addEventListener("click", () => {
+  applyFindingsFilter(currentFilter === "warning" ? "all" : "warning");
+});
+badgeInfo.addEventListener("click", () => {
+  applyFindingsFilter(currentFilter === "info" ? "all" : "info");
 });
 
 downloadBtn.addEventListener("click", () => {
@@ -135,6 +229,7 @@ function hideResults() {
 function renderResults(data) {
   currentDomain = data.domain;
   resultDomain.textContent = data.domain;
+  currentFindings = data.findings || [];
 
   // Summary badges
   countErrors.textContent  = data.summary.errors;
@@ -143,22 +238,8 @@ function renderResults(data) {
   badgeErrors.classList.toggle("zero", data.summary.errors === 0);
   badgeWarnings.classList.toggle("zero", data.summary.warnings === 0);
 
-  // Findings
-  findingsList.innerHTML = "";
-  if (data.findings.length === 0) {
-    findingsList.innerHTML = `
-      <div class="no-issues" role="status">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <circle cx="8" cy="8" r="7" stroke="#63B995" stroke-width="1.5"/>
-          <path d="M5 8l2 2 4-4" stroke="#63B995" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        No issues found — DNS configuration looks healthy.
-      </div>`;
-  } else {
-    for (const f of data.findings) {
-      findingsList.appendChild(renderFinding(f));
-    }
-  }
+  // Render findings with default filter "all"
+  applyFindingsFilter("all");
 
   // Records
   recordsGrid.innerHTML = "";
@@ -173,6 +254,50 @@ function renderResults(data) {
 
   results.classList.add("visible");
   results.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// ── Findings Filter & List ────────────────────────────────────
+function applyFindingsFilter(filter) {
+  currentFilter = filter;
+
+  // Update filter buttons UI
+  document.querySelectorAll(".filter-chip").forEach((btn) => {
+    const isActive = btn.dataset.filter === filter;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-selected", isActive);
+  });
+
+  // Highlight badge if filtered
+  badgeErrors.classList.toggle("active-filter", filter === "error");
+  badgeWarnings.classList.toggle("active-filter", filter === "warning");
+  badgeInfo.classList.toggle("active-filter", filter === "info");
+
+  renderFindingsList();
+}
+
+function renderFindingsList() {
+  findingsList.innerHTML = "";
+  const filtered = currentFilter === "all"
+    ? currentFindings
+    : currentFindings.filter((f) => f.severity === currentFilter);
+
+  if (filtered.length === 0) {
+    const emptyMsg = currentFilter === "all"
+      ? "No issues found — DNS configuration looks healthy."
+      : `No ${currentFilter} findings detected.`;
+    findingsList.innerHTML = `
+      <div class="no-issues" role="status">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <circle cx="8" cy="8" r="7" stroke="#63B995" stroke-width="1.5"/>
+          <path d="M5 8l2 2 4-4" stroke="#63B995" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        ${escapeHtml(emptyMsg)}
+      </div>`;
+  } else {
+    for (const f of filtered) {
+      findingsList.appendChild(renderFinding(f));
+    }
+  }
 }
 
 // ── Finding card ──────────────────────────────────────────────
@@ -338,56 +463,81 @@ function renderSpfCard(emailAuth) {
     ? `<span class="pill pill-ok">Found</span>`
     : `<span class="pill pill-fail">Missing</span>`;
 
-  let body = "";
+  card.innerHTML = `<div class="auth-card-title">${pill} SPF (Sender Policy Framework)</div>`;
 
-  if (hasSpf) {
-    body += `<div class="copy-block">${escapeHtml(spf.raw)}</div>`;
-
-    // Lookup count
-    if (emailAuth.spf_lookups) {
-      const lk = emailAuth.spf_lookups;
-      const lkPill = lk.over_limit
-        ? `<span class="pill pill-fail">Over Limit</span>`
-        : `<span class="pill pill-ok">OK</span>`;
-      body += `
-        <div class="auth-card-row">
-          <span class="auth-card-key">DNS Lookups</span>
-          <span class="auth-card-val">${lk.total_lookups} / ${lk.limit} ${lkPill}</span>
-        </div>`;
-    }
-
-    // Policy
-    if (spf.all_mechanism) {
-      body += `
-        <div class="auth-card-row">
-          <span class="auth-card-key">Policy</span>
-          <span class="auth-card-val">${escapeHtml(spf.all_mechanism)}</span>
-        </div>`;
-    }
-
-    // Includes
-    if (spf.includes && spf.includes.length > 0) {
-      body += `
-        <div class="auth-card-row">
-          <span class="auth-card-key">Includes</span>
-          <span class="auth-card-val">${spf.includes.map(i => escapeHtml(i)).join(", ")}</span>
-        </div>`;
-    }
-
-    // Flattened suggestion
-    if (emailAuth.spf_flattened && emailAuth.spf_lookups && emailAuth.spf_lookups.over_limit) {
-      body += `
-        <h4 style="font-size:13px; margin-top:16px; color: var(--text-primary);">✅ Suggested Flattened SPF Record</h4>
-        <div class="copy-block">${escapeHtml(emailAuth.spf_flattened.flattened_record)}</div>
-        <p class="flattened-hint">This flattened record uses 0 DNS lookups (all IPs resolved to ip4/ip6 entries).</p>`;
-    }
-  } else {
-    body = `<p class="auth-empty">No SPF record found in TXT records.</p>`;
+  if (!hasSpf) {
+    card.innerHTML += `<p class="auth-empty">No SPF record found in TXT records.</p>`;
+    return card;
   }
 
-  card.innerHTML = `
-    <div class="auth-card-title">${pill} SPF (Sender Policy Framework)</div>
-    ${body}`;
+  // Raw SPF with 1-click copy button
+  card.appendChild(makeCopyBlock(spf.raw));
+
+  // SPF Lookup progress meter
+  if (emailAuth.spf_lookups) {
+    const lk = emailAuth.spf_lookups;
+    const pct = Math.min(100, Math.round((lk.total_lookups / lk.limit) * 100));
+    let meterClass = "meter-ok";
+    let statusText = "OK";
+    if (lk.over_limit) {
+      meterClass = "meter-danger";
+      statusText = "Over Limit";
+    } else if (lk.total_lookups >= 8) {
+      meterClass = "meter-warn";
+      statusText = "Approaching Limit";
+    }
+
+    const meterContainer = document.createElement("div");
+    meterContainer.className = "lookup-meter";
+    meterContainer.innerHTML = `
+      <div class="lookup-meter-labels">
+        <span>DNS Lookups: <strong>${lk.total_lookups}</strong> / ${lk.limit} RFC 7208 limit (${statusText})</span>
+        <span>${pct}%</span>
+      </div>
+      <div class="lookup-meter-track">
+        <div class="lookup-meter-fill ${meterClass}" style="width: ${pct}%"></div>
+      </div>
+    `;
+    card.appendChild(meterContainer);
+  }
+
+  // Policy
+  if (spf.all_mechanism) {
+    const row = document.createElement("div");
+    row.className = "auth-card-row";
+    row.innerHTML = `
+      <span class="auth-card-key">Policy</span>
+      <span class="auth-card-val">${escapeHtml(spf.all_mechanism)}</span>
+    `;
+    card.appendChild(row);
+  }
+
+  // Includes
+  if (spf.includes && spf.includes.length > 0) {
+    const row = document.createElement("div");
+    row.className = "auth-card-row";
+    row.innerHTML = `
+      <span class="auth-card-key">Includes</span>
+      <span class="auth-card-val">${spf.includes.map((i) => escapeHtml(i)).join(", ")}</span>
+    `;
+    card.appendChild(row);
+  }
+
+  // Flattened SPF suggestion
+  if (emailAuth.spf_flattened && emailAuth.spf_lookups && emailAuth.spf_lookups.over_limit) {
+    const flatHeading = document.createElement("h4");
+    flatHeading.style.cssText = "font-size:13px; margin-top:16px; margin-bottom:6px; color: var(--text-primary);";
+    flatHeading.textContent = "✅ Suggested Flattened SPF Record (0 Lookups)";
+    card.appendChild(flatHeading);
+
+    card.appendChild(makeCopyBlock(emailAuth.spf_flattened.flattened_record));
+
+    const flatHint = document.createElement("p");
+    flatHint.className = "flattened-hint";
+    flatHint.textContent = "This flattened record resolves all includes directly to ip4/ip6 ranges, eliminating RFC 7208 lookup errors.";
+    card.appendChild(flatHint);
+  }
+
   return card;
 }
 
@@ -401,55 +551,39 @@ function renderDmarcCard(emailAuth, domain) {
     ? `<span class="pill pill-ok">Found</span>`
     : `<span class="pill pill-fail">Missing</span>`;
 
-  let body = "";
+  card.innerHTML = `<div class="auth-card-title">${pill} DMARC (Domain-based Message Authentication)</div>`;
 
-  if (hasDmarc) {
-    body += `<div class="copy-block">${escapeHtml(dmarc.raw)}</div>`;
-
-    // Policy strength
-    let policyPill = `<span class="pill pill-fail">Weak</span>`;
-    if (dmarc.policy === "reject") policyPill = `<span class="pill pill-ok">Strong</span>`;
-    else if (dmarc.policy === "quarantine") policyPill = `<span class="pill pill-warn">Moderate</span>`;
-
-    body += `
-      <div class="auth-card-row">
-        <span class="auth-card-key">Policy</span>
-        <span class="auth-card-val">${escapeHtml(dmarc.policy || "none")} ${policyPill}</span>
-      </div>`;
-
-    // Enforcement %
-    body += `
-      <div class="auth-card-row">
-        <span class="auth-card-key">Enforcement</span>
-        <span class="auth-card-val">${dmarc.pct}% of emails</span>
-      </div>`;
-
-    // Reports
-    if (dmarc.rua) {
-      body += `
-        <div class="auth-card-row">
-          <span class="auth-card-key">Reports To</span>
-          <span class="auth-card-val">${escapeHtml(dmarc.rua)}</span>
-        </div>`;
-    }
-
-    // Alignment
-    body += `
-      <div class="auth-card-row">
-        <span class="auth-card-key">DKIM Alignment</span>
-        <span class="auth-card-val">${dmarc.adkim === "s" ? "strict" : "relaxed"}</span>
-      </div>
-      <div class="auth-card-row">
-        <span class="auth-card-key">SPF Alignment</span>
-        <span class="auth-card-val">${dmarc.aspf === "s" ? "strict" : "relaxed"}</span>
-      </div>`;
-  } else {
-    body = `<p class="auth-empty">No DMARC record found at _dmarc.${escapeHtml(domain)}</p>`;
+  if (!hasDmarc) {
+    card.innerHTML += `<p class="auth-empty">No DMARC record found at _dmarc.${escapeHtml(domain)}</p>`;
+    return card;
   }
 
-  card.innerHTML = `
-    <div class="auth-card-title">${pill} DMARC (Domain-based Message Authentication)</div>
-    ${body}`;
+  // Raw DMARC with 1-click copy button
+  card.appendChild(makeCopyBlock(dmarc.raw));
+
+  // Policy strength
+  let policyPill = `<span class="pill pill-fail">Weak</span>`;
+  if (dmarc.policy === "reject") policyPill = `<span class="pill pill-ok">Strong</span>`;
+  else if (dmarc.policy === "quarantine") policyPill = `<span class="pill pill-warn">Moderate</span>`;
+
+  const rows = [
+    ["Policy", `${escapeHtml(dmarc.policy || "none")} ${policyPill}`],
+    ["Enforcement", `${dmarc.pct}% of emails`],
+    ...(dmarc.rua ? [["Reports To", escapeHtml(dmarc.rua)]] : []),
+    ["DKIM Alignment", dmarc.adkim === "s" ? "strict" : "relaxed"],
+    ["SPF Alignment", dmarc.aspf === "s" ? "strict" : "relaxed"],
+  ];
+
+  for (const [key, val] of rows) {
+    const row = document.createElement("div");
+    row.className = "auth-card-row";
+    row.innerHTML = `
+      <span class="auth-card-key">${key}</span>
+      <span class="auth-card-val">${val}</span>
+    `;
+    card.appendChild(row);
+  }
+
   return card;
 }
 

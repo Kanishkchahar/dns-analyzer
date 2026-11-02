@@ -51,17 +51,20 @@
 
       <div class="input-row" role="search">
         <label for="domain-input" class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Domain name</label>
-        <input
-          id="domain-input"
-          class="domain-input"
-          type="text"
-          placeholder="example.com or https://example.com/path"
-          autocomplete="off"
-          autocorrect="off"
-          autocapitalize="none"
-          spellcheck="false"
-          aria-label="Domain to analyze"
-        />
+        <div class="input-wrapper">
+          <input
+            id="domain-input"
+            class="domain-input"
+            type="text"
+            placeholder="example.com or https://example.com/path"
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="none"
+            spellcheck="false"
+            aria-label="Domain to analyze"
+          />
+          <kbd class="input-kbd-hint" title="Press / to focus">/</kbd>
+        </div>
         <button
           id="analyze-btn"
           class="btn-analyze"
@@ -71,6 +74,15 @@
           <div class="spinner" aria-hidden="true"></div>
           <span class="btn-text">Analyze</span>
         </button>
+      </div>
+
+      <!-- Quick-pick suggested domains -->
+      <div class="quick-chips" aria-label="Suggested sample domains">
+        <span class="chips-label">Try sample:</span>
+        <button class="chip" type="button" data-domain="google.com">google.com</button>
+        <button class="chip" type="button" data-domain="cloudflare.com">cloudflare.com</button>
+        <button class="chip" type="button" data-domain="github.com">github.com</button>
+        <button class="chip" type="button" data-domain="boot.dev">boot.dev</button>
       </div>
 
       <!-- Error banner -->
@@ -143,7 +155,15 @@
 
       <!-- Findings list -->
       <div class="findings-section">
-        <h2 class="section-title">Findings</h2>
+        <div class="findings-header">
+          <h2 class="section-title" style="margin-bottom:0">Findings</h2>
+          <div class="filter-group" role="tablist" aria-label="Filter findings by severity">
+            <button class="filter-chip active" type="button" data-filter="all" role="tab" aria-selected="true">All</button>
+            <button class="filter-chip" type="button" data-filter="error" role="tab" aria-selected="false">Errors</button>
+            <button class="filter-chip" type="button" data-filter="warning" role="tab" aria-selected="false">Warnings</button>
+            <button class="filter-chip" type="button" data-filter="info" role="tab" aria-selected="false">Info</button>
+          </div>
+        </div>
         <div id="findings-list" role="list" aria-label="Findings"></div>
       </div>
 
@@ -155,6 +175,9 @@
 
     </section>
   </main>
+
+  <!-- Toast notification -->
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="/static/app.js"></script>
 </body>
