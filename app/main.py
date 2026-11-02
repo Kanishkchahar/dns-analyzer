@@ -1,5 +1,6 @@
 """FastAPI application — routes, static file serving, error handling."""
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -9,11 +10,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from app.analyzer import analyze, summarize
-from app.models import AnalyzeRequest, AnalyzeResponse, Finding, Summary
+from app.email_auth import analyze_dkim, analyze_dmarc, check_dkim_selectors, compute_email_score, fetch_dmarc
+from app.models import AnalyzeRequest, AnalyzeResponse, EmailAuth, EmailScore, Finding, Summary
 from app.report import build_report
 from app.resolver import resolve_domain
+from app.spf import analyze_spf, count_spf_lookups, flatten_spf, parse_spf
 
-app = FastAPI(title="DNS Analyzer", version="1.0.0")
+app = FastAPI(title="DNS Analyzer", version="2.0.0")
 
 
 # ---------------------------------------------------------------------------
@@ -34,12 +37,49 @@ async def api_analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         records = await resolve_domain(req.domain)
         findings = analyze(req.domain, records)
         counts = summarize(findings)
+
+        # ── Email authentication analysis ──
+        import dns.asyncresolver
+        resolver = dns.asyncresolver.Resolver()
+
+        # SPF
+        txt_records = records.get("TXT", {}).get("records", [])
+        spf_data = parse_spf(txt_records)
+        spf_lookup_data = await count_spf_lookups(req.domain, resolver) if spf_data else None
+        spf_flat_data = await flatten_spf(req.domain, resolver) if spf_data else None
+        spf_findings = analyze_spf(spf_data, spf_lookup_data, txt_records=txt_records)
+
+        # DMARC & DKIM (run concurrently)
+        dmarc_data, dkim_data = await asyncio.gather(
+            fetch_dmarc(req.domain, resolver),
+            check_dkim_selectors(req.domain, resolver),
+        )
+        dmarc_findings = analyze_dmarc(dmarc_data)
+        dkim_findings = analyze_dkim(dkim_data)
+
+        # Email health score
+        score_data = compute_email_score(spf_findings, dmarc_findings, dkim_findings)
+
+        email_auth = EmailAuth(
+            spf=spf_data,
+            spf_lookups=spf_lookup_data,
+            spf_flattened=spf_flat_data,
+            dmarc=dmarc_data,
+            dkim=dkim_data,
+            score=EmailScore(**score_data),
+        )
+
+        # Merge email findings into the main findings list
+        all_findings = findings + spf_findings + dmarc_findings + dkim_findings
+        all_counts = summarize(all_findings)
+
         return AnalyzeResponse(
             domain=req.domain,
             scan_timestamp=_now_utc(),
             records=records,
-            findings=findings,
-            summary=Summary(**counts),
+            findings=all_findings,
+            summary=Summary(**all_counts),
+            email_auth=email_auth,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Internal error during DNS analysis: {exc}") from exc
@@ -56,14 +96,45 @@ async def api_report(domain: str) -> HTMLResponse:
     try:
         records = await resolve_domain(req.domain)
         findings = analyze(req.domain, records)
-        counts = summarize(findings)
+
+        # ── Email authentication analysis ──
+        import dns.asyncresolver
+        resolver = dns.asyncresolver.Resolver()
+
+        txt_records = records.get("TXT", {}).get("records", [])
+        spf_data = parse_spf(txt_records)
+        spf_lookup_data = await count_spf_lookups(req.domain, resolver) if spf_data else None
+        spf_flat_data = await flatten_spf(req.domain, resolver) if spf_data else None
+        spf_findings = analyze_spf(spf_data, spf_lookup_data, txt_records)
+
+        dmarc_data = await fetch_dmarc(req.domain, resolver)
+        dmarc_findings = analyze_dmarc(dmarc_data)
+
+        dkim_data = await check_dkim_selectors(req.domain, resolver)
+        dkim_findings = analyze_dkim(dkim_data)
+
+        score_data = compute_email_score(spf_findings, dmarc_findings, dkim_findings)
+
+        email_auth = EmailAuth(
+            spf=spf_data,
+            spf_lookups=spf_lookup_data,
+            spf_flattened=spf_flat_data,
+            dmarc=dmarc_data,
+            dkim=dkim_data,
+            score=EmailScore(**score_data),
+        )
+
+        all_findings = findings + spf_findings + dmarc_findings + dkim_findings
+        all_counts = summarize(all_findings)
         ts = _now_utc()
+
         html = build_report(
             domain=req.domain,
             scan_timestamp=ts,
             records=records,
-            findings=findings,
-            summary=Summary(**counts),
+            findings=all_findings,
+            summary=Summary(**all_counts),
+            email_auth=email_auth,
         )
         return HTMLResponse(
             content=html,

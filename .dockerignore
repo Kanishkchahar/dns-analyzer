@@ -1,0 +1,12 @@
+.git
+.gitignore
+.dockerignore
+Dockerfile
+README.md
+PROJECT_PRESENTATION_AND_QA.md
+venv
+.venv
+__pycache__
+*.py[cod]
+*.log
+.env

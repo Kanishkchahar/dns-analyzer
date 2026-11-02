@@ -20,6 +20,16 @@ const countInfo    = document.getElementById("count-info");
 const badgeErrors  = document.getElementById("badge-errors");
 const badgeWarnings= document.getElementById("badge-warnings");
 
+// Email auth DOM refs
+const emailScoreSection = document.getElementById("email-score-section");
+const scoreRingFg       = document.getElementById("score-ring-fg");
+const scoreGrade        = document.getElementById("score-grade");
+const scoreNum          = document.getElementById("score-num");
+const scoreLabel        = document.getElementById("score-label");
+const scoreDesc         = document.getElementById("score-desc");
+const emailAuthSection  = document.getElementById("email-auth-section");
+const emailAuthCards    = document.getElementById("email-auth-cards");
+
 // ── State ─────────────────────────────────────────────────────
 let currentDomain = "";
 
@@ -117,6 +127,8 @@ function hideError() {
 
 function hideResults() {
   results.classList.remove("visible");
+  emailScoreSection.style.display = "none";
+  emailAuthSection.style.display = "none";
 }
 
 // ── Render ────────────────────────────────────────────────────
@@ -155,6 +167,9 @@ function renderResults(data) {
     const entry = data.records[rtype];
     if (entry) recordsGrid.appendChild(renderRecordCard(rtype, entry));
   }
+
+  // Email Authentication
+  renderEmailAuth(data.email_auth, data.domain);
 
   results.classList.add("visible");
   results.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -261,6 +276,213 @@ function renderRecordCard(rtype, entry) {
     }
   }
 
+  return card;
+}
+
+// ── Email Auth Rendering ──────────────────────────────────────
+function renderEmailAuth(emailAuth, domain) {
+  // Hide sections by default
+  emailScoreSection.style.display = "none";
+  emailAuthSection.style.display = "none";
+  emailAuthCards.innerHTML = "";
+
+  if (!emailAuth) return;
+
+  // ── Score ring ──
+  if (emailAuth.score) {
+    const sc = emailAuth.score;
+    const circumference = 2 * Math.PI * 48; // r=48
+    const offset = circumference - (circumference * sc.score / 100);
+
+    let ringColor = "var(--danger)";
+    if (sc.score >= 85) ringColor = "var(--success)";
+    else if (sc.score >= 55) ringColor = "var(--warning)";
+
+    scoreRingFg.style.stroke = ringColor;
+    // Animate: start from full offset, then transition to target
+    scoreRingFg.style.strokeDashoffset = circumference;
+    scoreGrade.textContent = sc.grade;
+    scoreNum.textContent = `${sc.score}/100`;
+    scoreLabel.textContent = `Email Health: ${sc.label}`;
+    scoreDesc.textContent = `Based on SPF, DMARC, and DKIM analysis for ${domain}`;
+
+    emailScoreSection.style.display = "flex";
+
+    // Trigger the animation after a frame
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        scoreRingFg.style.strokeDashoffset = offset;
+      });
+    });
+  }
+
+  // ── SPF Card ──
+  emailAuthCards.appendChild(renderSpfCard(emailAuth));
+
+  // ── DMARC Card ──
+  emailAuthCards.appendChild(renderDmarcCard(emailAuth, domain));
+
+  // ── DKIM Card ──
+  emailAuthCards.appendChild(renderDkimCard(emailAuth));
+
+  emailAuthSection.style.display = "block";
+}
+
+function renderSpfCard(emailAuth) {
+  const card = document.createElement("div");
+  card.className = "auth-card";
+
+  const spf = emailAuth.spf;
+  const hasSpf = !!spf;
+  const pill = hasSpf
+    ? `<span class="pill pill-ok">Found</span>`
+    : `<span class="pill pill-fail">Missing</span>`;
+
+  let body = "";
+
+  if (hasSpf) {
+    body += `<div class="copy-block">${escapeHtml(spf.raw)}</div>`;
+
+    // Lookup count
+    if (emailAuth.spf_lookups) {
+      const lk = emailAuth.spf_lookups;
+      const lkPill = lk.over_limit
+        ? `<span class="pill pill-fail">Over Limit</span>`
+        : `<span class="pill pill-ok">OK</span>`;
+      body += `
+        <div class="auth-card-row">
+          <span class="auth-card-key">DNS Lookups</span>
+          <span class="auth-card-val">${lk.total_lookups} / ${lk.limit} ${lkPill}</span>
+        </div>`;
+    }
+
+    // Policy
+    if (spf.all_mechanism) {
+      body += `
+        <div class="auth-card-row">
+          <span class="auth-card-key">Policy</span>
+          <span class="auth-card-val">${escapeHtml(spf.all_mechanism)}</span>
+        </div>`;
+    }
+
+    // Includes
+    if (spf.includes && spf.includes.length > 0) {
+      body += `
+        <div class="auth-card-row">
+          <span class="auth-card-key">Includes</span>
+          <span class="auth-card-val">${spf.includes.map(i => escapeHtml(i)).join(", ")}</span>
+        </div>`;
+    }
+
+    // Flattened suggestion
+    if (emailAuth.spf_flattened && emailAuth.spf_lookups && emailAuth.spf_lookups.over_limit) {
+      body += `
+        <h4 style="font-size:13px; margin-top:16px; color: var(--text-primary);">✅ Suggested Flattened SPF Record</h4>
+        <div class="copy-block">${escapeHtml(emailAuth.spf_flattened.flattened_record)}</div>
+        <p class="flattened-hint">This flattened record uses 0 DNS lookups (all IPs resolved to ip4/ip6 entries).</p>`;
+    }
+  } else {
+    body = `<p class="auth-empty">No SPF record found in TXT records.</p>`;
+  }
+
+  card.innerHTML = `
+    <div class="auth-card-title">${pill} SPF (Sender Policy Framework)</div>
+    ${body}`;
+  return card;
+}
+
+function renderDmarcCard(emailAuth, domain) {
+  const card = document.createElement("div");
+  card.className = "auth-card";
+
+  const dmarc = emailAuth.dmarc;
+  const hasDmarc = !!dmarc;
+  const pill = hasDmarc
+    ? `<span class="pill pill-ok">Found</span>`
+    : `<span class="pill pill-fail">Missing</span>`;
+
+  let body = "";
+
+  if (hasDmarc) {
+    body += `<div class="copy-block">${escapeHtml(dmarc.raw)}</div>`;
+
+    // Policy strength
+    let policyPill = `<span class="pill pill-fail">Weak</span>`;
+    if (dmarc.policy === "reject") policyPill = `<span class="pill pill-ok">Strong</span>`;
+    else if (dmarc.policy === "quarantine") policyPill = `<span class="pill pill-warn">Moderate</span>`;
+
+    body += `
+      <div class="auth-card-row">
+        <span class="auth-card-key">Policy</span>
+        <span class="auth-card-val">${escapeHtml(dmarc.policy || "none")} ${policyPill}</span>
+      </div>`;
+
+    // Enforcement %
+    body += `
+      <div class="auth-card-row">
+        <span class="auth-card-key">Enforcement</span>
+        <span class="auth-card-val">${dmarc.pct}% of emails</span>
+      </div>`;
+
+    // Reports
+    if (dmarc.rua) {
+      body += `
+        <div class="auth-card-row">
+          <span class="auth-card-key">Reports To</span>
+          <span class="auth-card-val">${escapeHtml(dmarc.rua)}</span>
+        </div>`;
+    }
+
+    // Alignment
+    body += `
+      <div class="auth-card-row">
+        <span class="auth-card-key">DKIM Alignment</span>
+        <span class="auth-card-val">${dmarc.adkim === "s" ? "strict" : "relaxed"}</span>
+      </div>
+      <div class="auth-card-row">
+        <span class="auth-card-key">SPF Alignment</span>
+        <span class="auth-card-val">${dmarc.aspf === "s" ? "strict" : "relaxed"}</span>
+      </div>`;
+  } else {
+    body = `<p class="auth-empty">No DMARC record found at _dmarc.${escapeHtml(domain)}</p>`;
+  }
+
+  card.innerHTML = `
+    <div class="auth-card-title">${pill} DMARC (Domain-based Message Authentication)</div>
+    ${body}`;
+  return card;
+}
+
+function renderDkimCard(emailAuth) {
+  const card = document.createElement("div");
+  card.className = "auth-card";
+
+  const dkim = emailAuth.dkim;
+  const hasDkim = dkim && dkim.has_dkim;
+  const pill = hasDkim
+    ? `<span class="pill pill-ok">Found</span>`
+    : `<span class="pill pill-warn">Not Found</span>`;
+
+  let body = "";
+
+  if (hasDkim) {
+    for (const sel of dkim.selectors_found) {
+      const keyPill = sel.has_key
+        ? `<span class="pill pill-ok">Valid Key</span>`
+        : `<span class="pill pill-fail">Empty Key</span>`;
+      body += `
+        <div class="auth-card-row">
+          <span class="auth-card-key">${escapeHtml(sel.selector)}</span>
+          <span class="auth-card-val">${keyPill} ${escapeHtml(sel.key_type)} · ${escapeHtml(sel.public_key)}</span>
+        </div>`;
+    }
+  } else {
+    body = `<p class="auth-empty">No DKIM records found for common selectors. Custom selectors may exist.</p>`;
+  }
+
+  card.innerHTML = `
+    <div class="auth-card-title">${pill} DKIM (DomainKeys Identified Mail)</div>
+    ${body}`;
   return card;
 }
 

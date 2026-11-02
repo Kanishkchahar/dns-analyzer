@@ -77,20 +77,183 @@ _TEMPLATE = """<!DOCTYPE html>
   .pill-ok { background: rgba(99,185,149,0.15); color: var(--success); }
   .pill-fail { background: rgba(227,109,109,0.15); color: var(--danger); }
   .pill-info { background: rgba(101,185,232,0.12); color: var(--accent); }
+  .pill-warn { background: rgba(224,164,88,0.15); color: var(--warning); }
   .status-not_found, .status-timeout, .status-error { color: var(--text-muted); font-style: italic; font-size: 12px; }
   .footer { margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--hairline); color: var(--text-muted); font-size: 12px; font-family: 'Geist Mono', monospace; }
+
+  /* ── Email Score ── */
+  .score-section {
+    display: flex; align-items: center; gap: 28px;
+    background: var(--surface); border: 1px solid var(--hairline);
+    border-radius: 12px; padding: 28px 32px; margin-bottom: 40px;
+  }
+  .score-ring {
+    position: relative; width: 100px; height: 100px; flex-shrink: 0;
+  }
+  .score-ring svg { transform: rotate(-90deg); }
+  .score-ring-bg { fill: none; stroke: var(--hairline); stroke-width: 8; }
+  .score-ring-fg { fill: none; stroke-width: 8; stroke-linecap: round; transition: stroke-dashoffset 0.6s ease; }
+  .score-grade {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
+  .score-grade-letter { font-size: 28px; font-weight: 700; color: var(--text-primary); font-family: 'Geist Mono', monospace; line-height: 1; }
+  .score-grade-num { font-size: 12px; color: var(--text-muted); font-family: 'Geist Mono', monospace; }
+  .score-details h3 { color: var(--text-primary); font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+  .score-details p { color: var(--text-muted); font-size: 13px; }
+
+  /* ── Copy block ── */
+  .copy-block {
+    background: var(--raised); border: 1px solid var(--hairline);
+    border-radius: 6px; padding: 14px 16px;
+    font-family: 'Geist Mono', monospace; font-size: 12px;
+    color: var(--accent); word-break: break-all;
+    margin: 8px 0;
+  }
+  .auth-card {
+    background: var(--surface); border: 1px solid var(--hairline);
+    border-radius: 8px; padding: 18px 20px; margin-bottom: 12px;
+  }
+  .auth-card-title {
+    font-size: 13px; font-weight: 700; color: var(--text-primary);
+    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .auth-card-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+  .auth-card-key { color: var(--text-muted); }
+  .auth-card-val { color: var(--text-primary); font-family: 'Geist Mono', monospace; font-size: 12px; }
 </style>
 </head>
 <body>
 <div class="container">
   <h1>DNS Report — {{ domain }}</h1>
-  <p class="meta">Scanned {{ scan_timestamp }} &nbsp;·&nbsp; dns-analyzer v1</p>
+  <p class="meta">Scanned {{ scan_timestamp }} &nbsp;·&nbsp; dns-analyzer v2 — InboxShield Edition</p>
+
+  {# ── Email Health Score ── #}
+  {% if email_auth and email_auth.score %}
+  {% set sc = email_auth.score %}
+  {% set circ = 283 %}
+  {% set offset = circ - (circ * sc.score / 100) %}
+  {% if sc.score >= 85 %}{% set ring_color = "var(--success)" %}
+  {% elif sc.score >= 55 %}{% set ring_color = "var(--warning)" %}
+  {% else %}{% set ring_color = "var(--danger)" %}{% endif %}
+  <div class="score-section">
+    <div class="score-ring">
+      <svg width="100" height="100" viewBox="0 0 100 100">
+        <circle class="score-ring-bg" cx="50" cy="50" r="45"/>
+        <circle class="score-ring-fg" cx="50" cy="50" r="45"
+                stroke="{{ ring_color }}"
+                stroke-dasharray="{{ circ }}"
+                stroke-dashoffset="{{ offset }}"/>
+      </svg>
+      <div class="score-grade">
+        <span class="score-grade-letter">{{ sc.grade }}</span>
+        <span class="score-grade-num">{{ sc.score }}/100</span>
+      </div>
+    </div>
+    <div class="score-details">
+      <h3>Email Health: {{ sc.label }}</h3>
+      <p>Based on SPF, DMARC, and DKIM analysis for {{ domain }}</p>
+    </div>
+  </div>
+  {% endif %}
 
   <div class="summary-row">
     <div class="badge errors"><span class="count">{{ summary.errors }}</span><span class="label">Errors</span></div>
     <div class="badge warnings"><span class="count">{{ summary.warnings }}</span><span class="label">Warnings</span></div>
     <div class="badge info"><span class="count">{{ summary.info }}</span><span class="label">Info</span></div>
   </div>
+
+  {# ── Email Authentication Details ── #}
+  {% if email_auth %}
+  <h2>📧 Email Authentication</h2>
+
+  {# SPF #}
+  <div class="auth-card">
+    <div class="auth-card-title">
+      {% if email_auth.spf %}<span class="pill pill-ok">Found</span>{% else %}<span class="pill pill-fail">Missing</span>{% endif %}
+      SPF (Sender Policy Framework)
+    </div>
+    {% if email_auth.spf %}
+    <div class="copy-block">{{ email_auth.spf.raw }}</div>
+    {% if email_auth.spf_lookups %}
+    <div class="auth-card-row">
+      <span class="auth-card-key">DNS Lookups</span>
+      <span class="auth-card-val">
+        {{ email_auth.spf_lookups.total_lookups }} / {{ email_auth.spf_lookups.limit }}
+        {% if email_auth.spf_lookups.over_limit %}<span class="pill pill-fail">Over Limit</span>{% else %}<span class="pill pill-ok">OK</span>{% endif %}
+      </span>
+    </div>
+    {% endif %}
+    {% if email_auth.spf.all_mechanism %}
+    <div class="auth-card-row">
+      <span class="auth-card-key">Policy</span>
+      <span class="auth-card-val">{{ email_auth.spf.all_mechanism }}</span>
+    </div>
+    {% endif %}
+    {% if email_auth.spf_flattened and email_auth.spf_lookups and email_auth.spf_lookups.over_limit %}
+    <h2 style="font-size:13px; margin-top:16px;">✅ Suggested Flattened SPF Record</h2>
+    <div class="copy-block">{{ email_auth.spf_flattened.flattened_record }}</div>
+    <p style="font-size:12px; color: var(--text-muted); margin-top:4px;">This flattened record uses 0 DNS lookups (all IPs resolved to ip4/ip6 entries).</p>
+    {% endif %}
+    {% else %}
+    <p style="color: var(--text-muted); font-size: 13px;">No SPF record found in TXT records.</p>
+    {% endif %}
+  </div>
+
+  {# DMARC #}
+  <div class="auth-card">
+    <div class="auth-card-title">
+      {% if email_auth.dmarc %}<span class="pill pill-ok">Found</span>{% else %}<span class="pill pill-fail">Missing</span>{% endif %}
+      DMARC (Domain-based Message Authentication)
+    </div>
+    {% if email_auth.dmarc %}
+    <div class="copy-block">{{ email_auth.dmarc.raw }}</div>
+    <div class="auth-card-row">
+      <span class="auth-card-key">Policy</span>
+      <span class="auth-card-val">
+        {{ email_auth.dmarc.policy }}
+        {% if email_auth.dmarc.policy == 'reject' %}<span class="pill pill-ok">Strong</span>
+        {% elif email_auth.dmarc.policy == 'quarantine' %}<span class="pill pill-warn">Moderate</span>
+        {% else %}<span class="pill pill-fail">Weak</span>{% endif %}
+      </span>
+    </div>
+    <div class="auth-card-row">
+      <span class="auth-card-key">Enforcement</span>
+      <span class="auth-card-val">{{ email_auth.dmarc.pct }}% of emails</span>
+    </div>
+    {% if email_auth.dmarc.rua %}
+    <div class="auth-card-row">
+      <span class="auth-card-key">Reports To</span>
+      <span class="auth-card-val">{{ email_auth.dmarc.rua }}</span>
+    </div>
+    {% endif %}
+    {% else %}
+    <p style="color: var(--text-muted); font-size: 13px;">No DMARC record found at _dmarc.{{ domain }}</p>
+    {% endif %}
+  </div>
+
+  {# DKIM #}
+  <div class="auth-card">
+    <div class="auth-card-title">
+      {% if email_auth.dkim and email_auth.dkim.has_dkim %}<span class="pill pill-ok">Found</span>{% else %}<span class="pill pill-warn">Not Found</span>{% endif %}
+      DKIM (DomainKeys Identified Mail)
+    </div>
+    {% if email_auth.dkim and email_auth.dkim.has_dkim %}
+      {% for sel in email_auth.dkim.selectors_found %}
+      <div class="auth-card-row">
+        <span class="auth-card-key">{{ sel.selector }}</span>
+        <span class="auth-card-val">
+          {% if sel.has_key %}<span class="pill pill-ok">Valid Key</span>{% else %}<span class="pill pill-fail">Empty Key</span>{% endif %}
+          {{ sel.key_type }} · {{ sel.public_key }}
+        </span>
+      </div>
+      {% endfor %}
+    {% else %}
+    <p style="color: var(--text-muted); font-size: 13px;">No DKIM records found for common selectors. Custom selectors may exist.</p>
+    {% endif %}
+  </div>
+  {% endif %}
 
   <h2>Findings</h2>
   {% if findings %}
@@ -153,7 +316,7 @@ _TEMPLATE = """<!DOCTYPE html>
   {% endif %}
   {% endfor %}
 
-  <div class="footer">Generated by dns-analyzer · {{ domain }} · {{ scan_timestamp }}</div>
+  <div class="footer">Generated by dns-analyzer v2 · InboxShield Edition · {{ domain }} · {{ scan_timestamp }}</div>
 </div>
 </body>
 </html>"""
@@ -162,7 +325,7 @@ _env = Environment(loader=BaseLoader(), autoescape=False)
 _tmpl = _env.from_string(_TEMPLATE)
 
 
-def build_report(domain: str, scan_timestamp: str, records: dict, findings: list, summary: dict) -> str:
+def build_report(domain: str, scan_timestamp: str, records: dict, findings: list, summary: dict, email_auth: Any = None) -> str:
     """Render a self-contained HTML report string."""
     return _tmpl.render(
         domain=domain,
@@ -170,4 +333,5 @@ def build_report(domain: str, scan_timestamp: str, records: dict, findings: list
         records=records,
         findings=findings,
         summary=summary,
+        email_auth=email_auth,
     )

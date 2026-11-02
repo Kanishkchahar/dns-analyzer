@@ -43,9 +43,25 @@ class Summary(BaseModel):
     info: int
 
 
+class EmailScore(BaseModel):
+    score: int
+    grade: str
+    label: str
+
+
+class EmailAuth(BaseModel):
+    spf: dict[str, Any] | None = None
+    spf_lookups: dict[str, Any] | None = None
+    spf_flattened: dict[str, Any] | None = None
+    dmarc: dict[str, Any] | None = None
+    dkim: dict[str, Any] | None = None
+    score: EmailScore | None = None
+
+
 class AnalyzeResponse(BaseModel):
     domain: str
     scan_timestamp: str
     records: dict[str, Any]
     findings: list[Finding]
     summary: Summary
+    email_auth: EmailAuth | None = None

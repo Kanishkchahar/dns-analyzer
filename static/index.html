@@ -34,7 +34,7 @@
         </svg>
         DNS Analyzer
       </a>
-      <span class="logo-tagline">v1</span>
+      <span class="logo-tagline">v2</span>
     </div>
   </header>
 
@@ -44,8 +44,9 @@
     <section class="hero" aria-labelledby="hero-title">
       <h1 class="hero-title" id="hero-title">DNS Lookup<br>&amp; Analyzer</h1>
       <p class="hero-sub">
-        Enter any domain to fetch its DNS records and run misconfiguration checks
-        — A, AAAA, MX, NS, TXT, CNAME, SOA, all concurrently.
+        Enter any domain to fetch its DNS records, run misconfiguration checks,
+        and analyze email authentication (SPF, DMARC, DKIM)
+        — all concurrently.
       </p>
 
       <div class="input-row" role="search">
@@ -114,6 +115,30 @@
             <span class="label">Info</span>
           </div>
         </div>
+      </div>
+
+      <!-- Email Health Score -->
+      <div id="email-score-section" class="email-score-section" style="display:none;">
+        <div class="score-ring-container">
+          <svg class="score-ring-svg" width="110" height="110" viewBox="0 0 110 110">
+            <circle class="score-ring-bg" cx="55" cy="55" r="48"/>
+            <circle class="score-ring-fg" id="score-ring-fg" cx="55" cy="55" r="48"/>
+          </svg>
+          <div class="score-ring-text">
+            <span class="score-grade-letter" id="score-grade"></span>
+            <span class="score-grade-num" id="score-num"></span>
+          </div>
+        </div>
+        <div class="score-info">
+          <h3 id="score-label">Email Health</h3>
+          <p id="score-desc">Based on SPF, DMARC, and DKIM analysis</p>
+        </div>
+      </div>
+
+      <!-- Email Authentication Cards -->
+      <div id="email-auth-section" class="email-auth-section" style="display:none;">
+        <h2 class="section-title">📧 Email Authentication</h2>
+        <div id="email-auth-cards"></div>
       </div>
 
       <!-- Findings list -->
