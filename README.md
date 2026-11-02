@@ -59,8 +59,6 @@ docker run --rm -p 9000:8000 dns-analyzer
 | `bash run.sh` | **Unified runner:** verifies environment, auto-installs dependencies, and launches server |
 | `bash run.sh <port>` | Starts the server on a custom port (e.g. `9000`) |
 | `bash run.sh --setup-only` | Installs dependencies and prepares `venv` without launching the server |
-| `bash start.sh` | Shortcut alias that forwards to `run.sh` |
-| `bash setup.sh` | Shortcut alias that forwards to `run.sh --setup-only` |
 
 ---
 
@@ -134,9 +132,7 @@ dns-analyzer/
 │   ├── index.html       # Dashboard UI (with score ring & auth cards) ✨
 │   ├── style.css        # Design system (Geist fonts, dark theme)
 │   └── app.js           # Frontend rendering (email auth visualizations) ✨
-├── setup.sh             # Shortcut to run.sh --setup-only
-├── start.sh             # Shortcut to run.sh
-├── run.sh               # All-in-one runner (auto-setup & launch) ✨
+├── run.sh               # Single all-in-one script (auto-setup & launch) ✨
 ├── Dockerfile           # Container image build
 ├── .dockerignore        # Exclude local files from image builds
 ├── requirements.txt     # Python dependencies
