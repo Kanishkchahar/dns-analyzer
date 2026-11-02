@@ -19,6 +19,7 @@ const countWarnings= document.getElementById("count-warnings");
 const countInfo    = document.getElementById("count-info");
 const badgeErrors  = document.getElementById("badge-errors");
 const badgeWarnings= document.getElementById("badge-warnings");
+const badgeInfo    = document.getElementById("badge-info");
 
 // Email auth DOM refs
 const emailScoreSection = document.getElementById("email-score-section");
@@ -176,6 +177,7 @@ async function runAnalysis() {
   hideError();
   hideResults();
 
+  let data;
   try {
     const res = await fetch("/api/analyze", {
       method: "POST",
@@ -183,7 +185,7 @@ async function runAnalysis() {
       body: JSON.stringify({ domain }),
     });
 
-    const data = await res.json();
+    data = await res.json();
 
     if (!res.ok) {
       // Backend validation error (400) or server error (500)
@@ -191,13 +193,19 @@ async function runAnalysis() {
       showError(typeof detail === "string" ? detail : JSON.stringify(detail));
       return;
     }
-
-    renderResults(data);
   } catch (err) {
     showError("Network error — could not reach the server. Is the backend running?");
-    console.error(err);
+    console.error("Fetch error:", err);
+    return;
   } finally {
     setLoading(false);
+  }
+
+  try {
+    renderResults(data);
+  } catch (renderErr) {
+    showError(`Error displaying results: ${renderErr.message}`);
+    console.error("Render error:", renderErr);
   }
 }
 
