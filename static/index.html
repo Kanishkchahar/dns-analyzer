@@ -153,6 +153,30 @@
         <div id="email-auth-cards"></div>
       </div>
 
+      <!-- Advanced Security Suite (DNSSEC, Subdomain Takeover, BIMI) -->
+      <div id="security-suite-section" class="security-suite-section" style="display:none;">
+        <h2 class="section-title">🛡️ Advanced Security &amp; Threat Defense</h2>
+        <div id="security-cards" class="security-cards-grid"></div>
+      </div>
+
+      <!-- 1-Click Remediation Fix Generator -->
+      <div id="remediation-section" class="remediation-section" style="display:none;">
+        <div class="remediation-header">
+          <div>
+            <h2 class="section-title" style="margin-bottom:4px;">🔧 1-Click DNS Fix Generator</h2>
+            <p class="remediation-sub">Copy-pasteable records tailored for Cloudflare, AWS Route 53, and GoDaddy to achieve an A+ security posture.</p>
+          </div>
+          <button class="btn-download-zone" id="download-zone-btn" type="button">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M7 1v8M4 6l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M2 10v1.5a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+            Export BIND Zone File
+          </button>
+        </div>
+        <div id="remediation-list"></div>
+      </div>
+
       <!-- Findings list -->
       <div class="findings-section">
         <div class="findings-header">

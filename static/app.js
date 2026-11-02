@@ -31,10 +31,18 @@ const scoreDesc         = document.getElementById("score-desc");
 const emailAuthSection  = document.getElementById("email-auth-section");
 const emailAuthCards    = document.getElementById("email-auth-cards");
 
+// Security & Remediation DOM refs
+const securitySuiteSection = document.getElementById("security-suite-section");
+const securityCards        = document.getElementById("security-cards");
+const remediationSection   = document.getElementById("remediation-section");
+const remediationList      = document.getElementById("remediation-list");
+const downloadZoneBtn      = document.getElementById("download-zone-btn");
+
 // ── State ─────────────────────────────────────────────────────
 let currentDomain = "";
 let currentFindings = [];
 let currentFilter = "all";
+let currentZoneSnippet = "";
 
 // ── Toast & Clipboard Helpers ─────────────────────────────────
 function showToast(message) {
@@ -158,6 +166,23 @@ downloadBtn.addEventListener("click", () => {
   document.body.removeChild(a);
 });
 
+if (downloadZoneBtn) {
+  downloadZoneBtn.addEventListener("click", () => {
+    if (!currentZoneSnippet || !currentDomain) {
+      showToast("No zone snippet available for this domain.");
+      return;
+    }
+    const blob = new Blob([currentZoneSnippet], { type: "text/plain" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `dns-fixes-${currentDomain}.zone`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast("BIND zone file downloaded!");
+  });
+}
+
 // ── Core: run analysis ────────────────────────────────────────
 async function runAnalysis() {
   const raw = domainInput.value.trim();
@@ -231,6 +256,8 @@ function hideResults() {
   results.classList.remove("visible");
   emailScoreSection.style.display = "none";
   emailAuthSection.style.display = "none";
+  if (securitySuiteSection) securitySuiteSection.style.display = "none";
+  if (remediationSection) remediationSection.style.display = "none";
 }
 
 // ── Render ────────────────────────────────────────────────────
@@ -259,6 +286,12 @@ function renderResults(data) {
 
   // Email Authentication
   renderEmailAuth(data.email_auth, data.domain);
+
+  // Security Suite (DNSSEC, Subdomain Takeover, BIMI)
+  renderSecuritySuite(data.security);
+
+  // 1-Click Remediation Fixes
+  renderRemediation(data.remediation, data.bind_zone_snippet);
 
   results.classList.add("visible");
   results.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -626,6 +659,174 @@ function renderDkimCard(emailAuth) {
     <div class="auth-card-title">${pill} DKIM (DomainKeys Identified Mail)</div>
     ${body}`;
   return card;
+}
+
+// ── Security Suite Rendering ──────────────────────────────────
+function renderSecuritySuite(security) {
+  if (!securitySuiteSection || !securityCards) return;
+  securitySuiteSection.style.display = "none";
+  securityCards.innerHTML = "";
+
+  if (!security) return;
+
+  // 1. DNSSEC Card
+  if (security.dnssec) {
+    const sec = security.dnssec;
+    const isOk = sec.status === "secured";
+    const pill = isOk
+      ? `<span class="pill pill-ok">Secured</span>`
+      : (sec.status === "bogus" ? `<span class="pill pill-fail">Bogus</span>` : `<span class="pill pill-warn">Unsigned</span>`);
+
+    let desc = "Protects against DNS cache poisoning (Kaminsky attacks) and spoofing.";
+    if (isOk) {
+      const algo = sec.keys && sec.keys[0] ? sec.keys[0].algorithm : "Standard";
+      desc = `Cryptographically signed zone using ${algo}. DS record validated at parent registry.`;
+    } else if (sec.status === "incomplete_chain") {
+      desc = "DNSKEY exists in zone, but missing DS delegation in parent registrar.";
+    }
+
+    const card = document.createElement("div");
+    card.className = "security-card";
+    card.innerHTML = `
+      <div>
+        <div class="sec-card-header">
+          <span class="sec-card-title">🔐 DNSSEC Validation</span>
+          ${pill}
+        </div>
+        <div class="sec-card-status">${isOk ? "Cryptographically Authenticated" : "Not Authenticated"}</div>
+        <div class="sec-card-desc">${escapeHtml(desc)}</div>
+      </div>
+      <div style="margin-top:12px; font-size:11px; color:var(--text-muted); font-family:'Geist Mono', monospace;">
+        Keys: ${sec.dnskey_count || 0} · DS: ${sec.ds_count || 0}
+      </div>
+    `;
+    securityCards.appendChild(card);
+  }
+
+  // 2. Subdomain Takeover Card
+  if (security.takeover) {
+    const to = security.takeover;
+    const isVuln = to.vulnerable;
+    const pill = isVuln
+      ? `<span class="pill pill-fail">Vulnerable</span>`
+      : `<span class="pill pill-ok">Protected</span>`;
+
+    const card = document.createElement("div");
+    card.className = "security-card";
+    card.innerHTML = `
+      <div>
+        <div class="sec-card-header">
+          <span class="sec-card-title">🛡️ Subdomain Takeover</span>
+          ${pill}
+        </div>
+        <div class="sec-card-status">${isVuln ? "CRITICAL: Dangling CNAME" : "No Dangling Pointers"}</div>
+        <div class="sec-card-desc">${escapeHtml(to.details || "Analyzed CNAME targets against cloud service fingerprints.")}</div>
+      </div>
+      <div style="margin-top:12px; font-size:11px; color:var(--text-muted); font-family:'Geist Mono', monospace;">
+        Provider: ${escapeHtml(to.provider || "None")}
+      </div>
+    `;
+    securityCards.appendChild(card);
+  }
+
+  // 3. BIMI Email Brand Card
+  if (security.bimi) {
+    const bi = security.bimi;
+    const isBimi = bi.has_bimi && bi.status === "active";
+    let pill = `<span class="pill pill-warn">Not Configured</span>`;
+    let statusText = "No Brand Logo";
+    let desc = "BIMI displays your official verified brand logo next to emails in Gmail, Apple Mail, and Yahoo Mail.";
+
+    if (isBimi) {
+      pill = `<span class="pill pill-ok">Active</span>`;
+      statusText = "Verified Logo Published";
+      desc = `Active logo URL: ${bi.logo_url}`;
+    } else if (bi.dmarc_eligible) {
+      pill = `<span class="pill pill-info">Eligible</span>`;
+      statusText = "Ready for BIMI";
+      desc = "Your domain's strong DMARC policy qualifies it to publish a BIMI logo!";
+    }
+
+    const card = document.createElement("div");
+    card.className = "security-card";
+    card.innerHTML = `
+      <div>
+        <div class="sec-card-header">
+          <span class="sec-card-title">✨ BIMI Brand Inboxes</span>
+          ${pill}
+        </div>
+        <div class="sec-card-status">${statusText}</div>
+        <div class="sec-card-desc">${escapeHtml(desc)}</div>
+      </div>
+      <div style="margin-top:12px; font-size:11px; color:var(--text-muted); font-family:'Geist Mono', monospace;">
+        DMARC Eligible: ${bi.dmarc_eligible ? "Yes" : "Requires p=quarantine/reject"}
+      </div>
+    `;
+    securityCards.appendChild(card);
+  }
+
+  securitySuiteSection.style.display = "block";
+}
+
+// ── 1-Click Remediation Fix Generator ─────────────────────────
+function renderRemediation(fixes, snippet) {
+  if (!remediationSection || !remediationList) return;
+  remediationSection.style.display = "none";
+  remediationList.innerHTML = "";
+  currentZoneSnippet = snippet || "";
+
+  if (!fixes || fixes.length === 0) {
+    remediationList.innerHTML = `
+      <div class="no-issues" role="status">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="8" cy="8" r="7" stroke="#63B995" stroke-width="1.5"/>
+          <path d="M5 8l2 2 4-4" stroke="#63B995" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Optimal posture! All DNS, SPF, DMARC, and security records are properly configured.
+      </div>
+    `;
+    remediationSection.style.display = "block";
+    return;
+  }
+
+  for (const fix of fixes) {
+    const card = document.createElement("div");
+    card.className = "fix-card";
+
+    const header = document.createElement("div");
+    header.className = "fix-card-header";
+    header.innerHTML = `
+      <span class="fix-card-title">
+        <span class="pill pill-info">${escapeHtml(fix.record_type)}</span>
+        ${escapeHtml(fix.title)}
+      </span>
+      <span style="font-family:'Geist Mono', monospace; font-size:11px; color:var(--text-muted);">TTL ${fix.ttl}s</span>
+    `;
+    card.appendChild(header);
+
+    // Copy block with host and value
+    const copyContent = `${fix.value}`;
+    const copyBlock = makeCopyBlock(copyContent);
+    card.appendChild(copyBlock);
+
+    // Provider guides
+    if (fix.provider_guides && Object.keys(fix.provider_guides).length > 0) {
+      const guidesContainer = document.createElement("div");
+      guidesContainer.className = "fix-provider-guides";
+      guidesContainer.innerHTML = `<div class="fix-provider-title">Platform Quick Guide</div>`;
+      for (const [provider, guide] of Object.entries(fix.provider_guides)) {
+        const item = document.createElement("div");
+        item.className = "fix-provider-item";
+        item.innerHTML = `<strong style="color:var(--text-primary);">${escapeHtml(provider)}:</strong> ${escapeHtml(guide)}`;
+        guidesContainer.appendChild(item);
+      }
+      card.appendChild(guidesContainer);
+    }
+
+    remediationList.appendChild(card);
+  }
+
+  remediationSection.style.display = "block";
 }
 
 // ── Utility ───────────────────────────────────────────────────

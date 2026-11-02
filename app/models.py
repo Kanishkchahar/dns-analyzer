@@ -58,6 +58,21 @@ class EmailAuth(BaseModel):
     score: EmailScore | None = None
 
 
+class SecurityAudit(BaseModel):
+    dnssec: dict[str, Any] | None = None
+    takeover: dict[str, Any] | None = None
+    bimi: dict[str, Any] | None = None
+
+
+class RemediationFix(BaseModel):
+    title: str
+    record_type: str
+    host: str
+    value: str
+    ttl: int = 3600
+    provider_guides: dict[str, str] = {}
+
+
 class AnalyzeResponse(BaseModel):
     domain: str
     scan_timestamp: str
@@ -65,3 +80,6 @@ class AnalyzeResponse(BaseModel):
     findings: list[Finding]
     summary: Summary
     email_auth: EmailAuth | None = None
+    security: SecurityAudit | None = None
+    remediation: list[RemediationFix] | None = None
+    bind_zone_snippet: str | None = None

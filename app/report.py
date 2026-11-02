@@ -255,6 +255,51 @@ _TEMPLATE = """<!DOCTYPE html>
   </div>
   {% endif %}
 
+  {# ── Security Suite ── #}
+  {% if security %}
+  <h2>🛡️ Advanced Security &amp; Threat Defense</h2>
+  <div class="auth-card">
+    <div class="auth-card-title">
+      {% if security.dnssec and security.dnssec.enabled %}<span class="pill pill-ok">Secured</span>{% else %}<span class="pill pill-warn">Unsigned</span>{% endif %}
+      DNSSEC Validation
+    </div>
+    <div class="auth-card-row">
+      <span class="auth-card-key">Status</span>
+      <span class="auth-card-val">{{ security.dnssec.status }}</span>
+    </div>
+    <div class="auth-card-row">
+      <span class="auth-card-key">DNSKEY / DS Records</span>
+      <span class="auth-card-val">{{ security.dnssec.dnskey_count }} keys / {{ security.dnssec.ds_count }} DS</span>
+    </div>
+  </div>
+
+  <div class="auth-card">
+    <div class="auth-card-title">
+      {% if security.takeover and security.takeover.vulnerable %}<span class="pill pill-fail">Critical Alert</span>{% else %}<span class="pill pill-ok">Protected</span>{% endif %}
+      Subdomain Takeover Defense
+    </div>
+    <div class="auth-card-row">
+      <span class="auth-card-key">Status</span>
+      <span class="auth-card-val">{{ security.takeover.status }}</span>
+    </div>
+    <div class="auth-card-row">
+      <span class="auth-card-key">Provider</span>
+      <span class="auth-card-val">{{ security.takeover.provider }}</span>
+    </div>
+  </div>
+
+  <div class="auth-card">
+    <div class="auth-card-title">
+      {% if security.bimi and security.bimi.has_bimi %}<span class="pill pill-ok">Active</span>{% elif security.bimi and security.bimi.dmarc_eligible %}<span class="pill pill-info">Eligible</span>{% else %}<span class="pill pill-warn">Not Configured</span>{% endif %}
+      BIMI Email Brand Inboxes
+    </div>
+    <div class="auth-card-row">
+      <span class="auth-card-key">Status</span>
+      <span class="auth-card-val">{{ security.bimi.status }}</span>
+    </div>
+  </div>
+  {% endif %}
+
   <h2>Findings</h2>
   {% if findings %}
     {% for f in findings %}
@@ -325,7 +370,16 @@ _env = Environment(loader=BaseLoader(), autoescape=False)
 _tmpl = _env.from_string(_TEMPLATE)
 
 
-def build_report(domain: str, scan_timestamp: str, records: dict, findings: list, summary: dict, email_auth: Any = None) -> str:
+def build_report(
+    domain: str,
+    scan_timestamp: str,
+    records: dict,
+    findings: list,
+    summary: dict,
+    email_auth: Any = None,
+    security: Any = None,
+    remediation: Any = None,
+) -> str:
     """Render a self-contained HTML report string."""
     return _tmpl.render(
         domain=domain,
@@ -334,4 +388,6 @@ def build_report(domain: str, scan_timestamp: str, records: dict, findings: list
         findings=findings,
         summary=summary,
         email_auth=email_auth,
+        security=security,
+        remediation=remediation,
     )

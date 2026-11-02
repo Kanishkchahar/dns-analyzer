@@ -42,18 +42,22 @@ bash run.sh
 
 | # | Domain to Test | What It Proves to the Audience |
 |---|----------------|---------------------------------|
-| **1** | `google.com` (or click Quick Chip) | **Enterprise Best Practice:** Score **A+**. Strong SPF policy (`-all`), strict DMARC (`reject`), verified DKIM selectors, 0 lookup errors. |
-| **2** | `https://www.boot.dev/dashboard` | **Automatic URL Extraction:** Paste the full URL. Watch the frontend extract the hostname `boot.dev` automatically with zero user cleanup required. |
-| **3** | `example.com` | **Vulnerability Detection:** Grade **F**. Missing SPF, missing DMARC, zero email protection — clearly flagged in red. |
-| **4** | `invalid!!!domain` | **Resilience & Validation:** Pydantic regex rejects bad input instantly with clean HTTP 400 error banner — no server crashes. |
+| **1** | `cloudflare.com` (or click Quick Chip) | **Enterprise Best Practice:** Score **A+**. Fully secured DNSSEC (ECDSA), Active BIMI logo, Subdomain Takeover protected, and strong DMARC policy. |
+| **2** | `google.com` | **Email Scale:** Strict DMARC enforcement, strong SPF, and multiple verified DKIM selectors. |
+| **3** | `https://www.boot.dev/dashboard` | **Automatic URL Extraction:** Paste the full URL. Watch the frontend extract the hostname `boot.dev` automatically with zero user cleanup required. |
+| **4** | `example.com` | **Remediation Wizard:** Shows missing email auth, with the **1-Click DNS Fix Generator** generating exact Cloudflare/AWS Route 53 records and exportable BIND zone file! |
+| **5** | `invalid!!!domain` | **Resilience & Validation:** Pydantic regex rejects bad input instantly with clean HTTP 400 error banner — no server crashes. |
 
 ### Key Features to Call Out During the Demo:
-1. ⚡ **Concurrent Lookups**: *"Notice that all 7 record types return simultaneously in under 200ms thanks to non-blocking `asyncio.gather` — a 7x speedup over sequential tools."*
+1. ⚡ **Concurrent Lookups**: *"All 7 DNS record types + SPF + DMARC + DKIM + DNSSEC + Subdomain Takeover + BIMI return concurrently in under 200ms using `asyncio.gather` — zero sequential waiting."*
 2. 📊 **Email Health Score Ring**: *"The animated circular SVG ring computes a weighted score (0–100) and assigns an A+ to F grade based on real RFC compliance."*
-3. 🎛️ **Interactive Severity Filters**: *"We can click 'Errors', 'Warnings', or 'Info' badges to filter the diagnostic findings instantly without page reloads."*
-4. 📈 **SPF Lookup Meter Bar**: *"RFC 7208 limits SPF DNS lookups to 10. Our meter displays real-time lookup consumption with warning thresholds and automated flattening recommendations."*
-5. 📋 **1-Click Copy**: *"Engineers can copy raw records or suggested fixes directly with animated clipboard feedback."*
-6. 📥 **Offline Download Report**: Click **Download Report** and open the saved HTML file: *"This standalone diagnostic report contains embedded styles and works completely offline without internet or server access."*
+3. 🛡️ **Subdomain Takeover Defense**: *"Detects dangling CNAME records pointing to abandoned AWS S3, GitHub Pages, Heroku, or Shopify endpoints before attackers hijack them."*
+4. 🔐 **DNSSEC Cryptographic Chain**: *"Audits Zone Signing Keys (ZSK), Key Signing Keys (KSK), and parent DS delegations to protect against DNS cache poisoning."*
+5. ✨ **BIMI Brand Certification**: *"Checks whether the domain qualifies to display its verified brand logo in Gmail and Apple Mail customer inboxes."*
+6. 🔧 **1-Click Remediation & BIND Zone File**: *"Not just a scanner — an actionable solution. Generates exact copy-paste DNS records for Cloudflare, Route 53, and GoDaddy with an instant BIND zone file export."*
+7. 🎛️ **Interactive Severity Filters**: *"Click 'Errors', 'Warnings', or 'Info' badges to filter the diagnostic findings instantly without page reloads."*
+8. 📈 **SPF Lookup Meter Bar**: *"Visual meter displaying real-time lookups against RFC 7208 limit of 10 with automatic flattening recommendations."*
+9. 📥 **Offline Download Report**: *"Single-file standalone report with all CSS embedded, opening completely offline."*
 
 ---
 

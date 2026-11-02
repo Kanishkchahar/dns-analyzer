@@ -95,7 +95,7 @@ docker run --rm -p 9000:8000 dns-analyzer
 - Clean 400 errors for invalid input — no silent failures
 - Accessible UI: skip link, `aria-live`, `:focus-visible` rings, reduced-motion support
 
-### v2 — InboxShield Email Authentication ✨ NEW
+### v2 — InboxShield Email & Enterprise Security Suite ✨
 - **SPF Analysis** (RFC 7208):
   - Parse SPF TXT records into structured data
   - Recursive DNS lookup counting against the 10-lookup limit
@@ -108,11 +108,17 @@ docker run --rm -p 9000:8000 dns-analyzer
 - **DKIM Analysis** (RFC 6376):
   - Concurrent scan of 15 common selectors (`google`, `default`, `selector1`, `selector2`, `s1`, `s2`, `dkim`, `mail`, `k1`, `mandrill`, `zendesk`, `amazonses`, etc.)
   - Public key extraction and validation
-  - Detects: missing selectors, empty keys, testing-mode flags
-- **Email Health Score**:
-  - 0–100 point scoring with animated SVG ring visualization
-  - Letter grades: A+ (95+), A (85+), B (70+), C (55+), D (40+), F (<40)
-  - Based on combined SPF + DMARC + DKIM findings
+- **Subdomain Takeover Defense Scanner** (CVE Threat Hunting):
+  - Analyzes CNAME pointers against known cloud provider fingerprints (AWS S3, GitHub Pages, Heroku, Shopify, Zendesk, Surge, Ghost, Azure, Vercel)
+  - Detects dangling CNAMEs pointing to unresolvable/decommissioned endpoints before attackers hijack them
+- **DNSSEC Cryptographic Chain-of-Trust** (RFC 4033, 4034, 4035):
+  - Audits Key Signing Keys (KSK), Zone Signing Keys (ZSK), algorithms (ECDSA, Ed25519, RSA), and parent DS delegation records
+  - Verifies immunity against DNS cache poisoning (Kaminsky attacks)
+- **BIMI Brand Certification** (RFC 8617):
+  - Audits `default._bimi.{domain}` for verified company logo display in Gmail, Apple Mail, and Yahoo Mail
+- **1-Click Remediation & BIND Zone File Generator**:
+  - Automatically generates tailored copy-paste DNS records for Cloudflare, AWS Route 53, and GoDaddy
+  - Exportable RFC-standard BIND zone file (`.zone`) with one click
 
 ---
 
@@ -121,22 +127,26 @@ docker run --rm -p 9000:8000 dns-analyzer
 ```
 dns-analyzer/
 ├── app/
-│   ├── main.py          # FastAPI app & routes (v2 with email auth)
+│   ├── main.py          # FastAPI app & routes (high-concurrency gateway)
 │   ├── resolver.py      # Async DNS lookups (concurrent)
-│   ├── analyzer.py      # 9 DNS misconfiguration checks
-│   ├── spf.py           # SPF parser, lookup counter, flattener ✨
-│   ├── email_auth.py    # DMARC/DKIM analysis & health scoring ✨
-│   ├── models.py        # Pydantic schemas (EmailAuth, EmailScore) ✨
-│   └── report.py        # Self-contained HTML report (with email auth) ✨
+│   ├── analyzer.py      # 9 DNS infrastructure checks
+│   ├── spf.py           # SPF parser, lookup counter, flattener
+│   ├── email_auth.py    # DMARC/DKIM analysis & health scoring
+│   ├── dnssec.py        # DNSSEC cryptographic chain-of-trust audit ✨
+│   ├── takeover.py      # Subdomain takeover & dangling CNAME detector ✨
+│   ├── bimi.py          # BIMI brand logo email inbox validator ✨
+│   ├── remediation.py   # 1-Click DNS fix & BIND zone file generator ✨
+│   ├── models.py        # Pydantic request/response schemas
+│   └── report.py        # Standalone offline HTML diagnostic reports
 ├── static/
-│   ├── index.html       # Dashboard UI (with score ring & auth cards) ✨
-│   ├── style.css        # Design system (Geist fonts, dark theme)
-│   └── app.js           # Frontend rendering (email auth visualizations) ✨
-├── run.sh               # Single all-in-one script (auto-setup & launch) ✨
+│   ├── index.html       # Dashboard UI with Quick Chips & Remediation Wizard
+│   ├── style.css        # Geist design system (dark theme)
+│   └── app.js           # Frontend logic, filter tabs, copy triggers, SVG ring
+├── run.sh               # Single all-in-one script (auto-setup & launch)
 ├── Dockerfile           # Container image build
 ├── .dockerignore        # Exclude local files from image builds
 ├── requirements.txt     # Python dependencies
-├── PRESENTATION.md      # Master demo script, architecture & viva Q&A ✨
+├── PRESENTATION.md      # Master demo script, architecture & viva Q&A
 ├── .gitignore
 └── README.md
 ```
