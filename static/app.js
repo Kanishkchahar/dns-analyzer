@@ -150,7 +150,7 @@ function showToast(message) {
 }
 
 function copyToClipboard(text, btnElement) {
-  navigator.clipboard.writeText(text).then(() => {
+  const onCopied = () => {
     if (btnElement) {
       const originalHtml = btnElement.innerHTML;
       btnElement.classList.add("copied");
@@ -164,10 +164,30 @@ function copyToClipboard(text, btnElement) {
       }, 1800);
     }
     showToast("Copied to clipboard!");
-  }).catch((err) => {
-    console.error("Clipboard write error:", err);
-    showToast("Failed to copy");
-  });
+  };
+
+  const fallbackCopy = () => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      onCopied();
+    } catch (err) {
+      console.error("Clipboard copy error:", err);
+      showToast("Failed to copy");
+    }
+  };
+
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(onCopied).catch(fallbackCopy);
+  } else {
+    fallbackCopy();
+  }
 }
 
 function makeCopyBlock(text) {
@@ -471,6 +491,12 @@ function renderResults(data) {
   // Executive Posture Matrix
   renderPostureMatrix(data);
 
+  // Reset findings search on new scan
+  if (findingsSearch) {
+    findingsSearch.value = "";
+    findingsSearchQuery = "";
+  }
+
   // Render findings with default filter "all"
   applyFindingsFilter("all");
 
@@ -648,12 +674,16 @@ function detectMxProvider(host) {
   if (h.includes("pphosted") || h.includes("proofpoint")) return "Proofpoint";
   if (h.includes("mimecast")) return "Mimecast";
   if (h.includes("zoho")) return "Zoho Mail";
-  if (h.includes("cloudflare")) return "Cloudflare Mail";
+  if (h.includes("cloudflare") || h.includes("cf-emailsecurity")) return "Cloudflare Mail";
   if (h.includes("mailgun")) return "Mailgun";
   if (h.includes("sendgrid")) return "SendGrid";
   if (h.includes("amazonses") || h.includes("aws")) return "Amazon SES";
   if (h.includes("secureserver") || h.includes("godaddy")) return "GoDaddy Mail";
   if (h.includes("protonmail") || h.includes("proton")) return "Proton Mail";
+  if (h.includes("yahoodns") || h.includes("yahoo")) return "Yahoo Mail";
+  if (h.includes("icloud.com") || h.includes("apple.com")) return "iCloud Mail";
+  if (h.includes("fastmail")) return "Fastmail";
+  if (h.includes("yandex")) return "Yandex Mail";
   return null;
 }
 
