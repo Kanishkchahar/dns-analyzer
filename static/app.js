@@ -647,10 +647,19 @@ function renderEmailAuth(emailAuth, domain) {
     const offset = circumference - (circumference * sc.score / 100);
 
     let ringColor = "var(--danger)";
-    if (sc.score >= 85) ringColor = "var(--success)";
-    else if (sc.score >= 55) ringColor = "var(--warning)";
+    emailScoreSection.classList.remove("score-pass", "score-warn", "score-fail");
+    if (sc.score >= 85) {
+      ringColor = "var(--success)";
+      emailScoreSection.classList.add("score-pass");
+    } else if (sc.score >= 55) {
+      ringColor = "var(--warning)";
+      emailScoreSection.classList.add("score-warn");
+    } else {
+      emailScoreSection.classList.add("score-fail");
+    }
 
     scoreRingFg.style.stroke = ringColor;
+    scoreGrade.style.color = ringColor;
     // Animate: start from full offset, then transition to target
     scoreRingFg.style.strokeDashoffset = circumference;
     scoreGrade.textContent = sc.grade;
