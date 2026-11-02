@@ -35,6 +35,16 @@
         DNS Analyzer
       </a>
       <span class="logo-tagline">v2</span>
+      <div class="header-actions">
+        <button id="shortcuts-btn" class="header-action-btn" type="button" aria-label="Open keyboard shortcuts">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <rect x="1" y="3" width="14" height="10" rx="2"/>
+            <path d="M4 6h1M7 6h1M10 6h1M4 9h8"/>
+          </svg>
+          <span>Shortcuts</span>
+          <kbd>?</kbd>
+        </button>
+      </div>
     </div>
   </header>
 
@@ -83,6 +93,19 @@
         <button class="chip" type="button" data-domain="cloudflare.com">cloudflare.com</button>
         <button class="chip" type="button" data-domain="github.com">github.com</button>
         <button class="chip" type="button" data-domain="boot.dev">boot.dev</button>
+      </div>
+
+      <!-- Recent searches row (populated via localStorage) -->
+      <div id="recent-chips-container" class="recent-chips" style="display:none;" aria-label="Recently analyzed domains">
+        <span class="chips-label">Recent:</span>
+        <div id="recent-chips-list" class="recent-chips-list"></div>
+        <button id="clear-recent-btn" class="btn-clear-recent" type="button" aria-label="Clear recent searches">Clear</button>
+      </div>
+
+      <!-- Live Loading Step Bar -->
+      <div id="loading-bar" class="loading-bar" style="display:none;" aria-live="polite">
+        <div class="loading-pulse-dot"></div>
+        <span id="loading-status-text">Auditing DNS zone &amp; security posture...</span>
       </div>
 
       <!-- Error banner -->
@@ -199,6 +222,38 @@
 
     </section>
   </main>
+
+  <!-- Keyboard Shortcuts & Accessibility Help Modal -->
+  <dialog id="shortcuts-modal" class="modal" aria-labelledby="modal-title">
+    <div class="modal-card" role="document">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <rect x="1" y="3" width="14" height="10" rx="2"/>
+            <path d="M4 6h1M7 6h1M10 6h1M4 9h8"/>
+          </svg>
+          <h2 id="modal-title" class="modal-title">Keyboard Navigation &amp; Ease of Access</h2>
+        </div>
+        <button id="close-modal-btn" class="modal-close" type="button" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-sub">DNS Analyzer is engineered for mouse-free navigation and maximum ease of access:</p>
+        <div class="shortcuts-grid">
+          <div class="shortcut-row"><kbd>/</kbd> <span>Focus domain search bar from anywhere</span></div>
+          <div class="shortcut-row"><kbd>Enter</kbd> <span>Run concurrent DNS analysis</span></div>
+          <div class="shortcut-row"><kbd>1</kbd> – <kbd>4</kbd> <span>Instantly analyze sample domains</span></div>
+          <div class="shortcut-row"><kbd>f</kbd> <span>Cycle findings filter (All → Errors → Warnings → Info)</span></div>
+          <div class="shortcut-row"><kbd>d</kbd> <span>Download self-contained offline HTML report</span></div>
+          <div class="shortcut-row"><kbd>z</kbd> <span>Export copy-paste BIND zone file</span></div>
+          <div class="shortcut-row"><kbd>?</kbd> <span>Open this help &amp; shortcuts reference</span></div>
+          <div class="shortcut-row"><kbd>Esc</kbd> <span>Close dialog or dismiss error banners</span></div>
+        </div>
+        <div class="modal-a11y-note">
+          <strong>Accessibility Guarantee:</strong> Built with semantic HTML5, ARIA live regions for screen readers, high-contrast WCAG AA tokens, zero-npm vanilla JS, and URL auto-sanitization.
+        </div>
+      </div>
+    </div>
+  </dialog>
 
   <!-- Toast notification -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

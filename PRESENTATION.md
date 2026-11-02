@@ -58,6 +58,41 @@ bash run.sh
 7. 🎛️ **Interactive Severity Filters**: *"Click 'Errors', 'Warnings', or 'Info' badges to filter the diagnostic findings instantly without page reloads."*
 8. 📈 **SPF Lookup Meter Bar**: *"Visual meter displaying real-time lookups against RFC 7208 limit of 10 with automatic flattening recommendations."*
 9. 📥 **Offline Download Report**: *"Single-file standalone report with all CSS embedded, opening completely offline."*
+10. ♿ **Radical Ease of Access**: *"Keyboard-first navigation (`/`, `?`, `1-4`, `f`, `d`), persistent search history, URL auto-sanitization, and plain-English tooltips for non-technical users."*
+
+---
+
+## 2.1 GUI Ease of Access & Presentation Walkthrough
+
+When presenting this website to users, teachers, or evaluators, focus on **"Radical User Ease of Access"**. Explain how DNS Analyzer bridges the gap between deep infrastructure complexity and consumer-grade usability:
+
+```
+Traditional CLI (dig / nslookup)           DNS Analyzer v2 (Ease of Access)
+─────────────────────────────────          ─────────────────────────────────
+• Requires terminal & command syntax       • Zero install, clean browser UI
+• Must run 7–10 commands per domain        • 1-click concurrent audit in <200ms
+• Outputs cryptic raw DNS zone text        • Visual color-coded health grades (A+ to F)
+• Leaves users clueless how to fix bugs    • 1-Click copyable DNS fixes & BIND zone file
+• Fails on dirty URLs                      • Auto-extracts hostname from any URL
+• Mouse-only or CLI-only                   • Full keyboard accessibility (`/`, `?`, `1-4`, `f`, `d`)
+```
+
+### The 5 Ease-of-Access Talking Points to Deliver:
+
+1. **Zero-Barrier Input & URL Hygiene**:
+   > *"Users don't need to know domain syntax. You can paste dirty strings like `https://boot.dev/dashboard?ref=test` and the frontend regex automatically cleans it to `boot.dev`. Plus, returning users have their recent searches saved locally in 1-click history chips."*
+
+2. **Full Keyboard-Driven Accessibility (WCAG Compliant)**:
+   > *"Power users and screen-reader users can operate the entire platform without touching a mouse. Pressing `/` jumps to search, `1` through `4` test sample domains, `f` cycles findings severity filters, `d` triggers report downloads, and `?` opens our comprehensive shortcuts modal."*
+
+3. **Cognitive Clarity Over Information Overload**:
+   > *"Instead of bombarding non-technical administrators with cryptic RFC error codes, we provide plain-English 'What is this?' info badges (`?`) across SPF, DMARC, DKIM, DNSSEC, and BIMI. The circular SVG health ring translates complex security posture into an immediate letter grade (A+ through F)."*
+
+4. **Visual Transparency & Live Progress**:
+   > *"During analysis, an animated micro-status bar informs the user in real time about concurrent operations (`Querying 7 record types... Auditing SPF... Inspecting DNSSEC...`), eliminating user friction and perceived wait times."*
+
+5. **Actionable 1-Click Resolution**:
+   > *"Ease of access isn't just about reading data — it's about solving problems effortlessly. Our 1-Click DNS Fix Generator provides tailored copy-paste snippets for Cloudflare, Route 53, and GoDaddy, plus an exportable standard BIND zone file."*
 
 ---
 

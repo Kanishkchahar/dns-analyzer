@@ -21,6 +21,16 @@ const badgeErrors  = document.getElementById("badge-errors");
 const badgeWarnings= document.getElementById("badge-warnings");
 const badgeInfo    = document.getElementById("badge-info");
 
+// Accessibility & Help modal DOM refs
+const shortcutsBtn     = document.getElementById("shortcuts-btn");
+const shortcutsModal   = document.getElementById("shortcuts-modal");
+const closeModalBtn    = document.getElementById("close-modal-btn");
+const recentChipsContainer = document.getElementById("recent-chips-container");
+const recentChipsList  = document.getElementById("recent-chips-list");
+const clearRecentBtn   = document.getElementById("clear-recent-btn");
+const loadingBar       = document.getElementById("loading-bar");
+const loadingStatusText= document.getElementById("loading-status-text");
+
 // Email auth DOM refs
 const emailScoreSection = document.getElementById("email-score-section");
 const scoreRingFg       = document.getElementById("score-ring-fg");
@@ -43,6 +53,81 @@ let currentDomain = "";
 let currentFindings = [];
 let currentFilter = "all";
 let currentZoneSnippet = "";
+let loadingInterval = null;
+
+// ── Recent Searches (localStorage) ───────────────────────────
+const STORAGE_KEY_RECENT = "dns_analyzer_recent";
+
+function getRecentSearches() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY_RECENT) || "[]");
+  } catch (_) {
+    return [];
+  }
+}
+
+function saveRecentSearch(domain) {
+  if (!domain) return;
+  domain = domain.toLowerCase();
+  let list = getRecentSearches().filter((d) => d !== domain);
+  list.unshift(domain);
+  if (list.length > 5) list = list.slice(0, 5);
+  try {
+    localStorage.setItem(STORAGE_KEY_RECENT, JSON.stringify(list));
+  } catch (_) {}
+  renderRecentChips();
+}
+
+function clearRecentSearches() {
+  try {
+    localStorage.removeItem(STORAGE_KEY_RECENT);
+  } catch (_) {}
+  renderRecentChips();
+  showToast("Recent search history cleared");
+}
+
+function renderRecentChips() {
+  if (!recentChipsContainer || !recentChipsList) return;
+  const list = getRecentSearches();
+  if (list.length === 0) {
+    recentChipsContainer.style.display = "none";
+    recentChipsList.innerHTML = "";
+    return;
+  }
+  recentChipsList.innerHTML = "";
+  for (const d of list) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip-recent";
+    chip.textContent = d;
+    chip.setAttribute("aria-label", `Analyze recent domain ${d}`);
+    chip.addEventListener("click", () => {
+      domainInput.value = d;
+      runAnalysis();
+    });
+    recentChipsList.appendChild(chip);
+  }
+  recentChipsContainer.style.display = "flex";
+}
+
+// ── Shortcuts Modal Helpers ───────────────────────────────────
+function openShortcutsModal() {
+  if (!shortcutsModal) return;
+  if (typeof shortcutsModal.showModal === "function") {
+    shortcutsModal.showModal();
+  } else {
+    shortcutsModal.setAttribute("open", "");
+  }
+}
+
+function closeShortcutsModal() {
+  if (!shortcutsModal) return;
+  if (typeof shortcutsModal.close === "function") {
+    shortcutsModal.close();
+  } else {
+    shortcutsModal.removeAttribute("open");
+  }
+}
 
 // ── Toast & Clipboard Helpers ─────────────────────────────────
 function showToast(message) {
@@ -128,12 +213,90 @@ document.querySelectorAll(".chip").forEach((chip) => {
   });
 });
 
-// Keyboard shortcut '/' to focus domain search
+// Shortcuts modal open/close
+if (shortcutsBtn) {
+  shortcutsBtn.addEventListener("click", openShortcutsModal);
+}
+if (closeModalBtn) {
+  closeModalBtn.addEventListener("click", closeShortcutsModal);
+}
+if (shortcutsModal) {
+  shortcutsModal.addEventListener("click", (e) => {
+    if (e.target === shortcutsModal) closeShortcutsModal();
+  });
+}
+if (clearRecentBtn) {
+  clearRecentBtn.addEventListener("click", clearRecentSearches);
+}
+
+// Global keyboard accessibility shortcuts
 window.addEventListener("keydown", (e) => {
-  if (e.key === "/" && document.activeElement !== domainInput) {
+  const isInputFocused = document.activeElement === domainInput;
+
+  // Shortcuts modal toggle with ?
+  if (e.key === "?" && !isInputFocused) {
+    e.preventDefault();
+    if (shortcutsModal && shortcutsModal.hasAttribute("open")) {
+      closeShortcutsModal();
+    } else {
+      openShortcutsModal();
+    }
+    return;
+  }
+
+  // Escape closes modal or error banner
+  if (e.key === "Escape") {
+    if (shortcutsModal && shortcutsModal.hasAttribute("open")) {
+      closeShortcutsModal();
+    } else if (errorBanner && errorBanner.classList.contains("visible")) {
+      hideError();
+    }
+    return;
+  }
+
+  // '/' to focus domain search
+  if (e.key === "/" && !isInputFocused) {
     e.preventDefault();
     domainInput.focus();
     domainInput.select();
+    return;
+  }
+
+  // Number keys 1-4 for quick-sample domains when not in search input
+  if (!isInputFocused && ["1", "2", "3", "4"].includes(e.key)) {
+    const sampleChips = document.querySelectorAll(".quick-chips .chip");
+    const idx = parseInt(e.key, 10) - 1;
+    if (sampleChips[idx]) {
+      e.preventDefault();
+      sampleChips[idx].click();
+    }
+    return;
+  }
+
+  // 'f' to cycle findings filters: all -> error -> warning -> info -> all
+  if (!isInputFocused && (e.key === "f" || e.key === "F")) {
+    e.preventDefault();
+    const filters = ["all", "error", "warning", "info"];
+    const nextIdx = (filters.indexOf(currentFilter) + 1) % filters.length;
+    applyFindingsFilter(filters[nextIdx]);
+    showToast(`Filter: ${filters[nextIdx].toUpperCase()}`);
+    return;
+  }
+
+  // 'd' to download offline HTML report
+  if (!isInputFocused && (e.key === "d" || e.key === "D") && currentDomain) {
+    e.preventDefault();
+    downloadBtn.click();
+    return;
+  }
+
+  // 'z' to download BIND zone file
+  if (!isInputFocused && (e.key === "z" || e.key === "Z") && currentZoneSnippet) {
+    if (downloadZoneBtn) {
+      e.preventDefault();
+      downloadZoneBtn.click();
+    }
+    return;
   }
 });
 
@@ -228,6 +391,7 @@ async function runAnalysis() {
 
   try {
     renderResults(data);
+    saveRecentSearch(domain);
   } catch (renderErr) {
     showError(`Error displaying results: ${renderErr.message}`);
     console.error("Render error:", renderErr);
@@ -239,6 +403,28 @@ function setLoading(on) {
   analyzeBtn.disabled = on;
   analyzeBtn.classList.toggle("loading", on);
   domainInput.classList.remove("input-error");
+
+  if (!loadingBar || !loadingStatusText) return;
+
+  if (on) {
+    loadingBar.style.display = "flex";
+    loadingStatusText.textContent = "Querying 7 DNS record types concurrently...";
+    const messages = [
+      "Auditing SPF syntax & recursion lookup limits...",
+      "Evaluating DMARC enforcement & DKIM selectors...",
+      "Inspecting DNSSEC cryptographic keys & takeover risks...",
+      "Compiling diagnostic health score & remediation...",
+    ];
+    let step = 0;
+    clearInterval(loadingInterval);
+    loadingInterval = setInterval(() => {
+      step = (step + 1) % messages.length;
+      loadingStatusText.textContent = messages[step];
+    }, 450);
+  } else {
+    clearInterval(loadingInterval);
+    loadingBar.style.display = "none";
+  }
 }
 
 function showError(msg) {
@@ -504,7 +690,7 @@ function renderSpfCard(emailAuth) {
     ? `<span class="pill pill-ok">Found</span>`
     : `<span class="pill pill-fail">Missing</span>`;
 
-  card.innerHTML = `<div class="auth-card-title">${pill} SPF (Sender Policy Framework)</div>`;
+  card.innerHTML = `<div class="auth-card-title">${pill} SPF (Sender Policy Framework) <span class="info-badge" title="Specifies authorized mail servers allowed to send email for this domain.">?</span></div>`;
 
   if (!hasSpf) {
     card.innerHTML += `<p class="auth-empty">No SPF record found in TXT records.</p>`;
@@ -592,7 +778,7 @@ function renderDmarcCard(emailAuth, domain) {
     ? `<span class="pill pill-ok">Found</span>`
     : `<span class="pill pill-fail">Missing</span>`;
 
-  card.innerHTML = `<div class="auth-card-title">${pill} DMARC (Domain-based Message Authentication)</div>`;
+  card.innerHTML = `<div class="auth-card-title">${pill} DMARC (Message Authentication) <span class="info-badge" title="Enforces policies for email senders and provides abuse reports to prevent phishing.">?</span></div>`;
 
   if (!hasDmarc) {
     card.innerHTML += `<p class="auth-empty">No DMARC record found at _dmarc.${escapeHtml(domain)}</p>`;
@@ -656,7 +842,7 @@ function renderDkimCard(emailAuth) {
   }
 
   card.innerHTML = `
-    <div class="auth-card-title">${pill} DKIM (DomainKeys Identified Mail)</div>
+    <div class="auth-card-title">${pill} DKIM (DomainKeys Identified Mail) <span class="info-badge" title="Cryptographic digital signature verifying emails were not tampered with in transit.">?</span></div>
     ${body}`;
   return card;
 }
@@ -690,7 +876,7 @@ function renderSecuritySuite(security) {
     card.innerHTML = `
       <div>
         <div class="sec-card-header">
-          <span class="sec-card-title">🔐 DNSSEC Validation</span>
+          <span class="sec-card-title">🔐 DNSSEC Validation <span class="info-badge" title="Cryptographically signs DNS records to prevent spoofing and cache poisoning.">?</span></span>
           ${pill}
         </div>
         <div class="sec-card-status">${isOk ? "Cryptographically Authenticated" : "Not Authenticated"}</div>
@@ -716,7 +902,7 @@ function renderSecuritySuite(security) {
     card.innerHTML = `
       <div>
         <div class="sec-card-header">
-          <span class="sec-card-title">🛡️ Subdomain Takeover</span>
+          <span class="sec-card-title">🛡️ Subdomain Takeover <span class="info-badge" title="Detects dangling CNAME records pointing to abandoned cloud services before attackers hijack them.">?</span></span>
           ${pill}
         </div>
         <div class="sec-card-status">${isVuln ? "CRITICAL: Dangling CNAME" : "No Dangling Pointers"}</div>
@@ -752,7 +938,7 @@ function renderSecuritySuite(security) {
     card.innerHTML = `
       <div>
         <div class="sec-card-header">
-          <span class="sec-card-title">✨ BIMI Brand Inboxes</span>
+          <span class="sec-card-title">✨ BIMI Brand Inboxes <span class="info-badge" title="Displays your official brand logo in Gmail and Apple Mail recipient inboxes.">?</span></span>
           ${pill}
         </div>
         <div class="sec-card-status">${statusText}</div>
@@ -838,3 +1024,6 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
+// ── Initialize ─────────────────────────────────────────────────
+renderRecentChips();
