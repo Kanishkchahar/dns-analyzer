@@ -119,6 +119,12 @@ docker run --rm -p 9000:8000 dns-analyzer
 - **1-Click Remediation & BIND Zone File Generator**:
   - Automatically generates tailored copy-paste DNS records for Cloudflare, AWS Route 53, and GoDaddy
   - Exportable RFC-standard BIND zone file (`.zone`) with one click
+- **Design Engineering & UI/UX Craft** (Inspired by Linear, Vercel, Stripe, Raycast & Apple):
+  - **Keyboard-First Ergonomics**: Instant navigation with `/` to search, `?` for shortcuts modal, `1`–`4` for sample chips, `f` for severity filter cycling, `d` for offline reports, and `z` for BIND zone export
+  - **Executive Posture Matrix**: 4-quadrant high-level health overview (Routing, Redundancy, Email Defense, DNSSEC)
+  - **Smart Provider Intelligence**: Auto-detects MX & NS providers (Google Workspace, Microsoft 365, Cloudflare, Route 53) and categorizes cryptic TXT verification records (SPF, Google, Apple, Stripe, GitHub)
+  - **Actionable 1-Click Resolution**: Copyable DNS records with checkmark affirmations and humanized time intervals (`7200s (2 hrs)`)
+  - **Sticky Jump Navigation & Frosted Glass Toast**: Blur backdrops (`backdrop-filter`), active scroll tracking, and 350ms staggered card reveals
 
 ---
 

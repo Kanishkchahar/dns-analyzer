@@ -125,6 +125,22 @@ DNS Analyzer automates full-zone inspection, email security assessment, and RFC 
 
 ---
 
+## 4.1 Design Engineering & World-Class UI/UX Benchmarks
+
+DNS Analyzer's interface was engineered by extracting proven design patterns from the world's most acclaimed software platforms:
+
+| Benchmark Platform | Defining UI/UX Trait | How It Is Applied in DNS Analyzer |
+|:---|:---|:---|
+| **Linear** (`linear.app`) | Keyboard-first ergonomics & tactile actuation | Full keyboard shortcuts modal (<kbd>?</kbd>), tactile button compressions (<kbd>active: scale(0.96)</kbd>), and strictly concentric nested radii (`outer = inner + padding`). |
+| **Vercel** (`vercel.com`) | Geist design tokens & tabular typography cadence | Geist monospace metrics, `text-wrap: balance` on headlines, `font-variant-numeric: tabular-nums` to eliminate layout jiggle, and real-time SPF 10-lookup meter bar. |
+| **Stripe** (`stripe.com`) | Actionable 1-click resolution & humanized data | 1-Click DNS Fix Generator for Cloudflare/Route53/GoDaddy, copy buttons with checkmark affirmations, and humanized durations (`7200s (2 hrs)`). |
+| **Raycast** (`raycast.com`) | Passive shortcut discovery & fast recall | Embedded keycap hints (`<kbd>/</kbd>`, `<kbd>?</kbd>`), persistent `localStorage` recent search history chips, and instant live findings search. |
+| **Supabase** (`supabase.com`) | High-contrast status & smart categorization | Automatic TXT record categorization (`SPF`, `Google Verify`, `Meta`, `Stripe`, `GitHub`), smart MX/NS provider pills, and instant BIND zone file export. |
+| **Cloudflare** (`cloudflare.com`) | Diagnostic telemetry & executive scorecards | Executive 4-Quadrant Posture Matrix (Routing, Redundancy, Email Defense, DNSSEC), circular animated SVG health gauge (A+ to F), and cryptographic chain validation. |
+| **Apple** (`apple.com` HIG) | Fluid spring motion & universal accessibility | Floating glassmorphism notifications (`backdrop-filter: blur(16px)`), sticky navigation bar with active scroll tracking, and 350ms staggered card reveals. |
+
+---
+
 ## 5. System Architecture & Concurrency Workflow
 
 ```
