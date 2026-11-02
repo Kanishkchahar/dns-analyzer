@@ -866,7 +866,7 @@ main {
   gap: 8px;
   padding: 10px 0;
   margin-bottom: 32px;
-  background: rgba(12, 13, 14, 0.90);
+  background: rgba(12, 13, 14, 0.95);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   overflow-x: auto;
@@ -939,6 +939,8 @@ main {
   .filter-group { justify-content: space-between; width: 100%; }
   .record-copy-btn { opacity: 0.8; }
   .jump-nav { -webkit-overflow-scrolling: touch; padding: 8px 0; }
+  .input-kbd-hint { display: none; }
+  .record-provider-pill { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 }
 
 /* ── Focus ring ── */

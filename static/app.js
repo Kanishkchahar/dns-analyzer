@@ -266,10 +266,14 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
-  // Escape closes modal or error banner
+  // Escape closes modal or error banner, or clears findings search
   if (e.key === "Escape") {
     if (shortcutsModal && shortcutsModal.hasAttribute("open")) {
       closeShortcutsModal();
+    } else if (findingsSearch && document.activeElement === findingsSearch && findingsSearchQuery) {
+      findingsSearch.value = "";
+      findingsSearchQuery = "";
+      renderFindingsList();
     } else if (errorBanner && errorBanner.classList.contains("visible")) {
       hideError();
     }
@@ -487,6 +491,7 @@ function renderResults(data) {
   countInfo.textContent    = data.summary.info;
   badgeErrors.classList.toggle("zero", data.summary.errors === 0);
   badgeWarnings.classList.toggle("zero", data.summary.warnings === 0);
+  badgeInfo.classList.toggle("zero", data.summary.info === 0);
 
   // Executive Posture Matrix
   renderPostureMatrix(data);
@@ -1277,6 +1282,72 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// ── Jump Nav Scroll-Spy (IntersectionObserver) ────────────────
+function initJumpNav() {
+  const nav = document.getElementById("jump-nav");
+  if (!nav) return;
+
+  const pills = nav.querySelectorAll(".jump-pill");
+  if (!pills.length) return;
+
+  // Build a map from section id → pill element
+  const pillMap = new Map();
+  pills.forEach((pill) => {
+    const href = pill.getAttribute("href");
+    if (href && href.startsWith("#")) {
+      pillMap.set(href.slice(1), pill);
+    }
+  });
+
+  // Track which sections are currently intersecting
+  const visibleSections = new Set();
+
+  const observer = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          visibleSections.add(entry.target.id);
+        } else {
+          visibleSections.delete(entry.target.id);
+        }
+      }
+
+      // Activate the first visible section (in DOM order)
+      for (const [id, pill] of pillMap) {
+        if (visibleSections.has(id)) {
+          pills.forEach((p) => p.classList.remove("active"));
+          pill.classList.add("active");
+          break;
+        }
+      }
+    },
+    {
+      rootMargin: "-80px 0px -40% 0px",
+      threshold: 0.1,
+    }
+  );
+
+  // Observe each target section
+  for (const id of pillMap.keys()) {
+    const section = document.getElementById(id);
+    if (section) observer.observe(section);
+  }
+
+  // Smooth scroll + active state on click
+  pills.forEach((pill) => {
+    pill.addEventListener("click", (e) => {
+      e.preventDefault();
+      const targetId = pill.getAttribute("href")?.slice(1);
+      const target = targetId && document.getElementById(targetId);
+      if (target) {
+        pills.forEach((p) => p.classList.remove("active"));
+        pill.classList.add("active");
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    });
+  });
 }
 
 // ── Initialize ─────────────────────────────────────────────────
