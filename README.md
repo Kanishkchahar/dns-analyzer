@@ -6,29 +6,28 @@ A web-based DNS lookup, misconfiguration analyzer, and **email authentication se
 
 ## Quick Start
 
-### Step 1 — Install dependencies
+### One-Command Setup & Launch (Recommended)
 
 ```bash
-bash setup.sh
+bash run.sh
 ```
 
-This will:
+This all-in-one script will:
 - Check your Python version (3.11+ required)
-- Create a `venv/` virtual environment
-- Install all Python packages from `requirements.txt`
-
-### Step 2 — Start the server
-
-```bash
-bash start.sh
-```
-
-Then open **http://127.0.0.1:8000** in your browser.
+- Automatically verify or create the `venv/` virtual environment
+- Install any missing dependencies from `requirements.txt`
+- Start the server on **http://127.0.0.1:8000**
 
 #### Custom port
 
 ```bash
-bash start.sh 9000
+bash run.sh 9000
+```
+
+#### Setup only (without launching server)
+
+```bash
+bash run.sh --setup-only
 ```
 
 ### Run with Docker
@@ -57,9 +56,11 @@ docker run --rm -p 9000:8000 dns-analyzer
 
 | Script | What it does |
 |--------|-------------|
-| `bash setup.sh` | Creates a virtual environment and installs all dependencies |
-| `bash start.sh` | Starts the web server on port 8000 (default) |
-| `bash start.sh <port>` | Starts the web server on a custom port |
+| `bash run.sh` | **Unified runner:** verifies environment, auto-installs dependencies, and launches server |
+| `bash run.sh <port>` | Starts the server on a custom port (e.g. `9000`) |
+| `bash run.sh --setup-only` | Installs dependencies and prepares `venv` without launching the server |
+| `bash start.sh` | Shortcut alias that forwards to `run.sh` |
+| `bash setup.sh` | Shortcut alias that forwards to `run.sh --setup-only` |
 
 ---
 
@@ -133,11 +134,13 @@ dns-analyzer/
 │   ├── index.html       # Dashboard UI (with score ring & auth cards) ✨
 │   ├── style.css        # Design system (Geist fonts, dark theme)
 │   └── app.js           # Frontend rendering (email auth visualizations) ✨
-├── setup.sh             # Install dependencies
-├── start.sh             # Start the web server
+├── setup.sh             # Shortcut to run.sh --setup-only
+├── start.sh             # Shortcut to run.sh
+├── run.sh               # All-in-one runner (auto-setup & launch) ✨
 ├── Dockerfile           # Container image build
 ├── .dockerignore        # Exclude local files from image builds
 ├── requirements.txt     # Python dependencies
+├── PRESENTATION.md      # Master demo script, architecture & viva Q&A ✨
 ├── .gitignore
 └── README.md
 ```
