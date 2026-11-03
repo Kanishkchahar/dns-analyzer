@@ -14,6 +14,7 @@ const resultDomain = document.getElementById("result-domain");
 const downloadBtn  = document.getElementById("download-btn");
 const findingsList = document.getElementById("findings-list");
 const recordsGrid  = document.getElementById("records-grid");
+const recordsCount = document.getElementById("records-count");
 const countErrors  = document.getElementById("count-errors");
 const countWarnings= document.getElementById("count-warnings");
 const countInfo    = document.getElementById("count-info");
@@ -508,9 +509,16 @@ function renderResults(data) {
   // Records
   recordsGrid.innerHTML = "";
   const ORDER = ["A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA"];
+  let renderedRecordTypes = 0;
   for (const rtype of ORDER) {
     const entry = data.records[rtype];
-    if (entry) recordsGrid.appendChild(renderRecordCard(rtype, entry));
+    if (entry) {
+      recordsGrid.appendChild(renderRecordCard(rtype, entry));
+      renderedRecordTypes++;
+    }
+  }
+  if (recordsCount) {
+    recordsCount.textContent = `${renderedRecordTypes} record type${renderedRecordTypes === 1 ? "" : "s"}`;
   }
 
   // Email Authentication
@@ -764,7 +772,7 @@ function makeInlineCopyBtn(text) {
 // ── Smart Record Card Rendering ───────────────────────────────
 function renderRecordCard(rtype, entry) {
   const card = document.createElement("div");
-  card.className = "record-card";
+  card.className = `record-card record-card-${rtype.toLowerCase()}`;
 
   const isOk = entry.status === "ok";
   const statusLabel = isOk ? "OK" : entry.status.replace("_", " ");

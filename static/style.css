@@ -700,8 +700,9 @@ main {
 }
 .records-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 14px;
 }
 .record-card {
   background: var(--surface);
@@ -753,9 +754,10 @@ main {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 16px;
+  padding: 11px 16px;
   border-bottom: 1px solid var(--hairline);
   transition: background-color 0.1s ease;
+  min-width: 0;
 }
 .record-row:hover {
   background-color: rgba(255, 255, 255, 0.02);
@@ -767,6 +769,8 @@ main {
   color: var(--text-primary);
   word-break: break-all;
   flex: 1;
+  min-width: 0;
+  line-height: 1.55;
 }
 .record-label {
   font-family: 'Geist Mono', monospace;
@@ -797,6 +801,19 @@ main {
   color: var(--accent);
   border: 1px solid rgba(101, 185, 232, 0.25);
   white-space: nowrap;
+}
+
+/* TXT and other long values remain readable without stretching the grid. */
+.record-card-txt,
+.record-card-soa { grid-column: 1 / -1; }
+.record-card-txt .record-row,
+.record-card-soa .record-row { align-items: flex-start; }
+.record-card-txt .record-value { overflow-wrap: anywhere; }
+
+@media (max-width: 680px) {
+  .records-grid { grid-template-columns: minmax(0, 1fr); }
+  .record-card-txt,
+  .record-card-soa { grid-column: auto; }
 }
 .record-category-pill {
   font-size: 10px;
