@@ -63,6 +63,24 @@ def mock_external_network_calls():
 
 @pytest.mark.asyncio
 class TestAPIEndpoints:
+    async def test_network_path_scan_endpoint(self):
+        result = {"scan_mode": "Common Web Paths + Public Robots/Sitemap (No Crawling)", "path_count": 7, "targets": []}
+        with patch("app.main.run_common_path_scan", return_value=result) as mocked:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post("/api/network/path-scan", json={"targets": ["example.com"]})
+
+        assert resp.status_code == 200
+        assert resp.json()["path_count"] == 7
+        mocked.assert_awaited_once_with(["example.com"])
+
+    async def test_network_path_scan_rejects_more_than_five_targets(self):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/api/network/path-scan", json={"targets": ["example.com"] * 6})
+
+        assert resp.status_code == 400
+
     async def test_root_serves_html(self):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -133,6 +151,8 @@ class TestAPIEndpoints:
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
         assert 'filename="dns-report-example.com.html"' in resp.headers["content-disposition"]
+        assert "TLS &amp; HTTPS Posture" in resp.text
+        assert "Passive Subdomain Inventory" in resp.text
         assert "<!DOCTYPE html>" in resp.text
         assert "example.com" in resp.text
 

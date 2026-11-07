@@ -29,6 +29,7 @@ async def discover_passive_subdomains(
     result: dict[str, Any] = {
         "domain": norm_domain,
         "source": "Certificate Transparency (crt.sh)",
+        "status": "complete",
         "discovered_count": 0,
         "subdomains": [],
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
@@ -66,7 +67,7 @@ async def discover_passive_subdomains(
                             except Exception:
                                 raw_json = None
 
-                    if raw_json and isinstance(raw_json, list):
+                    if raw_json is not None and isinstance(raw_json, list):
                         for item in raw_json:
                             if isinstance(item, dict):
                                 name_val = item.get("name_value", "")
@@ -75,6 +76,7 @@ async def discover_passive_subdomains(
                                     if clean_name.endswith(f".{norm_domain}") and clean_name != norm_domain:
                                         discovered_names.add(clean_name)
                         if is_truncated:
+                            result["status"] = "partial"
                             result["incomplete"] = True
                             findings.append(Finding(
                                 severity="info",
@@ -82,19 +84,52 @@ async def discover_passive_subdomains(
                                 message=f"Certificate Transparency log stream reached {max_bytes // 1024} KB limit. Partial inventory returned ({len(discovered_names)} subdomains discovered).",
                             ))
                     elif is_truncated:
+                        result["status"] = "unavailable"
+                        result["reason"] = "Certificate Transparency response was truncated before valid JSON could be recovered."
                         result["incomplete"] = True
                         findings.append(Finding(
                             severity="info",
                             record_type="Inventory",
                             message=f"Certificate Transparency log response exceeded {max_bytes // 1024} KB limit and could not be parsed; inventory incomplete.",
                         ))
-    except Exception:
-        # crt.sh can occasionally be slow or rate-limited; gracefully continue with empty set
-        pass
+                    else:
+                        result["status"] = "unavailable"
+                        result["reason"] = "Certificate Transparency service returned an invalid response."
+                        findings.append(Finding(
+                            severity="info",
+                            record_type="Inventory",
+                            message="Certificate Transparency results could not be parsed; subdomain inventory is unavailable.",
+                        ))
+                else:
+                    result["status"] = "unavailable"
+                    result["reason"] = f"Certificate Transparency service returned HTTP {resp.status_code}."
+                    findings.append(Finding(
+                        severity="info",
+                        record_type="Inventory",
+                        message=f"Certificate Transparency lookup returned HTTP {resp.status_code}; no subdomain inventory was produced.",
+                    ))
+    except Exception as exc:
+        result["status"] = "unavailable"
+        result["reason"] = f"{type(exc).__name__}: {str(exc) or 'Certificate Transparency request failed'}"
+        findings.append(Finding(
+            severity="info",
+            record_type="Inventory",
+            message=f"Certificate Transparency lookup failed ({type(exc).__name__}); subdomain inventory is unavailable.",
+        ))
 
     # Cap to max_hosts for responsive performance
+    discovered_total = len(discovered_names)
     sorted_hosts = sorted(list(discovered_names))[:max_hosts]
+    result["discovered_total"] = discovered_total
     result["discovered_count"] = len(sorted_hosts)
+    if discovered_total > max_hosts and result["status"] == "complete":
+        result["status"] = "partial"
+        result["incomplete"] = True
+        findings.append(Finding(
+            severity="info",
+            record_type="Inventory",
+            message=f"Subdomain inventory was limited to {max_hosts} of {discovered_total} discovered names.",
+        ))
 
     if not sorted_hosts:
         return result, findings
@@ -112,7 +147,9 @@ async def discover_passive_subdomains(
             cnames = cname_res.get("records", []) if cname_res.get("status") == "ok" else []
             cname_target = cnames[0] if cnames else None
 
-            status = "resolving" if ips else ("dangling" if cname_target else "inactive")
+            query_statuses = (a_res.get("status"), cname_res.get("status"))
+            query_failed = any(s in ("timeout", "no_nameservers", "error") for s in query_statuses)
+            status = "resolving" if ips else ("dangling" if cname_target else ("unverified" if query_failed else "inactive"))
             return {
                 "subdomain": sub,
                 "ips": ips,
@@ -123,6 +160,17 @@ async def discover_passive_subdomains(
     sub_tasks = [_resolve_subdomain(h) for h in sorted_hosts]
     sub_results = await asyncio.gather(*sub_tasks)
     result["subdomains"] = sub_results
+
+    unresolved_count = sum(1 for item in sub_results if item["status"] == "unverified")
+    if unresolved_count:
+        if result["status"] == "complete":
+            result["status"] = "partial"
+        result["incomplete"] = True
+        findings.append(Finding(
+            severity="info",
+            record_type="Inventory",
+            message=f"DNS resolution was inconclusive for {unresolved_count} discovered subdomain(s).",
+        ))
 
     dangling_count = sum(1 for s in sub_results if s["status"] == "dangling")
     if dangling_count > 0:

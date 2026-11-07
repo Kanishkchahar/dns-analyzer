@@ -81,6 +81,7 @@ async def check_dnssec(
     raw_ds: list[Any] = []
     dnskey_records: list[dict[str, Any]] = []
     ds_records: list[dict[str, Any]] = []
+    lookup_inconclusive = False
 
     qname = dns.name.from_text(domain)
 
@@ -101,8 +102,11 @@ async def check_dnssec(
                 "key_tag": key_tag_val,
                 "key_type": "KSK (Key Signing Key)" if is_ksk else "ZSK (Zone Signing Key)",
             })
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        has_dnskey = False
     except Exception:
         has_dnskey = False
+        lookup_inconclusive = True
 
     # 2. Query DS (Delegation Signer) at parent zone
     try:
@@ -115,8 +119,11 @@ async def check_dnssec(
                 "algorithm": DNSSEC_ALGORITHMS.get(rr.algorithm, str(rr.algorithm)),
                 "digest_type": rr.digest_type,
             })
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        has_ds = False
     except Exception:
         has_ds = False
+        lookup_inconclusive = True
 
     # If unsigned, check if parent zone apex has DNSSEC
     inherited_from: str | None = None
@@ -148,8 +155,10 @@ async def check_dnssec(
                         "algorithm": DNSSEC_ALGORITHMS.get(rr.algorithm, str(rr.algorithm)),
                         "digest_type": rr.digest_type,
                     })
-        except Exception:
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
             pass
+        except Exception:
+            lookup_inconclusive = True
 
     # 3. Cryptographic Verification (Item 7)
     cryptographically_verified = False
@@ -199,6 +208,13 @@ async def check_dnssec(
             record_type="DNSSEC",
             message="Parent registry contains a DS record, but zone lacks matching DNSKEY records! "
                     "Resolvers validating DNSSEC will reject queries with SERVFAIL."
+        ))
+    elif lookup_inconclusive:
+        status = "inconclusive"
+        findings.append(Finding(
+            severity="info",
+            record_type="DNSSEC",
+            message="DNSSEC could not be verified because one or more DNS queries failed. This result does not mean the domain is unsigned.",
         ))
     else:
         status = "unsigned"

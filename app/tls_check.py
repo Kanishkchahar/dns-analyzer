@@ -99,6 +99,18 @@ def is_safe_ip(ip_str: str) -> tuple[bool, str]:
 
 async def resolve_and_verify_all_ips(hostname: str, port: int = 443) -> tuple[bool, list[str], str]:
     """Resolve hostname once and verify that all resolved IPs are public and safe (reject mixed answers)."""
+    try:
+        literal_ip = ipaddress.ip_address(hostname.strip().strip("[]"))
+    except ValueError:
+        literal_ip = None
+    if literal_ip is not None:
+        address = str(literal_ip)
+        safe, reason = is_safe_ip(address)
+        return safe, [address], f"Unsafe address '{address}': {reason}" if not safe else "All resolved addresses are public"
+    normalized_host = hostname.strip().lower().rstrip(".")
+    if normalized_host == "localhost" or normalized_host.endswith(".localhost"):
+        return False, [], "Unsafe hostname: localhost names are blocked"
+
     loop = asyncio.get_running_loop()
     try:
         addr_info = await loop.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
@@ -133,6 +145,55 @@ def match_san_hostname(hostname: str, san_list: list[str]) -> bool:
     return False
 
 
+def review_csp(policy: str | None) -> list[str]:
+    """Return concise risk notes for common CSP weaknesses; this is not a full CSP evaluator."""
+    if not policy:
+        return []
+    directives: dict[str, list[str]] = {}
+    for part in policy.split(";"):
+        tokens = part.strip().split()
+        if tokens:
+            directives[tokens[0].lower()] = [token.lower() for token in tokens[1:]]
+    risks: list[str] = []
+    script_sources = directives.get("script-src", directives.get("default-src", []))
+    if "'unsafe-inline'" in script_sources:
+        risks.append("script policy allows 'unsafe-inline'")
+    if "'unsafe-eval'" in script_sources:
+        risks.append("script policy allows 'unsafe-eval'")
+    if "*" in script_sources:
+        risks.append("script policy allows any source (*)")
+    if "data:" in script_sources or "blob:" in script_sources:
+        risks.append("script policy permits executable data: or blob: sources")
+    object_sources = directives.get("object-src", directives.get("default-src"))
+    if object_sources is None or "'none'" not in object_sources:
+        risks.append("object-src is not restricted to 'none'")
+    return risks
+
+
+def _summarize_set_cookie(headers: httpx.Headers) -> list[dict[str, Any]]:
+    """Keep cookie names and security flags only; never retain cookie values."""
+    summaries: list[dict[str, Any]] = []
+    for raw in headers.get_list("set-cookie")[:30]:
+        parts = [part.strip() for part in raw.split(";")]
+        first = parts[0].partition("=")[0].strip()
+        attributes = {part.partition("=")[0].strip().lower(): part.partition("=")[2].strip() for part in parts[1:]}
+        cookie = {
+            "name": first[:100],
+            "secure": "secure" in attributes,
+            "http_only": "httponly" in attributes,
+            "same_site": attributes.get("samesite", "").lower() or None,
+        }
+        cookie["missing"] = [
+            name for name, present in (
+                ("Secure", cookie["secure"]),
+                ("HttpOnly", cookie["http_only"]),
+                ("SameSite", bool(cookie["same_site"])),
+            ) if not present
+        ]
+        summaries.append(cookie)
+    return summaries
+
+
 async def audit_tls_and_https(
     domain: str,
     port: int = 443,
@@ -144,6 +205,8 @@ async def audit_tls_and_https(
 
     result: dict[str, Any] = {
         "scanned": False,
+        "status": "pending",
+        "reason": None,
         "tls_version": None,
         "cipher": None,
         "certificate": None,
@@ -155,6 +218,8 @@ async def audit_tls_and_https(
     # 1. DNS pre-resolution and strict SSRF guard (resolve once, reject non-public IPs)
     safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(norm_domain, port)
     if not safe_all:
+        result["status"] = "blocked"
+        result["reason"] = reason
         findings.append(Finding(
             severity="error",
             record_type="TLS",
@@ -174,49 +239,78 @@ async def audit_tls_and_https(
     tls_version: str | None = None
     cipher_name: str | None = None
 
-    try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(
-                host=target_ip,
-                port=port,
-                ssl=ssl_context,
-                server_hostname=norm_domain,
-            ),
-            timeout=timeout,
-        )
-        ssl_obj = writer.get_extra_info("ssl_object")
-        if ssl_obj:
-            tls_version = ssl_obj.version()
-            cipher_info = ssl_obj.cipher()
-            cipher_name = cipher_info[0] if cipher_info else None
-            raw_cert = ssl_obj.getpeercert()
-            if raw_cert:
-                cert_dict = raw_cert
-        writer.close()
-        await writer.wait_closed()
-        result["scanned"] = True
-    except ssl.SSLCertVerificationError as exc:
-        result["scanned"] = True
+    connection_errors: list[str] = []
+    certificate_error: ssl.SSLCertVerificationError | None = None
+    connected = False
+    # Multi-homed hosts may publish IPv6 addresses that are not reachable from
+    # this server. Try each already-validated public address before reporting N/A.
+    per_ip_timeout = max(0.5, min(timeout, 2.0))
+    for candidate_ip in resolved_ips:
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(
+                    host=candidate_ip,
+                    port=port,
+                    ssl=ssl_context,
+                    server_hostname=norm_domain,
+                ),
+                timeout=per_ip_timeout,
+            )
+            target_ip = candidate_ip
+            ssl_obj = writer.get_extra_info("ssl_object")
+            if ssl_obj:
+                tls_version = ssl_obj.version()
+                cipher_info = ssl_obj.cipher()
+                cipher_name = cipher_info[0] if cipher_info else None
+                raw_cert = ssl_obj.getpeercert()
+                if raw_cert:
+                    cert_dict = raw_cert
+            writer.close()
+            await writer.wait_closed()
+            result["scanned"] = True
+            result["status"] = "complete"
+            connected = True
+            certificate_error = None
+            break
+        except ssl.SSLCertVerificationError as exc:
+            # Preserve a certificate error for the UI instead of disguising it
+            # as an absent TLS scan.
+            target_ip = candidate_ip
+            certificate_error = exc
+            result["scanned"] = True
+            result["status"] = "certificate_error"
+            result["reason"] = exc.verify_message
+            continue
+        except (asyncio.TimeoutError, ConnectionRefusedError, OSError) as exc:
+            connection_errors.append(f"{candidate_ip}: {type(exc).__name__}")
+        except Exception as exc:
+            result["status"] = "error"
+            result["reason"] = f"{type(exc).__name__}: {str(exc) or 'TLS handshake failed'}"
+            findings.append(Finding(
+                severity="warning",
+                record_type="TLS",
+                message=f"TLS/HTTPS audit on port {port} encountered an error: {result['reason']}.",
+            ))
+            return result, findings
+
+    if certificate_error is not None:
+        if not connected:
+            result["status"] = "certificate_error"
         findings.append(Finding(
             severity="error",
             record_type="TLS",
-            message=f"TLS certificate verification failed for '{norm_domain}': {exc.verify_message}. Untrusted or self-signed certificate.",
+            message=f"TLS certificate verification failed for '{norm_domain}': {certificate_error.verify_message}. Untrusted or self-signed certificate.",
         ))
-    except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
-        # Port 443 is unreachable or connection timed out
-        result["scanned"] = False
+    elif not connected:
+        result["status"] = "unreachable"
+        result["reason"] = (
+            f"Could not connect to any of {len(resolved_ips)} validated public address(es) on port {port} "
+            f"within {per_ip_timeout:g} seconds per address."
+        )
         findings.append(Finding(
             severity="info",
             record_type="TLS",
-            message=f"TLS/HTTPS audit on port {port} was inconclusive: target host was unreachable or timed out.",
-        ))
-        return result, findings
-    except Exception as exc:
-        result["scanned"] = False
-        findings.append(Finding(
-            severity="warning",
-            record_type="TLS",
-            message=f"TLS/HTTPS audit on port {port} encountered an error: {type(exc).__name__} ({str(exc) or 'handshake failed'}).",
+            message=f"TLS/HTTPS audit was inconclusive: {result['reason']} Connection errors: {', '.join(connection_errors)}.",
         ))
         return result, findings
 
@@ -359,14 +453,25 @@ async def audit_tls_and_https(
                 xfo = h.get("x-frame-options")
                 xcto = h.get("x-content-type-options")
                 rp = h.get("referrer-policy")
+                permissions_policy = h.get("permissions-policy")
+                coop = h.get("cross-origin-opener-policy")
+                corp = h.get("cross-origin-resource-policy")
+                csp_risks = review_csp(csp)
+                cookies = _summarize_set_cookie(h)
 
                 sec_headers = {
                     "hsts": bool(hsts),
                     "hsts_raw": hsts,
                     "csp": bool(csp),
+                    "csp_raw": csp[:4096] if csp else None,
+                    "csp_risks": csp_risks,
                     "x_frame_options": xfo,
                     "x_content_type_options": xcto,
                     "referrer_policy": rp,
+                    "permissions_policy": permissions_policy,
+                    "cross_origin_opener_policy": coop,
+                    "cross_origin_resource_policy": corp,
+                    "cookies": cookies,
                 }
                 result["security_headers"] = sec_headers
 
@@ -385,9 +490,9 @@ async def audit_tls_and_https(
 
                 if csp:
                     findings.append(Finding(
-                        severity="info",
-                        record_type="HTTPS",
-                        message="Content-Security-Policy (CSP) is deployed to defend against XSS and clickjacking.",
+                        severity="warning" if csp_risks else "info",
+                        record_type="CSP",
+                        message=("Content-Security-Policy has common weaknesses: " + "; ".join(csp_risks) + ".") if csp_risks else "Content-Security-Policy is present; common script and object source directives look constrained.",
                     ))
                 else:
                     findings.append(Finding(
@@ -395,11 +500,49 @@ async def audit_tls_and_https(
                         record_type="HTTPS",
                         message="Content-Security-Policy (CSP) header is not published.",
                     ))
+
+                missing_isolation = [name for name, value in (("Permissions-Policy", permissions_policy), ("COOP", coop), ("CORP", corp)) if not value]
+                if missing_isolation:
+                    findings.append(Finding(
+                        severity="info",
+                        record_type="HTTPS",
+                        message=f"Additional browser isolation headers not observed: {', '.join(missing_isolation)}.",
+                    ))
+                cookies_with_gaps = [cookie for cookie in cookies if cookie["missing"]]
+                if cookies_with_gaps:
+                    findings.append(Finding(
+                        severity="warning",
+                        record_type="COOKIE",
+                        message=f"{len(cookies_with_gaps)} of {len(cookies)} observed cookie(s) miss one or more Secure, HttpOnly, or SameSite attributes. Cookie values were not retained.",
+                    ))
     except Exception as exc:
         findings.append(Finding(
             severity="info",
             record_type="HTTPS",
             message=f"HTTPS web security header inspection on port {port} was inconclusive: {type(exc).__name__}.",
         ))
+
+    # OPTIONS only reports the server's advertised methods; no write method is sent.
+    try:
+        options_transport = PinnedIPTransport(target_ip, verify=True)
+        async with httpx.AsyncClient(transport=options_transport, timeout=3.0, follow_redirects=False) as client:
+            async with client.stream("OPTIONS", f"https://{norm_domain}/") as response:
+                allowed = [method.strip().upper() for method in response.headers.get("allow", "").split(",") if method.strip()]
+                risky = sorted(set(allowed).intersection({"TRACE", "PUT", "DELETE", "CONNECT"}))
+                result["http_methods"] = {
+                    "status": "checked" if response.headers.get("allow") else "not_advertised",
+                    "http_status": response.status_code,
+                    "advertised": allowed,
+                    "review_methods": risky,
+                    "probe": "OPTIONS",
+                }
+                if risky:
+                    findings.append(Finding(
+                        severity="warning",
+                        record_type="HTTP METHODS",
+                        message=f"OPTIONS advertises potentially sensitive HTTP methods: {', '.join(risky)}. This is an advertisement, not proof that each method accepts requests; no write request was sent.",
+                    ))
+    except Exception as exc:
+        result["http_methods"] = {"status": "inconclusive", "http_status": None, "advertised": [], "review_methods": [], "probe": "OPTIONS", "reason": type(exc).__name__}
 
     return result, findings

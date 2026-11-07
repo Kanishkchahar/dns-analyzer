@@ -41,6 +41,15 @@ async def _safe_query(resolver: dns.asyncresolver.Resolver, domain: str, rtype: 
                 "expire": rr.expire,
                 "minimum": rr.minimum,
             }
+        elif rtype == "CAA":
+            records = [
+                {
+                    "flags": rr.flags,
+                    "tag": rr.tag.decode("ascii", errors="replace") if isinstance(rr.tag, bytes) else str(rr.tag),
+                    "value": rr.value.decode("utf-8", errors="replace") if isinstance(rr.value, bytes) else str(rr.value),
+                }
+                for rr in answer
+            ]
 
         return {"status": "ok", "records": records, "ttl": ttl}
 
@@ -102,7 +111,7 @@ async def resolve_domain(domain: str) -> dict[str, Any]:
     resolver = dns.asyncresolver.Resolver()
     resolver.timeout = 3.0
     resolver.lifetime = 6.0
-    record_types = ["A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA"]
+    record_types = ["A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA", "CAA"]
 
     norm_domain = domain.rstrip(".").lower()
 
@@ -137,6 +146,17 @@ async def resolve_domain(domain: str) -> dict[str, Any]:
                     **apex_soa,
                     "inherited_from": zone_apex,
                 }
+        if data["CAA"]["status"] == "no_answer":
+            labels = norm_domain.split(".")
+            apex_labels = zone_apex.split(".")
+            for offset in range(1, max(1, len(labels) - len(apex_labels) + 1)):
+                candidate = ".".join(labels[offset:])
+                if candidate == norm_domain:
+                    continue
+                parent_caa = await _safe_query(resolver, candidate, "CAA")
+                if parent_caa["status"] == "ok" and parent_caa["records"]:
+                    data["CAA"] = {**parent_caa, "inherited_from": candidate}
+                    break
 
     # Secondary: resolve each NS host
     if data["NS"]["status"] == "ok":

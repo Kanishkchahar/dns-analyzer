@@ -12,6 +12,37 @@ from app.report import build_report
 
 
 class TestReportBuilder:
+    def test_report_includes_tls_subdomains_and_cached_path_scan(self, sample_resolver_data):
+        html = build_report(
+            domain="example.com",
+            scan_timestamp="2026-11-07 10:00:00 UTC",
+            records=sample_resolver_data,
+            findings=[],
+            summary=Summary(errors=0, warnings=0, info=0, inconclusive=1),
+            tls={
+                "status": "complete",
+                "tls_version": "TLSv1.3",
+                "cipher": "TEST_CIPHER",
+                "certificate": {"issuer": "Test CA", "valid_until": "2027-01-01", "days_remaining": 55, "san_matched": True},
+                "https_redirect": {"enforced": True, "status_code": 301, "location": "https://example.com/"},
+                "security_headers": {"hsts": True, "csp": False},
+            },
+            subdomains={"status": "partial", "reason": "CT lookup timed out", "discovered_count": 1, "subdomains": [
+                {"subdomain": "www.example.com", "status": "resolving", "ips": ["93.184.216.34"], "cname": None},
+            ]},
+            path_scan={"targets": [{"target": "example.com", "status": "complete", "paths": [
+                {"path": "/robots.txt", "state": "found", "status_code": 200},
+            ], "advertised_paths": [{"path": "/docs", "source": "robots.txt disallow"}]}]},
+        )
+
+        assert "TLS &amp; HTTPS Posture" in html
+        assert "TLSv1.3" in html
+        assert "Passive Subdomain Inventory" in html
+        assert "www.example.com" in html
+        assert "Common Web Paths" in html
+        assert "/docs" in html
+        assert "Inconclusive" in html
+
     def test_build_report_renders_full_html(self, sample_resolver_data):
         findings = [
             Finding(severity="info", record_type="A", message="Domain resolves cleanly."),

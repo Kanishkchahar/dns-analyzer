@@ -1,11 +1,48 @@
 """Tests for Scoped Network Inventory & Port Service Verification (app/network_scan.py)."""
 
 import pytest
-from app.network_scan import run_list_scan, run_port_scan
+from app.network_scan import (
+    COMMON_WEB_PATHS,
+    _parse_robots,
+    _parse_sitemap,
+    _same_origin_https_url,
+    run_common_path_scan,
+    run_list_scan,
+    run_port_scan,
+)
 
 
 @pytest.mark.asyncio
 class TestNetworkScan:
+    def test_robots_and_sitemap_extract_same_host_paths_only(self):
+        robots = b"Disallow: /private/\nSitemap: https://example.com/custom-map.xml\nSitemap: https://other.example/map.xml"
+        sitemap = b"<urlset><url><loc>https://example.com/docs/start</loc></url><url><loc>https://other.example/private</loc></url></urlset>"
+
+        assert _parse_robots(robots, "example.com") == [
+            {"path": "/private/", "source": "robots.txt disallow"},
+            {"path": "/custom-map.xml", "source": "robots.txt sitemap directive"},
+        ]
+        assert _parse_sitemap(sitemap, "example.com") == [
+            {"path": "/docs/start", "source": "sitemap.xml"},
+        ]
+        assert _same_origin_https_url("https://example.com/next", "example.com")
+        assert not _same_origin_https_url("https://other.example/next", "example.com")
+
+    async def test_common_path_scan_uses_fixed_paths_and_blocks_private_targets(self, monkeypatch):
+        async def reject_private(target, port=443):
+            return False, ["127.0.0.1"], "Unsafe address '127.0.0.1': Loopback blocked"
+
+        monkeypatch.setattr("app.network_scan.resolve_and_verify_all_ips", reject_private)
+        result = await run_common_path_scan(["example.com"])
+
+        assert result["path_count"] == len(COMMON_WEB_PATHS) == 7
+        assert result["targets"][0]["status"] == "blocked"
+        assert result["targets"][0]["paths"] == []
+
+    async def test_common_path_scan_limits_targets(self):
+        with pytest.raises(ValueError, match="between 1 and 5"):
+            await run_common_path_scan(["example.com"] * 6)
+
     async def test_list_scan_resolves_and_identifies_public_scope(self):
         # Input mixed with public and private IPs
         targets = ["93.184.216.34", "127.0.0.1", "10.0.0.5"]

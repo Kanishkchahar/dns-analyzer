@@ -31,6 +31,7 @@ async def check_bimi(
     findings: list[Finding] = []
     qname = f"default._bimi.{domain}"
     bimi_raw = None
+    lookup_failed = False
 
     try:
         ans = await resolver.resolve(qname, "TXT")
@@ -39,8 +40,11 @@ async def check_bimi(
             if txt.startswith("v=BIMI1"):
                 bimi_raw = txt
                 break
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        bimi_raw = None
     except Exception:
         bimi_raw = None
+        lookup_failed = True
 
     # Check DMARC prerequisite: must be p=quarantine (pct=100) or p=reject
     dmarc_policy = (dmarc_data or {}).get("policy", "none")
@@ -48,6 +52,19 @@ async def check_bimi(
     dmarc_eligible = dmarc_policy in ("quarantine", "reject") and dmarc_pct == 100
 
     if not bimi_raw:
+        if lookup_failed:
+            return {
+                "has_bimi": False,
+                "status": "inconclusive",
+                "dmarc_eligible": dmarc_eligible,
+                "logo_url": None,
+                "vmc_url": None,
+                "reason": "BIMI DNS lookup failed; record presence could not be verified.",
+            }, [Finding(
+                severity="info",
+                record_type="BIMI",
+                message="BIMI could not be verified because its DNS query failed.",
+            )]
         if dmarc_eligible:
             findings.append(Finding(
                 severity="info",

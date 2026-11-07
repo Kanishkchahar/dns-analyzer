@@ -152,6 +152,32 @@ def check_ttl_sanity(data: dict[str, Any]) -> list[Finding]:
     return findings
 
 
+def check_caa(data: dict[str, Any]) -> list[Finding]:
+    """Review Certificate Authority Authorization (CAA) records when DNS returned a definite answer."""
+    caa = data.get("CAA", {})
+    if caa.get("status") not in ("ok", "no_answer"):
+        return []
+    records = caa.get("records", []) if caa.get("status") == "ok" else []
+    issue_records = [record for record in records if record.get("tag", "").lower() in ("issue", "issuewild")]
+    if not issue_records:
+        inherited = caa.get("inherited_from")
+        note = f" Effective policy inherited from `{inherited}`." if inherited else ""
+        return [_finding(
+            "warning", "CAA",
+            "No CAA issuance policy was found. Certificate authorities are not restricted by CAA for this hostname." + note,
+        )]
+    if all(not record.get("value", "").strip() for record in issue_records):
+        return [_finding(
+            "info", "CAA",
+            "CAA policy explicitly forbids certificate issuance for this hostname (empty issue/issuewild values). Verify that this is intentional.",
+        )]
+    allowed_cas = sorted({record["value"].split(";")[0].strip() for record in issue_records if record.get("value", "").strip()})
+    return [_finding(
+        "info", "CAA",
+        f"CAA restricts certificate issuance to: {', '.join(allowed_cas)}." + (f" Policy inherited from `{caa['inherited_from']}`." if caa.get("inherited_from") else ""),
+    )]
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -166,6 +192,7 @@ _CHECKS = [
     check_cname_conflict,
     check_soa_sanity,
     check_ttl_sanity,
+    check_caa,
 ]
 
 

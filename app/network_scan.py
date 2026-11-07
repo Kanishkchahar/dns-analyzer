@@ -5,14 +5,18 @@ and opt-in Port & Service checks against explicitly approved public targets.
 """
 
 import asyncio
+import ipaddress
 import os
 import re
 import socket
 from typing import Any
+from urllib.parse import urljoin, urlparse
+import xml.etree.ElementTree as ET
 import dns.asyncresolver
+import httpx
 
 from app.models import Finding
-from app.tls_check import is_safe_ip, resolve_and_verify_all_ips
+from app.tls_check import PinnedIPTransport, is_safe_ip, resolve_and_verify_all_ips
 
 # Curated, safe default ports for standard public infrastructure auditing
 STANDARD_PORTS: dict[int, str] = {
@@ -30,6 +34,94 @@ STANDARD_PORTS: dict[int, str] = {
 MAX_PORTS_PER_SCAN = 10
 GLOBAL_PORT_SCAN_SEMAPHORE = asyncio.Semaphore(4)
 TARGET_SYNTAX_REGEX = re.compile(r"^[a-zA-Z0-9.\-_:\[\]]+$")
+
+# Small fixed set of safe, public-facing discovery paths. This is deliberately
+# not a wordlist or recursive crawler.
+COMMON_WEB_PATHS: tuple[str, ...] = (
+    "/robots.txt",
+    "/sitemap.xml",
+    "/security.txt",
+    "/.well-known/security.txt",
+    "/humans.txt",
+    "/manifest.json",
+    "/favicon.ico",
+)
+MAX_PUBLICATION_BODY_BYTES = 256 * 1024
+MAX_ADVERTISED_PATHS = 200
+
+
+def _same_origin_https_url(url: str, target_host: str) -> bool:
+    """Accept only HTTPS URLs on the exact requested host and standard HTTPS port."""
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        expected = target_host.strip("[]").lower().rstrip(".")
+        if ":" in expected:
+            expected = ipaddress.ip_address(expected).compressed
+            host = ipaddress.ip_address(host).compressed
+        return (
+            parsed.scheme.lower() == "https"
+            and host == expected
+            and parsed.port in (None, 443)
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except (ValueError, TypeError):
+        return False
+
+
+def _publication_path(url: str, target_host: str) -> str | None:
+    if not _same_origin_https_url(url, target_host):
+        return None
+    parsed = urlparse(url)
+    path = parsed.path or "/"
+    if parsed.query:
+        path += f"?{parsed.query}"
+    return path[:1000]
+
+
+def _parse_robots(body: bytes, target_host: str) -> list[dict[str, str]]:
+    found: dict[str, str] = {}
+    text = body.decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        key, separator, value = line.partition(":")
+        if not separator:
+            continue
+        directive = key.strip().lower()
+        value = value.strip()
+        if directive in ("allow", "disallow") and value.startswith("/") and len(value) <= 1000:
+            found.setdefault(value, f"robots.txt {directive}")
+        elif directive == "sitemap":
+            path = _publication_path(value, target_host)
+            if path:
+                found.setdefault(path, "robots.txt sitemap directive")
+    return [{"path": path, "source": source} for path, source in list(found.items())[:MAX_ADVERTISED_PATHS]]
+
+
+def _parse_sitemap(body: bytes, target_host: str) -> list[dict[str, str]]:
+    try:
+        root = ET.fromstring(body)
+    except (ET.ParseError, ValueError):
+        return []
+    found: dict[str, str] = {}
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1].lower() != "loc" or not element.text:
+            continue
+        path = _publication_path(element.text.strip(), target_host)
+        if path:
+            found.setdefault(path, "sitemap.xml")
+        if len(found) >= MAX_ADVERTISED_PATHS:
+            break
+    return [{"path": path, "source": source} for path, source in found.items()]
+
+
+def _classify_advertised_path(path: str) -> tuple[str, str | None]:
+    """Flag names that merit human review without requesting them or asserting exposure."""
+    normalized = path.lower().split("?", 1)[0]
+    patterns = ("/.env", "/.git", "/admin", "/backup", "/config", "/debug", "/internal", "/private", "/staging")
+    if any(normalized == pattern or normalized.startswith(pattern + "/") for pattern in patterns):
+        return "review", "Path name may refer to administrative or internal content; no access was attempted."
+    return "listed", None
 
 
 def is_active_scan_allowed() -> bool:
@@ -148,6 +240,145 @@ async def run_list_scan(
         "scan_mode": "List Scan (No port probes)",
         "total_targets": len(clean_targets),
         "in_scope_count": total_safe,
+        "targets": results,
+    }
+
+
+async def run_common_path_scan(
+    targets: list[str],
+    timeout: float = 3.0,
+) -> dict[str, Any]:
+    """Check fixed public paths and parse same-origin robots/sitemap data, without crawling."""
+    clean_targets = [target.strip() for target in targets if target.strip()]
+    if not clean_targets or len(clean_targets) > 5:
+        raise ValueError("Provide between 1 and 5 target hostnames or public IPs.")
+
+    target_semaphore = asyncio.Semaphore(5)
+
+    async def _scan_target(target: str) -> dict[str, Any]:
+        if len(target) > 253 or not TARGET_SYNTAX_REGEX.fullmatch(target):
+            return {"target": target, "status": "invalid", "reason": "Invalid target syntax or length.", "paths": []}
+
+        async with target_semaphore:
+            safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(target, port=443)
+            if not safe_all or not resolved_ips:
+                return {"target": target, "status": "blocked", "reason": reason, "paths": []}
+
+            path_semaphore = asyncio.Semaphore(7)
+            url_host = target.strip("[]")
+            try:
+                if ipaddress.ip_address(url_host).version == 6:
+                    url_host = f"[{url_host}]"
+            except ValueError:
+                pass
+            origin = f"https://{url_host}"
+            target_host = target.strip("[]")
+            advertised: dict[str, dict[str, str | None]] = {}
+            declared_sitemap_paths: set[str] = set()
+
+            async def _read_limited(response: httpx.Response) -> bytes:
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    remaining = MAX_PUBLICATION_BODY_BYTES - len(body)
+                    if remaining <= 0:
+                        break
+                    body.extend(chunk[:remaining])
+                    if len(body) >= MAX_PUBLICATION_BODY_BYTES:
+                        break
+                return bytes(body)
+
+            async def _inspect_publication(path: str, body: bytes) -> None:
+                discovered = _parse_robots(body, target_host) if path == "/robots.txt" else _parse_sitemap(body, target_host)
+                for item in discovered:
+                    item["review"], item["review_reason"] = _classify_advertised_path(item["path"])
+                    advertised.setdefault(item["path"], {"source": item["source"], "review": item["review"], "review_reason": item["review_reason"]})
+                    if item["source"] == "robots.txt sitemap directive":
+                        declared_sitemap_paths.add(item["path"])
+
+            async def _check_path(path: str) -> dict[str, Any]:
+                async with path_semaphore:
+                    errors: list[str] = []
+                    for candidate_ip in resolved_ips:
+                        try:
+                            transport = PinnedIPTransport(candidate_ip, verify=True)
+                            async with httpx.AsyncClient(
+                                transport=transport,
+                                timeout=timeout,
+                                follow_redirects=False,
+                            ) as client:
+                                request_url = f"{origin}{path}"
+                                async with client.stream("GET", request_url) as response:
+                                    status_code = response.status_code
+                                    location = response.headers.get("location") if status_code in (301, 302, 303, 307, 308) else None
+                                    body = b""
+                                    final_status = None
+                                    redirect_error = None
+                                    if location:
+                                        redirect_url = urljoin(request_url, location)
+                                        if _same_origin_https_url(redirect_url, target_host):
+                                            try:
+                                                # Re-resolve and apply the same public-IP filter before one same-origin hop.
+                                                redirect_safe, redirect_ips, redirect_reason = await resolve_and_verify_all_ips(target_host, port=443)
+                                                if redirect_safe and redirect_ips:
+                                                    redirect_transport = PinnedIPTransport(redirect_ips[0], verify=True)
+                                                    async with httpx.AsyncClient(
+                                                        transport=redirect_transport,
+                                                        timeout=timeout,
+                                                        follow_redirects=False,
+                                                    ) as redirect_client:
+                                                        async with redirect_client.stream("GET", redirect_url) as redirected:
+                                                            final_status = redirected.status_code
+                                                            if (path in ("/robots.txt", "/sitemap.xml") or path in declared_sitemap_paths) and 200 <= final_status < 300:
+                                                                body = await _read_limited(redirected)
+                                                else:
+                                                    redirect_error = f"Same-host redirect blocked by SSRF policy: {redirect_reason}"
+                                            except Exception as exc:
+                                                redirect_error = f"Same-host redirect check failed: {type(exc).__name__}"
+                                    elif (path in ("/robots.txt", "/sitemap.xml") or path in declared_sitemap_paths) and 200 <= status_code < 300:
+                                        body = await _read_limited(response)
+                                    if body:
+                                        await _inspect_publication(path, body)
+                                    return {
+                                        "path": path,
+                                        "status_code": status_code,
+                                        "state": "found" if 200 <= status_code < 300 else ("redirect" if location else ("restricted" if status_code in (401, 403) else ("not_found" if status_code == 404 else "response"))),
+                                        "location": location,
+                                        "redirect_status_code": final_status,
+                                        "error": redirect_error,
+                                    }
+                        except (httpx.TimeoutException, httpx.NetworkError, OSError) as exc:
+                            errors.append(f"{candidate_ip}: {type(exc).__name__}")
+                        except Exception as exc:
+                            errors.append(f"{candidate_ip}: {type(exc).__name__}")
+                    return {"path": path, "status_code": None, "state": "unavailable", "location": None, "error": "; ".join(errors)}
+
+            path_results = await asyncio.gather(*(_check_path(path) for path in COMMON_WEB_PATHS))
+            custom_sitemaps = [
+                path for path in declared_sitemap_paths
+                if path not in COMMON_WEB_PATHS
+            ][:3]
+            if custom_sitemaps:
+                path_results.extend(await asyncio.gather(*(_check_path(path) for path in custom_sitemaps)))
+            unavailable_count = sum(item["state"] == "unavailable" for item in path_results)
+            redirect_failures = sum(bool(item.get("error")) for item in path_results)
+            incomplete_count = max(unavailable_count, redirect_failures)
+            return {
+                "target": target,
+                "status": "partial" if incomplete_count else "complete",
+                "reason": f"{unavailable_count} path checks could not connect; {redirect_failures} same-host redirect checks were incomplete." if incomplete_count else None,
+                "resolved_ips": resolved_ips,
+                "paths": path_results,
+                "advertised_paths": [
+                    {"path": path, **details}
+                    for path, details in list(advertised.items())[:MAX_ADVERTISED_PATHS]
+                ],
+            }
+
+    results = await asyncio.gather(*(_scan_target(target) for target in clean_targets))
+    return {
+        "scan_mode": "Common Web Paths + Public Robots/Sitemap (No Crawling)",
+        "path_count": len(COMMON_WEB_PATHS),
+        "total_targets": len(clean_targets),
         "targets": results,
     }
 

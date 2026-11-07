@@ -6,6 +6,7 @@ and an overall email health score.
 """
 
 import asyncio
+import re
 from typing import Any
 
 import dns.asyncresolver
@@ -55,7 +56,10 @@ async def fetch_dmarc(
     Returns:
         A dict with parsed DMARC data, or ``None`` if no DMARC record is found.
     """
+    lookup_failed = False
+
     async def _query_dmarc(target_domain: str) -> list[str]:
+        nonlocal lookup_failed
         qname = f"_dmarc.{target_domain}"
         try:
             answer = await resolver.resolve(qname, "TXT")
@@ -63,7 +67,10 @@ async def fetch_dmarc(
                 b"".join(rr.strings).decode("utf-8", errors="replace")
                 for rr in answer
             ]
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+            return []
         except Exception:
+            lookup_failed = True
             return []
 
     txt_records = await _query_dmarc(domain)
@@ -85,6 +92,8 @@ async def fetch_dmarc(
             break
 
     if dmarc_raw is None:
+        if lookup_failed:
+            return {"status": "inconclusive", "reason": "One or more DMARC DNS queries failed."}
         return None
 
     tags = _parse_tags(dmarc_raw)
@@ -117,6 +126,13 @@ def analyze_dmarc(dmarc_data: dict[str, Any] | None) -> list[Finding]:
     partial enforcement.
     """
     findings: list[Finding] = []
+
+    if dmarc_data and dmarc_data.get("status") == "inconclusive":
+        findings.append(_finding(
+            "info", "DMARC",
+            f"DMARC could not be verified: {dmarc_data.get('reason', 'DNS lookup was inconclusive')}.",
+        ))
+        return findings
 
     if dmarc_data is None:
         findings.append(_finding(
@@ -204,12 +220,10 @@ async def _check_single_selector(
     try:
         answer = await resolver.resolve(qname, "TXT")
         raw = b"".join(answer[0].strings).decode("utf-8", errors="replace")
-    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
         return None
-    except dns.exception.Timeout:
-        return None
-    except Exception:
-        return None
+    except Exception as exc:
+        return {"_query_error": type(exc).__name__}
 
     tags = _parse_tags(raw)
     public_key = tags.get("p", "")
@@ -229,6 +243,7 @@ async def _check_single_selector(
 async def check_dkim_selectors(
     domain: str,
     resolver: dns.asyncresolver.Resolver,
+    custom_selectors: list[str] | None = None,
 ) -> dict[str, Any]:
     """Check common DKIM selectors for *domain*.
 
@@ -236,19 +251,27 @@ async def check_dkim_selectors(
     found selectors, the full list of selectors checked, and a boolean
     indicating whether any DKIM record was discovered.
     """
-    tasks = [
-        _check_single_selector(domain, sel, resolver)
-        for sel in _COMMON_SELECTORS
-    ]
+    custom = list(dict.fromkeys(
+        selector.strip() for selector in (custom_selectors or [])
+        if selector.strip() and re.fullmatch(r"[a-zA-Z0-9_-]{1,63}", selector.strip())
+    ))[:20]
+    selectors = list(dict.fromkeys([*_COMMON_SELECTORS, *custom]))
+    tasks = [_check_single_selector(domain, sel, resolver) for sel in selectors]
     results = await asyncio.gather(*tasks)
 
+    query_errors = [r["_query_error"] for r in results if isinstance(r, dict) and "_query_error" in r]
     selectors_found: list[dict[str, Any]] = [
-        r for r in results if r is not None
+        r for r in results if r is not None and not (isinstance(r, dict) and "_query_error" in r)
     ]
+    for selector in selectors_found:
+        selector["custom"] = selector["selector"] in custom
 
     return {
+        "status": "inconclusive" if query_errors and not selectors_found else ("partial" if query_errors else "complete"),
+        "reason": f"{len(query_errors)} selector DNS query/queries failed ({', '.join(sorted(set(query_errors)))})." if query_errors else None,
         "selectors_found": selectors_found,
-        "selectors_checked": list(_COMMON_SELECTORS),
+        "selectors_checked": selectors,
+        "custom_selectors": custom,
         "has_dkim": len(selectors_found) > 0,
     }
 
@@ -260,6 +283,20 @@ def analyze_dkim(dkim_data: dict[str, Any]) -> list[Finding]:
     and valid configurations.
     """
     findings: list[Finding] = []
+
+    if dkim_data.get("status") == "inconclusive":
+        findings.append(_finding(
+            "info", "DKIM",
+            f"DKIM selector checks were inconclusive: {dkim_data.get('reason', 'DNS lookup failed')}",
+        ))
+        return findings
+
+    if dkim_data.get("status") == "partial" and not dkim_data.get("has_dkim"):
+        findings.append(_finding(
+            "info", "DKIM",
+            f"DKIM could not be fully verified: {dkim_data.get('reason', 'Some selector DNS queries failed')}",
+        ))
+        return findings
 
     if not dkim_data.get("has_dkim"):
         checked = len(dkim_data.get("selectors_checked", []))

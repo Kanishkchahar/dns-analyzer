@@ -52,6 +52,7 @@ _TEMPLATE = """<!DOCTYPE html>
   .badge.errors .count { color: var(--danger); }
   .badge.warnings .count { color: var(--warning); }
   .badge.info .count { color: var(--accent); }
+  .badge.inconclusive .count { color: var(--warning); }
   .finding {
     display: flex; gap: 12px; padding: 12px 16px;
     border-radius: 6px; margin-bottom: 8px;
@@ -165,6 +166,7 @@ _TEMPLATE = """<!DOCTYPE html>
     <div class="badge errors"><span class="count">{{ summary.errors }}</span><span class="label">Errors</span></div>
     <div class="badge warnings"><span class="count">{{ summary.warnings }}</span><span class="label">Warnings</span></div>
     <div class="badge info"><span class="count">{{ summary.info }}</span><span class="label">Info</span></div>
+    <div class="badge inconclusive"><span class="count">{{ summary.inconclusive|default(0) }}</span><span class="label">Inconclusive</span></div>
   </div>
 
   {# ── Email Authentication Details ── #}
@@ -210,10 +212,13 @@ _TEMPLATE = """<!DOCTYPE html>
   {# DMARC #}
   <div class="auth-card">
     <div class="auth-card-title">
-      {% if email_auth.dmarc %}<span class="pill pill-ok">Found</span>{% else %}<span class="pill pill-fail">Missing</span>{% endif %}
+      {% if email_auth.dmarc and email_auth.dmarc.status == 'inconclusive' %}<span class="pill pill-warn">Could Not Verify</span>
+      {% elif email_auth.dmarc %}<span class="pill pill-ok">Found</span>{% else %}<span class="pill pill-fail">Missing</span>{% endif %}
       DMARC (Domain-based Message Authentication)
     </div>
-    {% if email_auth.dmarc %}
+    {% if email_auth.dmarc and email_auth.dmarc.status == 'inconclusive' %}
+    <p style="color:var(--text-muted);font-size:13px;">{{ email_auth.dmarc.reason or 'DMARC lookup was inconclusive.' }}</p>
+    {% elif email_auth.dmarc %}
     <div class="copy-block">{{ email_auth.dmarc.raw }}</div>
     <div class="auth-card-row">
       <span class="auth-card-key">Policy</span>
@@ -242,10 +247,13 @@ _TEMPLATE = """<!DOCTYPE html>
   {# DKIM #}
   <div class="auth-card">
     <div class="auth-card-title">
-      {% if email_auth.dkim and email_auth.dkim.has_dkim %}<span class="pill pill-ok">Found</span>{% else %}<span class="pill pill-warn">Not Found</span>{% endif %}
+      {% if email_auth.dkim and email_auth.dkim.status == 'inconclusive' %}<span class="pill pill-warn">Could Not Verify</span>
+      {% elif email_auth.dkim and email_auth.dkim.has_dkim %}<span class="pill pill-ok">Found</span>{% else %}<span class="pill pill-warn">Not Found</span>{% endif %}
       DKIM (DomainKeys Identified Mail)
     </div>
-    {% if email_auth.dkim and email_auth.dkim.has_dkim %}
+    {% if email_auth.dkim and email_auth.dkim.status == 'inconclusive' %}
+    <p style="color:var(--text-muted);font-size:13px;">{{ email_auth.dkim.reason or 'DKIM selector lookups were inconclusive.' }}</p>
+    {% elif email_auth.dkim and email_auth.dkim.has_dkim %}
       {% for sel in email_auth.dkim.selectors_found %}
       <div class="auth-card-row">
         <span class="auth-card-key">{{ sel.selector }}</span>
@@ -261,6 +269,21 @@ _TEMPLATE = """<!DOCTYPE html>
   </div>
   {% endif %}
 
+  {% if email_auth and (email_auth.mta_sts or email_auth.tls_rpt) %}
+  <h2>✉️ Mail Transport Security</h2>
+  <div class="auth-card">
+    <div class="auth-card-title"><span class="pill {% if email_auth.mta_sts.status == 'configured' %}pill-ok{% elif email_auth.mta_sts.status == 'inconclusive' %}pill-warn{% else %}pill-info{% endif %}">{{ email_auth.mta_sts.status|default('unavailable') }}</span>MTA-STS</div>
+    {% if email_auth.mta_sts.reason or email_auth.mta_sts.policy_reason %}<p style="color:var(--text-muted);font-size:13px;">{{ email_auth.mta_sts.reason or email_auth.mta_sts.policy_reason }}</p>{% endif %}
+    {% if email_auth.mta_sts.policy %}<div class="auth-card-row"><span class="auth-card-key">Policy mode</span><span class="auth-card-val">{{ email_auth.mta_sts.policy.mode }} · max_age {{ email_auth.mta_sts.policy.max_age }}</span></div>{% endif %}
+    <div class="auth-card-row"><span class="auth-card-key">Policy file</span><span class="auth-card-val">{{ email_auth.mta_sts.policy_status|default('not fetched') }}</span></div>
+  </div>
+  <div class="auth-card">
+    <div class="auth-card-title"><span class="pill {% if email_auth.tls_rpt.status == 'configured' %}pill-ok{% elif email_auth.tls_rpt.status == 'inconclusive' %}pill-warn{% else %}pill-info{% endif %}">{{ email_auth.tls_rpt.status|default('unavailable') }}</span>TLS-RPT</div>
+    {% if email_auth.tls_rpt.reason %}<p style="color:var(--text-muted);font-size:13px;">{{ email_auth.tls_rpt.reason }}</p>{% endif %}
+    {% if email_auth.tls_rpt.reporting_uris %}<div class="auth-card-row"><span class="auth-card-key">Reporting destinations</span><span class="auth-card-val">{{ email_auth.tls_rpt.reporting_uris|join(', ') }}</span></div>{% endif %}
+  </div>
+  {% endif %}
+
   {# ── Security Suite ── #}
   {% if security %}
   <h2>🛡️ Advanced Security &amp; Threat Defense</h2>
@@ -269,6 +292,7 @@ _TEMPLATE = """<!DOCTYPE html>
       {% if security.dnssec and security.dnssec.status == 'delegation_match_verified' %}<span class="pill pill-ok">Delegation Verified</span>
       {% elif security.dnssec and security.dnssec.status == 'incomplete_chain' %}<span class="pill pill-warn">Incomplete Chain</span>
       {% elif security.dnssec and security.dnssec.status == 'bogus' %}<span class="pill pill-fail">Bogus</span>
+      {% elif security.dnssec and security.dnssec.status == 'inconclusive' %}<span class="pill pill-warn">Could Not Verify</span>
       {% else %}<span class="pill pill-warn">Unsigned</span>{% endif %}
       DNSSEC Validation
     </div>
@@ -313,6 +337,73 @@ _TEMPLATE = """<!DOCTYPE html>
       <span class="auth-card-val">{{ security.bimi.status }}</span>
     </div>
   </div>
+  {% endif %}
+
+  {% if tls %}
+  <h2>🔒 TLS &amp; HTTPS Posture</h2>
+  <div class="auth-card">
+    <div class="auth-card-title">
+      {% if tls.status == 'complete' %}<span class="pill pill-ok">Checked</span>
+      {% elif tls.status == 'blocked' %}<span class="pill pill-fail">Blocked</span>
+      {% else %}<span class="pill pill-warn">{{ tls.status|default('Unavailable') }}</span>{% endif %}
+      TLS Certificate and HTTPS
+    </div>
+    {% if tls.reason %}<p style="color:var(--text-muted);font-size:13px;margin-bottom:8px;">{{ tls.reason }}</p>{% endif %}
+    <div class="auth-card-row"><span class="auth-card-key">Protocol / Cipher</span><span class="auth-card-val">{{ tls.tls_version or 'Unavailable' }}{% if tls.cipher %} · {{ tls.cipher }}{% endif %}</span></div>
+    {% if tls.certificate %}
+    <div class="auth-card-row"><span class="auth-card-key">Certificate Issuer</span><span class="auth-card-val">{{ tls.certificate.issuer or 'Unknown' }}</span></div>
+    <div class="auth-card-row"><span class="auth-card-key">Valid Until</span><span class="auth-card-val">{{ tls.certificate.valid_until or 'Unavailable' }} · {{ tls.certificate.days_remaining }} days remaining</span></div>
+    <div class="auth-card-row"><span class="auth-card-key">Hostname Match</span><span class="auth-card-val">{{ 'Yes' if tls.certificate.san_matched else 'No' }}</span></div>
+    {% endif %}
+    {% if tls.https_redirect %}
+    <div class="auth-card-row"><span class="auth-card-key">HTTP → HTTPS</span><span class="auth-card-val">{{ 'Enforced' if tls.https_redirect.enforced else 'Not detected' }}{% if tls.https_redirect.status_code %} · HTTP {{ tls.https_redirect.status_code }}{% endif %}{% if tls.https_redirect.location %} · {{ tls.https_redirect.location }}{% endif %}</span></div>
+    {% endif %}
+    {% if tls.security_headers %}
+    <div class="auth-card-row"><span class="auth-card-key">Security Headers</span><span class="auth-card-val">HSTS {{ 'present' if tls.security_headers.hsts else 'missing' }} · CSP {{ 'present' if tls.security_headers.csp else 'missing' }} · X-Frame-Options {{ tls.security_headers.x_frame_options or 'missing' }} · X-Content-Type-Options {{ tls.security_headers.x_content_type_options or 'missing' }}</span></div>
+    <div class="auth-card-row"><span class="auth-card-key">Isolation Headers</span><span class="auth-card-val">Permissions-Policy {{ tls.security_headers.permissions_policy or 'missing' }} · COOP {{ tls.security_headers.cross_origin_opener_policy or 'missing' }} · CORP {{ tls.security_headers.cross_origin_resource_policy or 'missing' }}</span></div>
+    {% if tls.security_headers.csp_risks %}<div class="auth-card-row"><span class="auth-card-key">CSP Review</span><span class="auth-card-val">{{ tls.security_headers.csp_risks|join('; ') }}</span></div>{% endif %}
+    {% if tls.security_headers.cookies %}<div class="auth-card-row"><span class="auth-card-key">Cookie flags</span><span class="auth-card-val">{{ tls.security_headers.cookies|length }} cookie(s); values not stored{% for cookie in tls.security_headers.cookies if cookie.missing %}<br>{{ cookie.name }} missing {{ cookie.missing|join(', ') }}{% endfor %}</span></div>{% endif %}
+    {% endif %}
+    {% if tls.http_methods %}<div class="auth-card-row"><span class="auth-card-key">OPTIONS methods</span><span class="auth-card-val">{{ tls.http_methods.advertised|join(', ') if tls.http_methods.advertised else 'Allow header unavailable' }}{% if tls.http_methods.review_methods %} · Review: {{ tls.http_methods.review_methods|join(', ') }}{% endif %} · no write probe sent</span></div>{% endif %}
+  </div>
+  {% endif %}
+
+  {% if subdomains %}
+  <h2>🌐 Passive Subdomain Inventory</h2>
+  <div class="auth-card">
+    <div class="auth-card-title"><span class="pill {% if subdomains.status == 'complete' %}pill-ok{% else %}pill-warn{% endif %}">{{ subdomains.status|default('unknown') }}</span>Certificate Transparency Results</div>
+    {% if subdomains.reason %}<p style="color:var(--text-muted);font-size:13px;margin-bottom:8px;">{{ subdomains.reason }}</p>{% endif %}
+    <div class="auth-card-row"><span class="auth-card-key">Discovered</span><span class="auth-card-val">{{ subdomains.discovered_count|default(0) }}{% if subdomains.discovered_total and subdomains.discovered_total != subdomains.discovered_count %} of {{ subdomains.discovered_total }}{% endif %}</span></div>
+    {% if subdomains.subdomains %}
+    <table><thead><tr><th>Hostname</th><th>State</th><th>Addresses / CNAME</th></tr></thead><tbody>
+      {% for host in subdomains.subdomains %}<tr><td>{{ host.subdomain }}</td><td>{{ host.status }}</td><td>{{ (host.ips or [])|join(', ') }}{% if host.cname %} · {{ host.cname }}{% endif %}</td></tr>{% endfor %}
+    </tbody></table>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if path_scan and path_scan.targets %}
+  <h2>🧭 Common Web Paths</h2>
+  {% for target in path_scan.targets %}
+  <div class="auth-card">
+    <div class="auth-card-title"><span class="pill {% if target.status == 'complete' %}pill-ok{% else %}pill-warn{% endif %}">{{ target.status }}</span>{{ target.target }}</div>
+    {% if target.reason %}<p style="color:var(--text-muted);font-size:13px;margin-bottom:8px;">{{ target.reason }}</p>{% endif %}
+    {% if target.paths %}
+    <table><thead><tr><th>Path</th><th>Result</th><th>HTTP</th><th>Redirect / Details</th></tr></thead><tbody>
+      {% for item in target.paths %}<tr><td>{{ item.path }}</td><td>{{ item.state }}</td><td>{{ item.status_code or '—' }}{% if item.redirect_status_code %} → {{ item.redirect_status_code }}{% endif %}</td><td>{{ item.location or item.error or '—' }}</td></tr>{% endfor %}
+    </tbody></table>
+    {% endif %}
+    {% if target.advertised_paths %}<h3 style="font-size:13px;color:var(--text-primary);margin:16px 0 8px;">Paths advertised by robots.txt or sitemap</h3>
+    <table><thead><tr><th>Path</th><th>Source</th><th>Review</th></tr></thead><tbody>{% for item in target.advertised_paths %}<tr><td>{{ item.path }}</td><td>{{ item.source }}</td><td>{% if item.review == 'review' %}Manual review suggested; path was not requested{% else %}No name-based flag{% endif %}</td></tr>{% endfor %}</tbody></table>{% endif %}
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  {% if coverage %}
+  <h2>✓ Scan Coverage</h2>
+  <div class="auth-card"><table><thead><tr><th>Check</th><th>Status</th><th>Details</th></tr></thead><tbody>
+    {% for check in coverage %}<tr><td>{{ check.name }}</td><td>{{ check.status }}</td><td>{{ check.detail }}</td></tr>{% endfor %}
+  </tbody></table></div>
   {% endif %}
 
   <h2>Findings</h2>
@@ -364,6 +455,10 @@ _TEMPLATE = """<!DOCTYPE html>
         </tr>
         {% endfor %}
       </table>
+    {% elif rtype == 'CAA' %}
+      <table><tr><th>Flags</th><th>Tag</th><th>Value</th></tr>
+        {% for r in entry.records %}<tr><td>{{ r.flags }}</td><td>{{ r.tag }}</td><td>{{ r.value }}</td></tr>{% endfor %}
+      </table>
     {% else %}
       <table>
         <tr><th>Value</th></tr>
@@ -403,6 +498,10 @@ def build_report(
     email_auth: Any = None,
     security: Any = None,
     remediation: Any = None,
+    tls: Any = None,
+    subdomains: Any = None,
+    path_scan: Any = None,
+    coverage: Any = None,
 ) -> str:
     """Render a self-contained HTML report string."""
     return _tmpl.render(
@@ -414,4 +513,8 @@ def build_report(
         email_auth=email_auth,
         security=security,
         remediation=remediation,
+        tls=tls,
+        subdomains=subdomains,
+        path_scan=path_scan,
+        coverage=coverage,
     )

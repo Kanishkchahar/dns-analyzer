@@ -105,9 +105,12 @@
       </div>
 
       <!-- Live Loading Step Bar -->
-      <div id="loading-bar" class="loading-bar" style="display:none;" aria-live="polite">
-        <div class="loading-pulse-dot"></div>
-        <span id="loading-status-text">Auditing DNS zone &amp; security posture...</span>
+      <div id="loading-bar" class="loading-bar" style="display:none;" role="status" aria-live="polite" aria-atomic="true">
+        <div class="loading-indicator" aria-hidden="true"><span></span></div>
+        <div class="loading-copy">
+          <span id="loading-status-text">Analyzing DNS records and security posture…</span>
+          <span id="loading-elapsed" class="loading-elapsed" aria-hidden="true">0:00 elapsed</span>
+        </div>
       </div>
 
       <!-- Error banner -->
@@ -190,7 +193,7 @@
         </button>
         <button class="segment-tab" type="button" role="tab" id="tab-records" data-target="panel-records" aria-controls="panel-records" aria-selected="false">
           <span>DNS Records</span>
-          <span class="tab-badge">7</span>
+          <span class="tab-badge" id="tab-badge-records">8</span>
         </button>
         <button class="segment-tab" type="button" role="tab" id="tab-findings" data-target="panel-findings" aria-controls="panel-findings" aria-selected="false">
           <span>Findings</span>
@@ -319,6 +322,22 @@
             </div>
           </div>
         </div>
+        <div class="overview-secondary-grid">
+          <section class="overview-detail-card" aria-labelledby="scan-coverage-heading">
+            <div class="overview-detail-header">
+              <div><h2 id="scan-coverage-heading">Scan Coverage</h2><p>Which checks completed for this run.</p></div>
+              <span class="coverage-count" id="coverage-count">—</span>
+            </div>
+            <div id="scan-coverage-list" class="scan-coverage-list"></div>
+          </section>
+          <section class="overview-detail-card" aria-labelledby="scan-history-heading">
+            <div class="overview-detail-header">
+              <div><h2 id="scan-history-heading">Changes Since Previous Scan</h2><p>Comparison is stored only in this browser and updates when you run another scan.</p></div>
+              <button class="btn-clear-recent" id="clear-scan-history" type="button">Clear history</button>
+            </div>
+            <div id="scan-history-content" class="scan-history-content"></div>
+          </section>
+        </div>
       </div>
 
       <!-- Panel 2: Email Security Suite -->
@@ -344,6 +363,12 @@
         <!-- Email Authentication Cards -->
         <div id="email-auth-section" class="email-auth-section" style="display:none;">
           <h2 class="section-title">📧 Email Authentication Protocols</h2>
+          <div class="custom-dkim-tool">
+            <label for="custom-dkim-selectors">Check custom DKIM selectors</label>
+            <div><input id="custom-dkim-selectors" type="text" placeholder="selector, selector2" autocomplete="off" maxlength="400" />
+              <button class="btn btn-secondary" id="btn-check-custom-dkim" type="button">Check Selectors</button></div>
+            <p>Checks up to 20 selectors at <code>selector._domainkey.domain</code>. Common selectors are already checked automatically.</p>
+          </div>
           <div id="email-auth-cards"></div>
         </div>
       </div>
@@ -373,7 +398,10 @@
               <h2 class="section-title" style="margin-bottom:4px;">🌐 Passive Subdomain Footprint</h2>
               <p class="remediation-sub">Discovered via public Certificate Transparency (CT) logs. Zero packets transmitted to target hosts.</p>
             </div>
-            <span class="pill pill-info" id="subdomain-count-pill" style="font-size:12px;">0 Hosts</span>
+            <div class="subdomain-actions">
+              <span class="pill pill-info" id="subdomain-count-pill" style="font-size:12px;">0 Hosts</span>
+              <button class="btn btn-secondary" id="export-subdomains-csv-btn" type="button" disabled>Export CSV</button>
+            </div>
           </div>
           <div id="subdomains-list" class="subdomains-table-container"></div>
         </div>
@@ -384,8 +412,8 @@
         <div class="network-scope-section">
           <div class="network-scope-header">
             <div>
-              <h2 class="section-title">🎯 Scoped Network Inventory &amp; Port Verification</h2>
-              <p class="remediation-sub">Safety-guarded diagnostic tools with strict SSRF controls (loopback and private RFC 1918 subnets blocked).</p>
+              <h2 class="section-title">🎯 Network Scope &amp; Web Exposure</h2>
+              <p class="remediation-sub">Resolve approved public targets, check a short list of common website paths, or run separately authorized port verification.</p>
             </div>
             <div class="scope-guard-badge">
               <span class="pill pill-ok">🛡️ SSRF Guard Enforced</span>
@@ -395,11 +423,12 @@
           <div class="scope-box-card">
             <div class="scope-box-header">
               <label for="list-scan-input" class="scope-label">
-                <span>Target Scope List (Hostnames or Public IPs):</span>
-                <span class="scope-hint">Enter hostnames or IPs separated by newlines or commas</span>
+                <span>Approved Target Scope</span>
+                <span class="scope-hint">Up to 5 hostnames or public IPs, separated by commas or newlines</span>
               </label>
             </div>
-            <textarea id="list-scan-input" class="scope-textarea" rows="3" placeholder="example.com&#10;mail.example.com&#10;93.184.216.34"></textarea>
+            <textarea id="list-scan-input" class="scope-textarea" rows="3" placeholder="example.com&#10;www.example.com&#10;93.184.216.34" aria-describedby="scope-safety-note"></textarea>
+            <p class="scope-safety-note" id="scope-safety-note">Private, loopback, link-local, and other non-public addresses are blocked. Web path checks use a fixed list and do not crawl or follow redirects.</p>
             
             <div class="scope-actions-bar">
               <div class="scope-action-group">
@@ -409,10 +438,21 @@
                   </svg>
                   <span>Run List Scan (Resolve Scope Only)</span>
                 </button>
-                <span class="scope-action-sub">Resolves targets without sending port probes.</span>
+                <button class="btn btn-secondary" id="btn-run-path-scan" type="button">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                    <path d="M2 3h12v10H2zM2 6h12M5 3v3" stroke-linejoin="round"/>
+                    <path d="M5 9h2m2 0h2m-6 2h2" stroke-linecap="round"/>
+                  </svg>
+                  <span>Check Common Web Paths</span>
+                </button>
+                <span class="scope-action-sub">DNS-only inventory or 7 fixed HTTPS checks plus limited same-host metadata lookup.</span>
               </div>
 
               <div class="scope-auth-group">
+                <div class="port-scan-copy">
+                  <strong>Active port verification</strong>
+                  <span>Requires confirmation and server-side authorization. Disabled by default.</span>
+                </div>
                 <label class="scope-confirm-label" for="port-scan-confirm">
                   <input type="checkbox" id="port-scan-confirm" class="scope-checkbox" />
                   <span>I confirm I am authorized to probe standard service ports on these approved targets.</span>
@@ -439,6 +479,7 @@
           </div>
 
           <div id="network-results" class="network-results-wrapper" style="display:none;"></div>
+          <div id="network-path-results" class="network-results-wrapper" style="display:none;"></div>
         </div>
       </div>
 
@@ -483,11 +524,11 @@
                   aria-label="Search findings by keyword"
                 />
               </div>
-              <div class="filter-group" role="tablist" aria-label="Filter findings by severity">
-                <button class="filter-chip active" type="button" data-filter="all" role="tab" aria-selected="true">All</button>
-                <button class="filter-chip" type="button" data-filter="error" role="tab" aria-selected="false">Errors</button>
-                <button class="filter-chip" type="button" data-filter="warning" role="tab" aria-selected="false">Warnings</button>
-                <button class="filter-chip" type="button" data-filter="info" role="tab" aria-selected="false">Info</button>
+              <div class="filter-group" role="group" aria-label="Filter findings by severity">
+                <button class="filter-chip active" type="button" data-filter="all" aria-pressed="true">All</button>
+                <button class="filter-chip" type="button" data-filter="error" aria-pressed="false">Errors</button>
+                <button class="filter-chip" type="button" data-filter="warning" aria-pressed="false">Warnings</button>
+                <button class="filter-chip" type="button" data-filter="info" aria-pressed="false">Info</button>
               </div>
             </div>
           </div>

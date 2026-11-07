@@ -75,6 +75,8 @@ class EmailAuth(BaseModel):
     spf_flattened: dict[str, Any] | None = None
     dmarc: dict[str, Any] | None = None
     dkim: dict[str, Any] | None = None
+    mta_sts: dict[str, Any] | None = None
+    tls_rpt: dict[str, Any] | None = None
     score: EmailScore | None = None
 
 
@@ -127,12 +129,37 @@ class AnalyzeResponse(BaseModel):
     security: SecurityAudit | None = None
     tls: dict[str, Any] | None = None
     subdomains: dict[str, Any] | None = None
+    coverage: list[dict[str, Any]] = Field(default_factory=list)
     remediation: list[RemediationFix] | None = None
     bind_zone_snippet: str | None = None
 
 
 class ListScanRequest(BaseModel):
     targets: list[str]
+
+
+class PathScanRequest(BaseModel):
+    targets: list[str]
+
+
+class DkimSelectorRequest(BaseModel):
+    domain: str
+    selectors: list[str] = Field(min_length=1, max_length=20)
+
+    @field_validator("domain")
+    @classmethod
+    def validate_domain(cls, value: str) -> str:
+        return AnalyzeRequest(domain=value).domain
+
+    @field_validator("selectors")
+    @classmethod
+    def validate_selectors(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(value.strip() for value in values if value.strip()))
+        if not normalized or any(not re.fullmatch(r"[a-zA-Z0-9_-]{1,63}", value) for value in normalized):
+            raise ValueError("Selectors must contain 1–63 letters, numbers, underscores, or hyphens.")
+        if len(normalized) > 20:
+            raise ValueError("Check no more than 20 selectors at a time.")
+        return normalized
 
 
 class PortScanRequest(BaseModel):

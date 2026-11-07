@@ -33,6 +33,7 @@ const recentChipsList  = document.getElementById("recent-chips-list");
 const clearRecentBtn   = document.getElementById("clear-recent-btn");
 const loadingBar       = document.getElementById("loading-bar");
 const loadingStatusText= document.getElementById("loading-status-text");
+const loadingElapsedText = document.getElementById("loading-elapsed");
 
 // Email auth DOM refs
 const emailScoreSection = document.getElementById("email-score-section");
@@ -72,6 +73,8 @@ let currentZoneSnippet = "";
 let currentScanData = null;
 let currentViewMode = "cards"; // "cards" | "dig"
 let loadingInterval = null;
+let loadingStartedAt = 0;
+const SCAN_HISTORY_KEY = "dns_analyzer_scan_history_v1";
 
 // ── Recent Searches (localStorage) ───────────────────────────
 const STORAGE_KEY_RECENT = "dns_analyzer_recent";
@@ -456,7 +459,9 @@ async function runAnalysis() {
     const res = await fetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ domain }),
+      // Always bypass the short server cache so each user-triggered scan
+      // re-runs DNS, TLS, and passive security checks against current data.
+      body: JSON.stringify({ domain, force_refresh: true }),
     });
 
     data = await res.json();
@@ -493,26 +498,28 @@ function setLoading(on) {
   analyzeBtn.disabled = on;
   analyzeBtn.classList.toggle("loading", on);
   domainInput.classList.remove("input-error");
+  document.querySelector(".hero")?.setAttribute("aria-busy", String(on));
 
   if (!loadingBar || !loadingStatusText) return;
 
   if (on) {
     loadingBar.style.display = "flex";
-    loadingStatusText.textContent = "Querying 7 DNS record types concurrently...";
-    const messages = [
-      "Auditing SPF syntax & recursion lookup limits...",
-      "Evaluating DMARC enforcement & DKIM selectors...",
-      "Inspecting DNSSEC cryptographic keys & takeover risks...",
-      "Compiling diagnostic health score & remediation...",
-    ];
-    let step = 0;
+    loadingStatusText.textContent = "Analyzing DNS records and security posture…";
+    loadingStartedAt = performance.now();
+    if (loadingElapsedText) loadingElapsedText.textContent = "0:00 elapsed";
     clearInterval(loadingInterval);
     loadingInterval = setInterval(() => {
-      step = (step + 1) % messages.length;
-      loadingStatusText.textContent = messages[step];
-    }, 450);
+      const elapsedSeconds = Math.floor((performance.now() - loadingStartedAt) / 1000);
+      const minutes = Math.floor(elapsedSeconds / 60);
+      const seconds = String(elapsedSeconds % 60).padStart(2, "0");
+      if (loadingElapsedText) loadingElapsedText.textContent = `${minutes}:${seconds} elapsed`;
+      if (elapsedSeconds >= 12) {
+        loadingStatusText.textContent = "Still working — waiting for DNS and HTTPS responses…";
+      }
+    }, 1000);
   } else {
     clearInterval(loadingInterval);
+    loadingInterval = null;
     loadingBar.style.display = "none";
   }
 }
@@ -570,6 +577,8 @@ function renderResults(data) {
 
   // Bento Grid Security Posture Cockpit
   renderBentoCockpit(data);
+  renderScanCoverage(data.coverage || []);
+  renderScanHistory(data);
 
   // Reset findings search on new scan
   if (findingsSearch) {
@@ -582,7 +591,7 @@ function renderResults(data) {
 
   // Records
   recordsGrid.innerHTML = "";
-  const ORDER = ["A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA"];
+  const ORDER = ["A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA", "CAA"];
   let renderedRecordTypes = 0;
   for (const rtype of ORDER) {
     const entry = data.records[rtype];
@@ -629,6 +638,103 @@ function renderResults(data) {
   results.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function renderScanCoverage(coverage) {
+  const list = document.getElementById("scan-coverage-list");
+  const count = document.getElementById("coverage-count");
+  if (!list || !count) return;
+  const entries = Array.isArray(coverage) ? coverage : [];
+  const complete = entries.filter(item => item.status === "complete").length;
+  count.textContent = `${complete}/${entries.length} complete`;
+  list.innerHTML = entries.map(item => {
+    const label = item.status === "not_run" ? "Optional" : item.status === "partial" ? "Partial" : item.status === "blocked" ? "Blocked" : "Complete";
+    const tone = item.status === "complete" ? "coverage-complete" : item.status === "blocked" ? "coverage-blocked" : item.status === "not_run" ? "coverage-optional" : "coverage-partial";
+    return `<div class="scan-coverage-item ${tone}">
+      <span class="coverage-indicator" aria-hidden="true"></span>
+      <div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.detail || "")}</small></div>
+      <span class="coverage-status">${label}</span>
+    </div>`;
+  }).join("") || `<p class="auth-empty">Coverage details are unavailable for this scan.</p>`;
+}
+
+function readScanHistory() {
+  try {
+    const value = JSON.parse(localStorage.getItem(SCAN_HISTORY_KEY) || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch (_) { return []; }
+}
+
+function renderScanHistory(data) {
+  const output = document.getElementById("scan-history-content");
+  if (!output || !data?.domain) return;
+  const previousHistory = readScanHistory();
+  const timestamp = data.scan_timestamp || new Date().toISOString();
+  const previous = previousHistory.find(item => item.domain === data.domain && item.timestamp !== timestamp) || null;
+  const records = Object.fromEntries(Object.entries(data.records || {}).map(([type, record]) => [type, JSON.stringify(record?.records ?? null)]));
+  const ctStatus = data.subdomains?.status || "unavailable";
+  const snapshot = {
+    domain: data.domain,
+    timestamp,
+    records,
+    ctStatus,
+    ctHosts: (data.subdomains?.subdomains || []).map(item => item.subdomain).sort(),
+    certificate: data.tls?.certificate ? {
+      issuer: data.tls.certificate.issuer,
+      valid_until: data.tls.certificate.valid_until,
+      san: [...(data.tls.certificate.san || [])].sort(),
+      tls_version: data.tls.tls_version,
+    } : null,
+    pathScan: (data.path_scan?.targets || []).filter(target => target.target?.toLowerCase().replace(/\.$/, "") === data.domain.toLowerCase()).map(target => ({
+      paths: (target.paths || []).map(item => [item.path, item.status_code, item.state, item.location, item.redirect_status_code]),
+      advertised: (target.advertised_paths || []).map(item => [item.path, item.source, item.review]).sort((a, b) => a[0].localeCompare(b[0])),
+    })),
+  };
+  const changed = [];
+  if (previous) {
+    const recordTypes = [...new Set([...Object.keys(previous.records || {}), ...Object.keys(records)])];
+    const changedRecords = recordTypes.filter(type => previous.records?.[type] !== records[type]);
+    if (changedRecords.length) changed.push(`DNS record changes: ${changedRecords.join(", ")}`);
+    if (previous.ctStatus === "complete" && ctStatus === "complete") {
+      const oldHosts = new Set(previous.ctHosts || []);
+      const newHosts = new Set(snapshot.ctHosts);
+      const added = [...newHosts].filter(host => !oldHosts.has(host));
+      const removed = [...oldHosts].filter(host => !newHosts.has(host));
+      if (added.length) changed.push(`New CT names: ${added.join(", ")}`);
+      if (removed.length) changed.push(`CT names no longer listed: ${removed.join(", ")}`);
+    } else {
+      changed.push("CT inventory change not compared because at least one scan was incomplete.");
+    }
+    if (previous.certificate && snapshot.certificate && JSON.stringify(previous.certificate) !== JSON.stringify(snapshot.certificate)) {
+      changed.push("TLS certificate or negotiated protocol changed.");
+    }
+    if (previous.pathScan?.length && snapshot.pathScan.length && JSON.stringify(previous.pathScan) !== JSON.stringify(snapshot.pathScan)) {
+      changed.push("Common web path or advertised-path results changed.");
+    } else if (!previous.pathScan?.length && snapshot.pathScan.length) {
+      changed.push("A web-path baseline was saved for future comparisons.");
+    }
+  }
+
+  try {
+    const remaining = previousHistory.filter(item => item.domain !== data.domain);
+    const olderScans = previousHistory.filter(item => item.domain === data.domain && item.timestamp !== timestamp);
+    const perDomain = [snapshot, ...olderScans].slice(0, 5);
+    localStorage.setItem(SCAN_HISTORY_KEY, JSON.stringify([...perDomain, ...remaining].slice(0, 60)));
+  } catch (_) { /* Storage can be unavailable in private browsing or under quota pressure. */ }
+
+  output.innerHTML = previous
+    ? `<div class="history-previous">Compared with <strong>${escapeHtml(previous.timestamp)}</strong> · ${changed.length ? changed.map(escapeHtml).join("<br>") : "No monitored DNS, CT, or certificate changes detected."}</div>`
+    : `<div class="history-previous">This is the first saved scan for <strong>${escapeHtml(data.domain)}</strong>. Changes will appear after another scan in this browser.</div>`;
+}
+
+const clearScanHistoryButton = document.getElementById("clear-scan-history");
+if (clearScanHistoryButton) {
+  clearScanHistoryButton.addEventListener("click", () => {
+    try { localStorage.removeItem(SCAN_HISTORY_KEY); } catch (_) { /* Browser storage may be disabled. */ }
+    const content = document.getElementById("scan-history-content");
+    if (content) content.innerHTML = `<div class="history-previous">Local scan history cleared. The next scan will create a new baseline.</div>`;
+    showToast("Local scan history cleared.");
+  });
+}
+
 // ── Tab Badges & Overview Snapshots ───────────────────────────
 function updateTabBadges(data) {
   // 1. Email badge & snapshot
@@ -654,16 +760,22 @@ function updateTabBadges(data) {
     emailDesc.textContent = `Email sender score is ${score}/100 (${grade}). ${dmarcPol ? "DMARC policy: " + dmarcPol : "DMARC policy missing"}.`;
   }
 
+  const recordsBadge = document.getElementById("tab-badge-records");
+  if (recordsBadge) recordsBadge.textContent = String(Object.keys(data.records || {}).filter(key => key !== "zone_metadata").length);
+
   // 2. Threats badge & snapshot
   const threatsBadge = document.getElementById("tab-badge-threats");
-  const isTakeoverVuln = Boolean(data.security?.takeover?.vulnerable);
+  const takeoverAssessment = getTakeoverPresentation(data.security?.takeover);
   const isDnssecDelegationVerified = data.security?.dnssec?.status === "delegation_match_verified";
 
   if (threatsBadge) {
     threatsBadge.className = "tab-badge";
-    if (isTakeoverVuln) {
+    if (takeoverAssessment.critical) {
       threatsBadge.textContent = "Alert";
       threatsBadge.classList.add("badge-red");
+    } else if (takeoverAssessment.needsReview) {
+      threatsBadge.textContent = "Review";
+      threatsBadge.classList.add("badge-amber");
     } else if (isDnssecDelegationVerified) {
       threatsBadge.textContent = "DS Match";
       threatsBadge.classList.add("badge-amber");
@@ -844,8 +956,9 @@ function renderBentoCockpit(data) {
     }
 
     let headline, statusClass = "ok", statusText = "Enforced";
-    if (dmarc && (dmarc.policy === "reject" || dmarc.policy === "quarantine") && spf) {
-      headline = "Phishing Immune";
+    if (dmarc && (dmarc.policy === "reject" || dmarc.policy === "quarantine")) {
+      headline = "DMARC Policy Active";
+      statusText = "Policy Enforced";
     } else if (dmarc?.policy === "none") {
       headline = "Audit Mode"; statusClass = "warn"; statusText = "Monitor Only";
     } else if (spf && !dmarc) {
@@ -878,7 +991,7 @@ function renderBentoCockpit(data) {
     let dnssecText = "Unsigned Zone", dnssecClass = "warn";
     if (dnssec?.status === "delegation_match_verified") {
       const algo = dnssec.keys?.[0]?.algorithm || "Standard";
-      dnssecText = `DS Match (${algo})`; dnssecClass = "ok";
+      dnssecText = `DS Match (${algo})`; dnssecClass = "warn";
     } else if (dnssec?.status === "incomplete_chain") {
       dnssecText = "Incomplete DS Chain"; dnssecClass = "warn";
     } else if (dnssec?.status === "bogus") {
@@ -886,22 +999,27 @@ function renderBentoCockpit(data) {
     }
 
     let dsText = "No DS Records", dsClass = "warn";
-    if (dnssec?.ds_count > 0) {
-      dsText = `Valid (${dnssec.ds_count} DS)`; dsClass = "ok";
+    if (dnssec?.ds_count > 0 && dnssec.status === "delegation_match_verified") {
+      dsText = `Matched (${dnssec.ds_count} DS)`; dsClass = "ok";
+    } else if (dnssec?.ds_count > 0 && dnssec.status === "bogus") {
+      dsText = `Mismatch (${dnssec.ds_count} DS)`; dsClass = "danger";
+    } else if (dnssec?.ds_count > 0) {
+      dsText = `Found (${dnssec.ds_count} DS)`;
     }
 
-    let takeoverText = "Zero Dangling CNAMEs", takeoverClass = "ok";
-    if (takeover?.vulnerable) {
-      takeoverText = `CRITICAL: → ${takeover.provider || "Unknown"}`; takeoverClass = "danger";
-    }
+    const takeoverAssessment = getTakeoverPresentation(takeover);
+    const takeoverText = takeoverAssessment.bentoText;
+    const takeoverClass = takeoverAssessment.tone;
 
-    let headline, statusClass = "ok", statusText = "Secured";
-    if (takeover?.vulnerable) {
+    let headline, statusClass = "warn", statusText = "Review";
+    if (takeoverAssessment.critical) {
       headline = "Takeover Risk Detected"; statusClass = "danger"; statusText = "Vulnerable";
+    } else if (takeoverAssessment.needsReview) {
+      headline = "Takeover Check Needs Review";
     } else if (dnssec?.status === "delegation_match_verified") {
-      headline = "Delegation Match Verified"; statusText = "DS Verified";
+      headline = "DS Delegation Match"; statusText = "Partial Validation";
     } else {
-      headline = "Partially Protected"; statusClass = "warn"; statusText = "Unsigned";
+      headline = "Security Checks Need Review";
     }
 
     cryptoHeadline.textContent = headline;
@@ -951,7 +1069,7 @@ function applyFindingsFilter(filter) {
   document.querySelectorAll(".filter-chip").forEach((btn) => {
     const isActive = btn.dataset.filter === filter;
     btn.classList.toggle("active", isActive);
-    btn.setAttribute("aria-selected", isActive);
+    btn.setAttribute("aria-pressed", String(isActive));
   });
 
   // Highlight badge if filtered
@@ -1210,6 +1328,15 @@ function renderRecordCard(rtype, entry) {
         body.appendChild(row);
       }
     }
+  } else if (rtype === "CAA") {
+    for (const record of entry.records || []) {
+      const value = `${record.flags} ${record.tag} "${record.value}"`;
+      const row = document.createElement("div");
+      row.className = "record-row";
+      row.innerHTML = `<span class="record-category-pill">${escapeHtml(record.tag)}</span><span class="record-value">${escapeHtml(value)}</span>`;
+      row.appendChild(makeInlineCopyBtn(value));
+      body.appendChild(row);
+    }
   } else {
     const records = Array.isArray(entry.records) ? entry.records : [entry.records];
     if (records.length === 0) {
@@ -1282,8 +1409,40 @@ function renderEmailAuth(emailAuth, domain) {
 
   // ── DKIM Card ──
   emailAuthCards.appendChild(renderDkimCard(emailAuth));
+  emailAuthCards.appendChild(renderMailTransportCards(emailAuth));
 
   emailAuthSection.style.display = "block";
+}
+
+function renderMailTransportCards(emailAuth) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "mail-transport-grid";
+  const sts = emailAuth.mta_sts || {};
+  const statusPill = (status) => status === "configured" ? "pill-ok" : status === "inconclusive" ? "pill-warn" : "pill-info";
+  const stsPolicy = sts.policy || {};
+  const mxRows = Array.isArray(stsPolicy.mx) ? stsPolicy.mx : [];
+  const stsCard = document.createElement("article");
+  stsCard.className = "auth-card";
+  stsCard.innerHTML = `
+    <div class="auth-card-title"><span class="pill ${statusPill(sts.status)}">${escapeHtml(sts.status || "unavailable")}</span>MTA-STS</div>
+    ${sts.reason || sts.policy_reason ? `<p class="auth-empty">${escapeHtml(sts.reason || sts.policy_reason)}</p>` : ""}
+    ${sts.record ? `<div class="auth-card-row"><span class="auth-card-key">DNS policy ID</span><span class="auth-card-val">${escapeHtml(sts.id || "Published")}</span></div>` : ""}
+    ${sts.policy_status ? `<div class="auth-card-row"><span class="auth-card-key">Policy file</span><span class="auth-card-val">${escapeHtml(sts.policy_status)}${sts.policy_http_status ? ` · HTTP ${sts.policy_http_status}` : ""}</span></div>` : ""}
+    ${stsPolicy.mode ? `<div class="auth-card-row"><span class="auth-card-key">Mode / max age</span><span class="auth-card-val">${escapeHtml(stsPolicy.mode)} · ${escapeHtml(String(stsPolicy.max_age ?? "unknown"))} seconds</span></div>` : ""}
+    ${mxRows.length ? `<div class="auth-card-row"><span class="auth-card-key">MX patterns</span><span class="auth-card-val">${mxRows.map(escapeHtml).join(", ")}</span></div>` : ""}
+    <p class="auth-helper-copy">Checks the DNS policy and the HTTPS policy file. No email is sent.</p>`;
+
+  const rpt = emailAuth.tls_rpt || {};
+  const rptCard = document.createElement("article");
+  rptCard.className = "auth-card";
+  rptCard.innerHTML = `
+    <div class="auth-card-title"><span class="pill ${statusPill(rpt.status)}">${escapeHtml(rpt.status || "unavailable")}</span>TLS-RPT</div>
+    ${rpt.reason ? `<p class="auth-empty">${escapeHtml(rpt.reason)}</p>` : ""}
+    ${rpt.record ? `<div class="auth-card-row"><span class="auth-card-key">Record</span><span class="auth-card-val">${escapeHtml(rpt.record)}</span></div>` : ""}
+    ${rpt.reporting_uris?.length ? `<div class="auth-card-row"><span class="auth-card-key">Reports sent to</span><span class="auth-card-val">${rpt.reporting_uris.map(escapeHtml).join(", ")}</span></div>` : ""}
+    <p class="auth-helper-copy">TLS-RPT lets mail systems send reports about failed encrypted delivery attempts.</p>`;
+  wrapper.append(stsCard, rptCard);
+  return wrapper;
 }
 
 function renderSpfCard(emailAuth) {
@@ -1387,15 +1546,20 @@ function renderDmarcCard(emailAuth, domain) {
   card.className = "auth-card";
 
   const dmarc = emailAuth.dmarc;
-  const hasDmarc = !!dmarc;
-  const pill = hasDmarc
+  const dmarcUnavailable = dmarc?.status === "inconclusive";
+  const hasDmarc = !!dmarc && !dmarcUnavailable;
+  const pill = dmarcUnavailable
+    ? `<span class="pill pill-warn">Could Not Verify</span>`
+    : hasDmarc
     ? `<span class="pill pill-ok">Found</span>`
     : `<span class="pill pill-fail">Missing</span>`;
 
   card.innerHTML = `<div class="auth-card-title">${pill} DMARC (Message Authentication) <span class="info-badge" title="Enforces policies for email senders and provides abuse reports to prevent phishing.">?</span></div>`;
 
   if (!hasDmarc) {
-    card.innerHTML += `<p class="auth-empty">No DMARC record found at _dmarc.${escapeHtml(domain)}</p>`;
+    card.innerHTML += `<p class="auth-empty">${dmarcUnavailable
+      ? `DMARC could not be verified: ${escapeHtml(dmarc.reason || "DNS lookup was inconclusive.")}`
+      : `No DMARC record found at _dmarc.${escapeHtml(domain)}`}</p>`;
     return card;
   }
 
@@ -1433,8 +1597,11 @@ function renderDkimCard(emailAuth) {
   card.className = "auth-card";
 
   const dkim = emailAuth.dkim;
+  const dkimUnavailable = dkim?.status === "inconclusive";
   const hasDkim = dkim && dkim.has_dkim;
-  const pill = hasDkim
+  const pill = dkimUnavailable
+    ? `<span class="pill pill-warn">Could Not Verify</span>`
+    : hasDkim
     ? `<span class="pill pill-ok">Found</span>`
     : `<span class="pill pill-warn">Not Found</span>`;
 
@@ -1452,7 +1619,9 @@ function renderDkimCard(emailAuth) {
         </div>`;
     }
   } else {
-    body = `<p class="auth-empty">No DKIM records found for common selectors. Custom selectors may exist.</p>`;
+    body = `<p class="auth-empty">${dkimUnavailable
+      ? `DKIM checks were inconclusive: ${escapeHtml(dkim.reason || "DNS lookup failed.")}`
+      : "No DKIM records found for common selectors. Custom selectors may exist."}</p>`;
   }
 
   card.innerHTML = `
@@ -1461,7 +1630,106 @@ function renderDkimCard(emailAuth) {
   return card;
 }
 
+const customDkimInput = document.getElementById("custom-dkim-selectors");
+const customDkimButton = document.getElementById("btn-check-custom-dkim");
+if (customDkimInput && customDkimButton) {
+  customDkimButton.addEventListener("click", async () => {
+    if (!currentDomain || !currentScanData?.email_auth) {
+      showToast("Run a domain analysis before checking custom selectors.");
+      return;
+    }
+    const selectors = [...new Set(customDkimInput.value.split(/[\s,;]+/).map(value => value.trim()).filter(Boolean))];
+    if (!selectors.length || selectors.length > 20) {
+      showToast("Enter between 1 and 20 DKIM selectors.");
+      customDkimInput.focus();
+      return;
+    }
+    customDkimButton.disabled = true;
+    const originalText = customDkimButton.textContent;
+    customDkimButton.textContent = "Checking…";
+    try {
+      const response = await fetch("/api/email/dkim-selectors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain: currentDomain, selectors }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Custom DKIM selector check failed.");
+      const previous = currentScanData.email_auth.dkim || {};
+      const found = new Map([...(previous.selectors_found || []), ...(data.selectors_found || [])].map(item => [item.selector, item]));
+      const combinedChecked = [...new Set([...(previous.selectors_checked || []), ...(data.selectors_checked || [])])];
+      const combined = {
+        ...previous,
+        ...data,
+        selectors_found: [...found.values()],
+        selectors_checked: combinedChecked,
+        custom_selectors: [...new Set([...(previous.custom_selectors || []), ...selectors])],
+        has_dkim: found.size > 0,
+        status: data.status === "inconclusive" && found.size === 0 ? "inconclusive" : data.status === "partial" ? "partial" : "complete",
+      };
+      currentScanData.email_auth.dkim = combined;
+      renderEmailAuth(currentScanData.email_auth, currentDomain);
+      showToast(`Checked ${selectors.length} custom DKIM selector(s).`);
+    } catch (error) {
+      showToast(error.message || "Custom DKIM selector check failed.", "danger");
+    } finally {
+      customDkimButton.disabled = false;
+      customDkimButton.textContent = originalText;
+    }
+  });
+}
+
 // ── Security Suite Rendering ──────────────────────────────────
+function getTakeoverPresentation(takeover) {
+  if (!takeover || takeover.scanned === false) {
+    return {
+      label: "Not Checked", pillClass: "pill-warn", statusText: "Takeover check was not completed.",
+      description: "No takeover assessment is available for this scan.", bentoText: "Not Checked",
+      tone: "warn", needsReview: true, critical: false,
+    };
+  }
+  if (takeover.vulnerable || takeover.status === "critical_vulnerability") {
+    return {
+      label: "Vulnerable", pillClass: "pill-fail", statusText: "Critical dangling CNAME detected.",
+      description: "A known provider target appears claimable.", bentoText: `CRITICAL: ${takeover.provider || "Takeover risk"}`,
+      tone: "danger", needsReview: false, critical: true,
+    };
+  }
+  if (takeover.status === "could_not_verify") {
+    return {
+      label: "Unverified", pillClass: "pill-warn", statusText: "Could not verify the CNAME target.",
+      description: "The target could not be checked conclusively.", bentoText: "Could Not Verify",
+      tone: "warn", needsReview: true, critical: false,
+    };
+  }
+  if (takeover.status === "dangling_alias") {
+    return {
+      label: "Review Alias", pillClass: "pill-warn", statusText: "Unresolvable CNAME target needs review.",
+      description: "The target appears dangling, but no supported provider signature confirmed takeover risk.", bentoText: "Dangling Alias",
+      tone: "warn", needsReview: true, critical: false,
+    };
+  }
+  if (takeover.status === "cloud_hosted") {
+    return {
+      label: "Active CNAME", pillClass: "pill-info", statusText: "Target resolves; confirm the cloud resource is still yours.",
+      description: "An active cloud endpoint can still become dangling if its resource is removed.", bentoText: "Active Cloud Target",
+      tone: "warn", needsReview: true, critical: false,
+    };
+  }
+  if (takeover.status === "safe") {
+    return {
+      label: "No Known Issue", pillClass: "pill-ok", statusText: "No dangling target was identified.",
+      description: "No known dangling CNAME was identified by the supported checks.", bentoText: "No Known Issue",
+      tone: "ok", needsReview: false, critical: false,
+    };
+  }
+  return {
+    label: "Review Needed", pillClass: "pill-warn", statusText: "Takeover status is unavailable or unrecognized.",
+    description: "This result does not confirm that the domain is protected.", bentoText: "Review Needed",
+    tone: "warn", needsReview: true, critical: false,
+  };
+}
+
 function renderSecuritySuite(security) {
   if (!securitySuiteSection || !securityCards) return;
   securitySuiteSection.style.display = "none";
@@ -1473,14 +1741,19 @@ function renderSecuritySuite(security) {
   if (security.dnssec) {
     const sec = security.dnssec;
     const isDelegationVerified = sec.status === "delegation_match_verified";
+    const isInconclusive = sec.status === "inconclusive";
     const pill = isDelegationVerified
           ? `<span class="pill pill-ok">Delegation Verified</span>`
-          : (sec.status === "bogus" ? `<span class="pill pill-fail">Bogus</span>` : `<span class="pill pill-warn">Unsigned</span>`);
+          : (sec.status === "bogus" ? `<span class="pill pill-fail">Bogus</span>` : (isInconclusive
+            ? `<span class="pill pill-warn">Could Not Verify</span>`
+            : `<span class="pill pill-warn">Unsigned</span>`));
 
     let desc = "Protects against DNS cache poisoning (Kaminsky attacks) and spoofing.";
     if (isDelegationVerified) {
       const algo = sec.keys && sec.keys[0] ? sec.keys[0].algorithm : "Standard";
       desc = `Parent DS record matches published DNSKEY digest (${algo}). Parent-child delegation link verified; full RRSIG root anchor chain unvalidated.`;
+    } else if (isInconclusive) {
+      desc = "DNS queries failed, so DNSSEC could not be verified. This is not evidence that the zone is unsigned.";
     } else if (sec.status === "incomplete_chain") {
       desc = "DNSKEY exists in zone, but missing DS delegation in parent registrar.";
     }
@@ -1493,7 +1766,7 @@ function renderSecuritySuite(security) {
           <span class="sec-card-title">🔐 DNSSEC Validation <span class="info-badge" title="Cryptographically signs DNS records to prevent spoofing and cache poisoning.">?</span></span>
           ${pill}
         </div>
-        <div class="sec-card-status">${isDelegationVerified ? "Delegation Link Verified" : "Not Authenticated"}</div>
+        <div class="sec-card-status">${isDelegationVerified ? "Delegation Link Verified" : (isInconclusive ? "Could Not Verify" : "Not Authenticated")}</div>
         <div class="sec-card-desc">${escapeHtml(desc)}</div>
       </div>
       <div style="margin-top:12px; font-size:11px; color:var(--text-muted); font-family:'Geist Mono', monospace;">
@@ -1506,10 +1779,8 @@ function renderSecuritySuite(security) {
   // 2. Subdomain Takeover Card
   if (security.takeover) {
     const to = security.takeover;
-    const isVuln = to.vulnerable;
-    const pill = isVuln
-      ? `<span class="pill pill-fail">Vulnerable</span>`
-      : `<span class="pill pill-ok">Protected</span>`;
+    const assessment = getTakeoverPresentation(to);
+    const pill = `<span class="pill ${assessment.pillClass}">${assessment.label}</span>`;
 
     const card = document.createElement("div");
     card.className = "security-card";
@@ -1519,11 +1790,12 @@ function renderSecuritySuite(security) {
           <span class="sec-card-title">🛡️ Subdomain Takeover <span class="info-badge" title="Detects dangling CNAME records pointing to abandoned cloud services before attackers hijack them.">?</span></span>
           ${pill}
         </div>
-        <div class="sec-card-status">${isVuln ? "CRITICAL: Dangling CNAME" : "No Dangling Pointers"}</div>
-        <div class="sec-card-desc">${escapeHtml(to.details || "Analyzed CNAME targets against cloud service fingerprints.")}</div>
+        <div class="sec-card-status">${assessment.statusText}</div>
+        <div class="sec-card-desc">${escapeHtml(to.details || assessment.description)}</div>
       </div>
       <div style="margin-top:12px; font-size:11px; color:var(--text-muted); font-family:'Geist Mono', monospace;">
         Provider: ${escapeHtml(to.provider || "None")}
+        ${to.disclaimer ? `<div style="margin-top:6px;">${escapeHtml(to.disclaimer)}</div>` : ""}
       </div>
     `;
     securityCards.appendChild(card);
@@ -1579,13 +1851,15 @@ function renderTLS(tls) {
   tlsCards.innerHTML = "";
 
   if (!tls || !tls.scanned) {
+    const status = tls?.status || "unavailable";
+    const badgeText = status === "blocked" ? "Blocked" : status === "unreachable" ? "No Response" : "N/A";
     if (tlsBadge) {
-      tlsBadge.textContent = "N/A";
-      tlsBadge.className = "tab-badge";
+      tlsBadge.textContent = badgeText;
+      tlsBadge.className = "tab-badge" + (status === "blocked" ? " badge-amber" : "");
     }
     tlsCards.innerHTML = `
       <div class="tls-unavailable" role="status">
-        TLS and HTTPS checks were not run for this scan, so certificate, redirect, and security-header results are unavailable.
+        TLS and HTTPS checks could not complete. ${escapeHtml(tls?.reason || "No scan details were returned.")} Certificate, redirect, and security-header results are unavailable.
       </div>
     `;
     tlsSec.style.display = "block";
@@ -1593,12 +1867,14 @@ function renderTLS(tls) {
   }
 
   const cert = tls.certificate;
-  let statusClass = "badge-green";
-  let statusText = tls.tls_version ? `${tls.tls_version} Active` : "Active";
-  if (!cert || cert.is_expired) {
+  let statusClass = tls.status === "certificate_error" ? "badge-red" : "badge-green";
+  let statusText = tls.status === "certificate_error"
+    ? "Cert Error"
+    : (tls.tls_version ? `${tls.tls_version} Active` : "TLS Checked");
+  if (tls.status !== "certificate_error" && cert?.is_expired) {
     statusClass = "badge-red";
     statusText = "Expired";
-  } else if (cert.days_remaining <= 14) {
+  } else if (cert && !cert.is_expired && cert.days_remaining <= 14) {
     statusClass = "badge-amber";
     statusText = "Expiring Soon";
   }
@@ -1626,8 +1902,20 @@ function renderTLS(tls) {
         <div class="sec-card-desc">Valid until: <strong>${escapeHtml(cert.valid_until || "N/A")}</strong>. Covers domain: <strong>${cert.san_matched ? "Yes (SAN Aligned)" : "No (SAN Mismatch)"}</strong>.</div>
       </div>
       <div style="margin-top:12px; font-size:11px; color:var(--text-muted); font-family:'Geist Mono', monospace;">
-        SANs: ${(cert.san || []).slice(0, 4).join(", ")}${(cert.san || []).length > 4 ? "..." : ""}
+        SANs: ${(cert.san || []).slice(0, 4).map(escapeHtml).join(", ")}${(cert.san || []).length > 4 ? "..." : ""}
       </div>
+    `;
+    tlsCards.appendChild(cardCert);
+  } else if (tls.status === "certificate_error") {
+    const cardCert = document.createElement("div");
+    cardCert.className = "security-card";
+    cardCert.innerHTML = `
+      <div class="sec-card-header">
+        <span class="sec-card-title">📜 X.509 Certificate</span>
+        <span class="pill pill-fail">Verification Failed</span>
+      </div>
+      <div class="sec-card-status">Certificate could not be trusted</div>
+      <div class="sec-card-desc">${escapeHtml(tls.reason || "The certificate could not be verified by the server trust store.")}</div>
     `;
     tlsCards.appendChild(cardCert);
   }
@@ -1635,9 +1923,11 @@ function renderTLS(tls) {
   // 2. Encryption Protocol & Cipher Card
   const cardProto = document.createElement("div");
   cardProto.className = "security-card";
-  const protoPill = (tls.tls_version === "TLSv1.3" || tls.tls_version === "TLSv1.2")
-    ? `<span class="pill pill-ok">${escapeHtml(tls.tls_version || "Active")}</span>`
-    : `<span class="pill pill-warn">Legacy</span>`;
+  const protoPill = !tls.tls_version
+    ? `<span class="pill pill-warn">Unavailable</span>`
+    : ((tls.tls_version === "TLSv1.3" || tls.tls_version === "TLSv1.2")
+      ? `<span class="pill pill-ok">${escapeHtml(tls.tls_version)}</span>`
+      : `<span class="pill pill-warn">Legacy</span>`);
 
   cardProto.innerHTML = `
     <div>
@@ -1645,8 +1935,8 @@ function renderTLS(tls) {
         <span class="sec-card-title">🔐 Negotiated Protocol</span>
         ${protoPill}
       </div>
-      <div class="sec-card-status">${escapeHtml(tls.tls_version || "None")}</div>
-      <div class="sec-card-desc">Cipher Suite: <code>${escapeHtml(tls.cipher || "Standard AES/GCM")}</code></div>
+      <div class="sec-card-status">${escapeHtml(tls.tls_version || "Not negotiated")}</div>
+      <div class="sec-card-desc">Cipher Suite: <code>${escapeHtml(tls.cipher || "Unavailable")}</code></div>
     </div>
   `;
   tlsCards.appendChild(cardProto);
@@ -1657,6 +1947,9 @@ function renderTLS(tls) {
   const redir = tls.https_redirect?.enforced;
   const hsts = tls.security_headers?.hsts;
   const csp = tls.security_headers?.csp;
+  const headers = tls.security_headers || {};
+  const cspRisks = headers.csp_risks || [];
+  const cookies = headers.cookies || [];
 
   cardHdrs.innerHTML = `
     <div>
@@ -1666,11 +1959,35 @@ function renderTLS(tls) {
       </div>
       <div class="sec-card-status">${redir ? "HTTP → HTTPS 301 Enforced" : "No Automatic HTTPS Redirect"}</div>
       <div class="sec-card-desc">
-        HSTS: <strong>${hsts ? "Active" : "None"}</strong> · CSP: <strong>${csp ? "Active" : "None"}</strong> · X-Frame-Options: <strong>${escapeHtml(tls.security_headers?.x_frame_options || "None")}</strong>
+        HSTS: <strong>${hsts ? "Active" : "None"}</strong> · CSP: <strong>${csp ? "Present" : "Missing"}</strong> · X-Frame-Options: <strong>${escapeHtml(headers.x_frame_options || "Missing")}</strong> · X-Content-Type-Options: <strong>${escapeHtml(headers.x_content_type_options || "Missing")}</strong>
       </div>
+      <div class="security-header-details">
+        <div><span>Referrer-Policy</span><strong>${escapeHtml(headers.referrer_policy || "Missing")}</strong></div>
+        <div><span>Permissions-Policy</span><strong>${escapeHtml(headers.permissions_policy || "Missing")}</strong></div>
+        <div><span>COOP</span><strong>${escapeHtml(headers.cross_origin_opener_policy || "Missing")}</strong></div>
+        <div><span>CORP</span><strong>${escapeHtml(headers.cross_origin_resource_policy || "Missing")}</strong></div>
+      </div>
+      ${cspRisks.length ? `<p class="security-risk-note"><strong>CSP review:</strong> ${cspRisks.map(escapeHtml).join(" · ")}</p>` : (csp ? `<p class="security-ok-note">CSP passed the common directive checks. This is a focused review, not a complete policy proof.</p>` : "")}
+      <div class="cookie-audit-summary"><strong>Cookie flags</strong><span>${cookies.length ? `${cookies.length} cookie(s) observed; values were not stored.` : "No Set-Cookie headers observed."}</span>
+      ${cookies.map(cookie => `<div><code>${escapeHtml(cookie.name || "unnamed")}</code><span>Secure ${cookie.secure ? "✓" : "✗"} · HttpOnly ${cookie.http_only ? "✓" : "✗"} · SameSite ${escapeHtml(cookie.same_site || "missing")}</span></div>`).join("")}</div>
     </div>
   `;
   tlsCards.appendChild(cardHdrs);
+
+  const methods = tls.http_methods;
+  if (methods) {
+    const methodsCard = document.createElement("div");
+    methodsCard.className = "security-card";
+    const flagged = methods.review_methods || [];
+    methodsCard.innerHTML = `
+      <div>
+        <div class="sec-card-header"><span class="sec-card-title">↔️ HTTP Method Advertisement</span><span class="pill ${flagged.length ? "pill-warn" : methods.status === "inconclusive" ? "pill-warn" : "pill-info"}">${methods.status === "inconclusive" ? "Could Not Verify" : flagged.length ? "Review" : "Checked"}</span></div>
+        <div class="sec-card-status">${escapeHtml((methods.advertised || []).join(", ") || `No Allow header (HTTP ${methods.http_status ?? "N/A"})`)}</div>
+        <div class="sec-card-desc">Uses an OPTIONS response only. Advertised methods may not be enabled; no PUT, DELETE, or TRACE request was sent.</div>
+        ${methods.reason ? `<div class="sec-card-desc">${escapeHtml(methods.reason)}</div>` : ""}
+      </div>`;
+    tlsCards.appendChild(methodsCard);
+  }
 
   tlsSec.style.display = "block";
 }
@@ -1681,24 +1998,62 @@ function renderSubdomains(subData) {
   const subList = document.getElementById("subdomains-list");
   const subCountPill = document.getElementById("subdomain-count-pill");
   const subBadge = document.getElementById("tab-badge-subdomains");
+  const exportCsvButton = document.getElementById("export-subdomains-csv-btn");
   if (!subSec || !subList) return;
 
   subSec.style.display = "none";
   subList.innerHTML = "";
 
+  const inventoryStatus = subData?.status || "unavailable";
   const subs = subData?.subdomains || [];
+  if (exportCsvButton) {
+    exportCsvButton.disabled = subs.length === 0;
+    exportCsvButton.onclick = () => {
+      const cell = value => {
+        const text = String(value ?? "");
+        const safe = /^[=+@\-\t\r]/.test(text) ? `'${text}` : text;
+        return `"${safe.replaceAll('"', '""')}"`;
+      };
+      const rows = [["hostname", "status", "addresses", "cname"], ...subs.map(item => [item.subdomain, item.status, (item.ips || []).join("; "), item.cname || ""])];
+      const csv = rows.map(row => row.map(cell).join(",")).join("\r\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `subdomains-${currentDomain}.csv`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      showToast("Subdomain inventory exported as CSV.");
+    };
+  }
   if (subBadge) {
-    subBadge.textContent = String(subs.length);
-    subBadge.className = "tab-badge " + (subs.length > 0 ? "badge-green" : "");
+    subBadge.textContent = inventoryStatus === "unavailable"
+      ? "N/A"
+      : `${subs.length}${inventoryStatus === "partial" ? "+" : ""}`;
+    subBadge.className = "tab-badge " + (inventoryStatus === "unavailable" ? "badge-amber" : (subs.length > 0 ? "badge-green" : ""));
   }
   if (subCountPill) {
-    subCountPill.textContent = `${subs.length} Discovered Host${subs.length === 1 ? "" : "s"}`;
+    subCountPill.textContent = inventoryStatus === "unavailable"
+      ? "Inventory Unavailable"
+      : `${subs.length}${inventoryStatus === "partial" ? "+" : ""} Discovered Host${subs.length === 1 ? "" : "s"}`;
+  }
+
+  if (inventoryStatus === "unavailable") {
+    subList.innerHTML = `
+      <div class="tls-unavailable" role="status">
+        Certificate Transparency inventory could not be retrieved. ${escapeHtml(subData?.reason || "No scan details were returned.")}
+      </div>
+    `;
+    subSec.style.display = "block";
+    return;
   }
 
   if (subs.length === 0) {
     subList.innerHTML = `
-      <div class="no-issues" role="status" style="margin-top:12px;">
-        No publicly logged subdomains detected via Certificate Transparency for this domain apex.
+      <div class="${inventoryStatus === "partial" ? "tls-unavailable" : "no-issues"}" role="status" style="margin-top:12px;">
+        ${inventoryStatus === "partial"
+          ? "Certificate Transparency returned only a partial inventory; no names were recovered from the available response."
+          : "No publicly logged subdomains detected via Certificate Transparency for this domain apex."}
       </div>
     `;
     subSec.style.display = "block";
@@ -1980,7 +2335,7 @@ function generateDigOutput(domain, records) {
   ];
   if (!records) return lines.join("\n");
 
-  const rtypes = ["A", "AAAA", "CNAME", "MX", "NS", "SOA", "TXT"];
+  const rtypes = ["A", "AAAA", "CNAME", "MX", "NS", "SOA", "TXT", "CAA"];
   let hasAny = false;
   for (const rtype of rtypes) {
     const entry = records[rtype];
@@ -2021,6 +2376,11 @@ function generateDigOutput(domain, records) {
         hasAny = true;
         lines.push(`${domain}.\t\t${ttl}\tIN\tSOA\t${s.mname}. ${s.rname}. ${s.serial} ${s.refresh} ${s.retry} ${s.expire} ${s.minimum}`);
       }
+    } else if (rtype === "CAA") {
+      entry.records.forEach((record) => {
+        hasAny = true;
+        lines.push(`${domain}.\t\t${ttl}\tIN\tCAA\t${record.flags} ${record.tag} "${record.value}"`);
+      });
     }
   }
 
@@ -2192,9 +2552,113 @@ window.addEventListener("online", () => {
 // ── Network Scope & Port Scan Handlers ────────────────────────
 const listScanInput = document.getElementById("list-scan-input");
 const btnRunListScan = document.getElementById("btn-run-list-scan");
+const btnRunPathScan = document.getElementById("btn-run-path-scan");
 const portScanConfirm = document.getElementById("port-scan-confirm");
 const btnRunPortScan = document.getElementById("btn-run-port-scan");
 const networkResults = document.getElementById("network-results");
+const networkPathResults = document.getElementById("network-path-results");
+
+if (btnRunPathScan && listScanInput && networkPathResults) {
+  btnRunPathScan.addEventListener("click", async () => {
+    const targets = listScanInput.value.split(/[\n,]+/).map(value => value.trim()).filter(Boolean);
+    if (!targets.length) {
+      showToast("Enter at least one approved hostname or public IP.");
+      listScanInput.focus();
+      return;
+    }
+    if (targets.length > 5) {
+      showToast("Common path checks support up to 5 targets per run.");
+      return;
+    }
+
+    btnRunPathScan.disabled = true;
+    btnRunPathScan.setAttribute("aria-busy", "true");
+    btnRunPathScan.innerHTML = `<span class="mini-spinner" aria-hidden="true"></span><span>Checking Common Paths…</span>`;
+    networkPathResults.style.display = "block";
+    networkPathResults.innerHTML = `
+      <div class="audit-card path-scan-loading" role="status" aria-live="polite">
+        <span class="mini-spinner" aria-hidden="true"></span>
+        <span>Checking fixed HTTPS paths and same-host redirects. No directory crawling.</span>
+      </div>`;
+
+    try {
+      const resp = await fetch("/api/network/path-scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targets }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "Common path check failed.");
+
+      if (currentScanData) {
+        currentScanData.path_scan = data;
+        renderScanHistory(currentScanData);
+      }
+
+      networkPathResults.innerHTML = data.targets.map(target => {
+        const counts = (target.paths || []).reduce((acc, item) => {
+          acc[item.state] = (acc[item.state] || 0) + 1;
+          return acc;
+        }, {});
+        const pillClass = target.status === "complete" ? "pill-ok" : (target.status === "blocked" ? "pill-fail" : "pill-warn");
+        const rows = (target.paths || []).map(item => {
+          const label = {
+            found: "Available", redirect: "Redirect", restricted: "Restricted", not_found: "Not Found",
+            unavailable: "No Response", response: "HTTP Response",
+          }[item.state] || item.state;
+          const rowClass = item.state === "found" ? "path-state-found" : (item.state === "unavailable" ? "path-state-unavailable" : "");
+          return `<tr>
+            <td><code class="path-name">${escapeHtml(item.path)}</code></td>
+            <td><span class="path-state ${rowClass}">${escapeHtml(label)}</span></td>
+            <td>${item.status_code ? `<code>${item.status_code}</code>` : `<span class="text-muted">—</span>`}</td>
+            <td class="path-evidence">${item.location
+              ? `Redirect location: <code>${escapeHtml(item.location)}</code>${item.redirect_status_code ? ` · same-host check: HTTP ${item.redirect_status_code}` : ""}${item.error ? ` · ${escapeHtml(item.error)}` : ""}`
+              : escapeHtml(item.error || "No additional response details")}</td>
+          </tr>`;
+        }).join("");
+
+        if (currentScanData && target.target.toLowerCase().replace(/\.$/, "") === currentDomain.toLowerCase()) {
+          const coverageEntry = (currentScanData.coverage || []).find(item => item.name === "Common web paths");
+          if (coverageEntry) {
+            coverageEntry.status = target.status === "complete" ? "complete" : "partial";
+            coverageEntry.detail = "Standalone common path and publication-file scan completed";
+            renderScanCoverage(currentScanData.coverage);
+          }
+        }
+
+        return `<section class="audit-card path-scan-card" aria-label="Common web paths for ${escapeHtml(target.target)}">
+          <div class="audit-card-header">
+            <div>
+              <span class="audit-card-title">Website Paths <span class="audit-card-target">${escapeHtml(target.target)}</span></span>
+              <div class="path-scan-summary">${counts.found || 0} available · ${counts.redirect || 0} redirects · ${counts.restricted || 0} restricted</div>
+            </div>
+            <span class="pill ${pillClass}">${target.status === "complete" ? "Complete" : target.status === "blocked" ? "Blocked" : "Partial"}</span>
+          </div>
+          ${target.reason ? `<p class="path-scan-reason">${escapeHtml(target.reason)}</p>` : ""}
+          ${target.advertised_paths?.length ? `<div class="path-advertised-section">
+            <h3>Paths advertised by robots.txt or sitemap <span>${target.advertised_paths.length}</span></h3>
+            <div class="path-advertised-list">${target.advertised_paths.map(item => `<div><code>${escapeHtml(item.path)}</code><span>${escapeHtml(item.source)}${item.review === "review" ? ` · <strong title="${escapeHtml(item.review_reason || "Name merits manual review; no access was attempted.")}">Review</strong>` : ""}</span></div>`).join("")}</div>
+          </div>` : ""}
+          ${rows ? `<div class="records-table-container path-table-container"><table class="records-table path-results-table">
+            <thead><tr><th>Path</th><th>Result</th><th>HTTP</th><th>Details</th></tr></thead><tbody>${rows}</tbody>
+          </table></div>` : `<p class="path-scan-reason">No path requests were sent because this target did not pass the public-scope check.</p>`}
+        </section>`;
+      }).join("");
+    } catch (err) {
+      networkPathResults.innerHTML = `<div class="audit-card path-scan-error" role="alert">${escapeHtml(err.message || "Common path check failed.")}</div>`;
+      showToast(err.message || "Common path check failed.", "danger");
+    } finally {
+      btnRunPathScan.disabled = false;
+      btnRunPathScan.removeAttribute("aria-busy");
+      btnRunPathScan.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <path d="M2 3h12v10H2zM2 6h12M5 3v3" stroke-linejoin="round"/>
+          <path d="M5 9h2m2 0h2m-6 2h2" stroke-linecap="round"/>
+        </svg>
+        <span>Check Common Web Paths</span>`;
+    }
+  });
+}
 
 if (portScanConfirm && btnRunPortScan) {
   portScanConfirm.addEventListener("change", () => {
@@ -2314,11 +2778,12 @@ if (btnRunListScan && listScanInput && networkResults) {
           const tgt = btn.getAttribute("data-target");
           if (tgt) {
             listScanInput.value = tgt;
-            if (portScanConfirm) portScanConfirm.checked = true;
-            if (btnRunPortScan) {
-              btnRunPortScan.disabled = false;
-              btnRunPortScan.click();
+            if (!portScanConfirm?.checked) {
+              showToast("Confirm authorization before probing ports.");
+              portScanConfirm?.focus();
+              return;
             }
+            btnRunPortScan?.click();
           }
         });
       });
