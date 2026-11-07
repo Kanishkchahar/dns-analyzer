@@ -3,7 +3,7 @@
 
 > **Project Author:** Kanishk  
 > **Version:** 2.0 — Security Posture Cockpit Edition  
-> **Tech Stack:** Python 3.11+ · FastAPI · dnspython · Vanilla JS · Jinja2 · Uvicorn · Pytest (112 Automated Tests)  
+> **Tech Stack:** Python 3.11+ · FastAPI · dnspython · Vanilla JS · Jinja2 · Uvicorn · Pytest (125 Automated Tests)  
 
 ---
 
@@ -383,7 +383,7 @@ Here is the exhaustive inventory of all scans performed during each analysis:
 
 ### Category F: Reliability & Code Quality
 * **Q: How do you guarantee stability across Python versions?**  
-  *Answer:* The platform includes an automated test suite of **112 unit and integration tests** running under `pytest`. Tests mock network queries to verify RFC check logic deterministically and test edge cases like dirty URLs, malformed domains, and CNAME loops. Furthermore, `run.sh` features self-healing virtual environment checks that automatically verify Python 3.11+ and rebuild corrupted environments.
+  *Answer:* The platform includes an automated test suite of **125 unit and integration tests** running under `pytest`. Tests mock network queries to verify RFC check logic deterministically and test edge cases like dirty URLs, malformed domains, and CNAME loops. Furthermore, `run.sh` features self-healing virtual environment checks that automatically verify Python 3.11+ and rebuild corrupted environments.
 
 ---
 
@@ -428,7 +428,7 @@ Here is the exhaustive inventory of all scans performed during each analysis:
 | `bash run.sh` | **Recommended:** Auto-setup environment, verify dependencies, and launch server on `http://127.0.0.1:8000` |
 | `bash run.sh <port>` | Launch server on custom port (e.g. `bash run.sh 9000`) |
 | `bash run.sh --docker` | **Docker v2:** Build and run containerized multi-stage service via Docker |
-| `bash run.sh --test` | Run the complete automated test suite (122 tests) |
+| `bash run.sh --test` | Run the complete automated test suite (125 tests) |
 | `bash run.sh --setup-only` | Pre-install dependencies and prepare `venv/` without launching server |
 | `docker run -d -p 8000:8000 kanishkchahar/dns-analyzer:v2` | Run containerized production service directly via Docker |
 | `bash run.sh --help` | Display command usage and script flags |

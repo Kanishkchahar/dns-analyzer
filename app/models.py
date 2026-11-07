@@ -16,6 +16,7 @@ DOMAIN_RE = re.compile(
 
 class AnalyzeRequest(BaseModel):
     domain: str
+    force_refresh: bool = False
 
     @field_validator("domain")
     @classmethod
@@ -109,6 +110,8 @@ class DomainScore(BaseModel):
     score: int
     grade: str
     label: str
+    inconclusive_count: int = 0
+    inconclusive_checks: list[str] = Field(default_factory=list)
     factors: dict[str, DomainFactorScore]
 
 
@@ -136,3 +139,4 @@ class PortScanRequest(BaseModel):
     target: str
     ports: list[int] | None = None
     confirmed: bool = False
+    auth_token: str | None = None

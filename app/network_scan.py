@@ -38,6 +38,34 @@ def is_active_scan_allowed() -> bool:
     return val in ("true", "1", "yes", "enabled")
 
 
+def verify_port_scan_authorization(
+    auth_token: str | None = None,
+    auth_header: str | None = None,
+    target: str = "",
+) -> tuple[bool, str]:
+    """Verify server-side authorization credentials and scope for active port probes."""
+    expected_key = os.environ.get("PORT_SCAN_API_KEY", "").strip()
+    if expected_key:
+        provided = (auth_token or "").strip()
+        if not provided and auth_header:
+            if auth_header.lower().startswith("bearer "):
+                provided = auth_header[7:].strip()
+            else:
+                provided = auth_header.strip()
+        if provided != expected_key:
+            return False, "Access denied: Valid server authorization token (PORT_SCAN_API_KEY) required to run active probes."
+
+    allowed_targets_env = os.environ.get("PORT_SCAN_ALLOWED_DOMAINS", "").strip()
+    if allowed_targets_env:
+        allowed = [d.strip().lower() for d in allowed_targets_env.split(",") if d.strip()]
+        clean_target = target.strip().lower().rstrip(".")
+        if not any(clean_target == a or clean_target.endswith(f".{a}") for a in allowed):
+            return False, f"Target '{clean_target}' is not in approved server scan scope ({', '.join(allowed)})."
+
+    return True, "Authorized"
+
+
+
 async def run_list_scan(
     targets: list[str],
     resolver: dns.asyncresolver.Resolver | None = None,
@@ -113,6 +141,8 @@ async def run_port_scan(
     ports: list[int] | None = None,
     confirmed: bool = False,
     timeout: float = 1.5,
+    auth_token: str | None = None,
+    auth_header: str | None = None,
 ) -> dict[str, Any]:
     """Execute scoped, opt-in port and service verification on approved target."""
     if not is_active_scan_allowed():
@@ -120,6 +150,11 @@ async def run_port_scan(
             "status": "disabled",
             "message": "Active port scanning is disabled by server deployment policy. Enable server-side authorization via ENABLE_ACTIVE_PORT_SCAN=true.",
         }
+
+    auth_ok, auth_msg = verify_port_scan_authorization(auth_token, auth_header, target)
+    if not auth_ok:
+        return {"status": "unauthorized", "message": auth_msg}
+
 
     target_ports = sorted(list(set(ports or list(STANDARD_PORTS.keys()))))
 

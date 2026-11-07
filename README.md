@@ -30,7 +30,7 @@ bash run.sh 9000
 bash run.sh --setup-only
 ```
 
-#### Automated Test Suite (122 Automated Tests)
+#### Automated Test Suite (125 Automated Tests)
 
 ```bash
 bash run.sh --test
@@ -55,7 +55,7 @@ docker run -d --name dns-analyzer-v2 --restart unless-stopped -p 8000:8000 kanis
 #### Option B: Build & Run Locally
 
 ```bash
-# Build the multi-stage production image (automatically runs 112 pytest checks during build)
+# Build the multi-stage production image (automatically runs 125 pytest checks during build)
 docker build -t dns-analyzer:v2 .
 
 # Run container on port 8000
@@ -153,7 +153,7 @@ dns-analyzer/
 │   ├── index.html           # Dashboard UI with Asymmetric Bento Grid Cockpit
 │   ├── style.css            # Geist design tokens, dark mode, responsive styles
 │   └── app.js               # Vanilla JS controller, tab navigation, SVG score ring
-├── tests/                   # Complete automated test suite (112 tests)
+├── tests/                   # Complete automated test suite (125 tests)
 │   ├── conftest.py          # Shared fixtures, mock DNS resolvers & network mocks
 │   ├── test_models.py       # Domain sanitization & Pydantic models
 │   ├── test_analyzer.py     # 9 RFC infrastructure checks & summary tests
@@ -252,7 +252,7 @@ Returns a self-contained `.html` file with embedded CSS, fully viewable offline.
 
 ## 🧪 Testing
 
-The platform features an automated test suite with **122 unit and integration tests**:
+The platform features an automated test suite with **125 unit and integration tests**:
 
 ```bash
 # Run via all-in-one runner:

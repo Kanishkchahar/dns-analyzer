@@ -33,6 +33,14 @@ class TestTLSUtilities:
         safe, _ = is_safe_ip("169.254.169.254")
         assert safe is False
 
+        # Non-global / CGNAT / documentation IPs
+        safe, reason = is_safe_ip("100.64.0.1")
+        assert safe is False
+        assert "Non-globally routable" in reason
+
+        safe, _ = is_safe_ip("192.0.2.1")
+        assert safe is False
+
         # Public IPs are approved
         safe, _ = is_safe_ip("93.184.216.34")
         assert safe is True

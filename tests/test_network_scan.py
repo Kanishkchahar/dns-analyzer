@@ -51,3 +51,22 @@ class TestNetworkScan:
         assert res_invalid["status"] == "error"
         assert "Invalid port number" in res_invalid["message"]
 
+    async def test_port_scan_authorization_and_domain_scope(self, monkeypatch):
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        monkeypatch.setenv("PORT_SCAN_API_KEY", "secret-token-123")
+        monkeypatch.setenv("PORT_SCAN_ALLOWED_DOMAINS", "example.com, target.org")
+
+        # Missing token
+        res = await run_port_scan("example.com", ports=[80], confirmed=True)
+        assert res["status"] == "unauthorized"
+        assert "API_KEY" in res["message"]
+
+        # Invalid token
+        res_bad_tok = await run_port_scan("example.com", ports=[80], confirmed=True, auth_token="wrong-token")
+        assert res_bad_tok["status"] == "unauthorized"
+
+        # Disallowed target scope even with valid token
+        res_bad_scope = await run_port_scan("malicious.com", ports=[80], confirmed=True, auth_token="secret-token-123")
+        assert res_bad_scope["status"] == "unauthorized"
+        assert "not in approved server scan scope" in res_bad_scope["message"]
+

@@ -71,6 +71,8 @@ def is_safe_ip(ip_str: str) -> tuple[bool, str]:
         return False, "Reserved or unspecified address blocked"
     if str(ip) == "169.254.169.254":
         return False, "Cloud instance metadata endpoint blocked"
+    if not ip.is_global:
+        return False, "Non-globally routable address (CGNAT, documentation, or reserved range) blocked"
 
     return True, "Public IP"
 
@@ -182,6 +184,12 @@ async def audit_tls_and_https(
         ))
     except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
         # Port 443 is unreachable or connection timed out
+        result["scanned"] = False
+        findings.append(Finding(
+            severity="info",
+            record_type="TLS",
+            message=f"TLS/HTTPS audit on port {port} was inconclusive: target host was unreachable or timed out.",
+        ))
         return result, findings
     except Exception:
         pass

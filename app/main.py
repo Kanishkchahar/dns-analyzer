@@ -3,6 +3,7 @@
 import asyncio
 from datetime import datetime, timezone
 import logging
+import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -51,15 +52,17 @@ app = FastAPI(title="DNS Analyzer", version="2.0.0")
 # Concurrency & runtime throttle budgets
 SCAN_SEMAPHORE = asyncio.Semaphore(8)
 SCAN_TIMEOUT_SECONDS = 15.0
+SEMAPHORE_WAIT_TIMEOUT = 3.0
 
 # In-memory recent scan cache (TTL 60s, max 128 domains) to prevent redundant queries
 _SCAN_CACHE: dict[str, tuple[float, AnalyzeResponse]] = {}
 _SCAN_CACHE_TTL = 60.0
 
-# In-memory client rate limiter (60 requests per minute per IP)
+# In-memory client rate limiter (60 requests per minute per IP, bounded to 2048 client records)
 _CLIENT_REQUESTS: dict[str, list[float]] = {}
 _RATE_WINDOW = 60.0
 _MAX_REQ_PER_WINDOW = 60
+_MAX_TRACKED_IPS = 2048
 
 
 def _get_cached_scan(domain: str) -> AnalyzeResponse | None:
@@ -80,20 +83,46 @@ def _store_cached_scan(domain: str, response: AnalyzeResponse) -> None:
     _SCAN_CACHE[domain] = (now, response)
 
 
+def _extract_client_ip(request: Request) -> str:
+    """Extract client IP, inspecting X-Forwarded-For only if proxy trust is enabled."""
+    trust_proxy = os.environ.get("TRUST_REVERSE_PROXY", "false").strip().lower() in ("true", "1", "yes")
+    if trust_proxy and "x-forwarded-for" in request.headers:
+        forwarded = request.headers["x-forwarded-for"].split(",")
+        if forwarded:
+            return forwarded[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 def _enforce_rate_limit(request: Request) -> None:
-    client_ip = request.client.host if request.client else "unknown"
-    if client_ip in ("127.0.0.1", "testclient"):
+    client_ip = _extract_client_ip(request)
+    # Unit tests bypass artificial rate limit
+    if os.environ.get("TESTING") == "true" or client_ip == "testclient":
         return
+
     now = asyncio.get_running_loop().time()
-    reqs = _CLIENT_REQUESTS.setdefault(client_ip, [])
     cutoff = now - _RATE_WINDOW
+
+    # Bounded cache cleanup: purge stale IP records if table exceeds limit
+    if len(_CLIENT_REQUESTS) > _MAX_TRACKED_IPS:
+        stale_keys = [ip for ip, timestamps in _CLIENT_REQUESTS.items() if not timestamps or timestamps[-1] <= cutoff]
+        for ip in stale_keys:
+            del _CLIENT_REQUESTS[ip]
+        if len(_CLIENT_REQUESTS) > _MAX_TRACKED_IPS:
+            for ip in list(_CLIENT_REQUESTS.keys())[:512]:
+                del _CLIENT_REQUESTS[ip]
+
+    reqs = _CLIENT_REQUESTS.setdefault(client_ip, [])
     _CLIENT_REQUESTS[client_ip] = [t for t in reqs if t > cutoff]
-    if len(_CLIENT_REQUESTS[client_ip]) >= _MAX_REQ_PER_WINDOW:
+
+    # Limit: 60 req/min for public clients, 120 req/min for local loopback
+    max_reqs = 120 if client_ip == "127.0.0.1" else _MAX_REQ_PER_WINDOW
+    if len(_CLIENT_REQUESTS[client_ip]) >= max_reqs:
         raise HTTPException(
             status_code=429,
             detail="Rate limit exceeded. Please wait a moment before sending additional requests.",
         )
     _CLIENT_REQUESTS[client_ip].append(now)
+
 
 
 

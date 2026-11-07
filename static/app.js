@@ -759,7 +759,12 @@ function renderBentoCockpit(data) {
   if (heroSubtitle) {
     const errs = data.summary?.errors || 0;
     const warns = data.summary?.warnings || 0;
-    const inconcl = (data.domain_score?.inconclusive_count || 0) + (data.summary?.inconclusive || 0);
+    const inconcl = typeof data.domain_score?.inconclusive_count === "number"
+      ? data.domain_score.inconclusive_count
+      : (data.summary?.inconclusive || 0);
+    const checkNames = (data.domain_score?.inconclusive_checks && data.domain_score.inconclusive_checks.length > 0)
+      ? `: ${data.domain_score.inconclusive_checks.join(", ")}`
+      : "";
     const labelPrefix = data.domain_score?.label ? `${data.domain_score.label} · ` : "";
     if (errs > 0) {
       heroSubtitle.textContent = `${labelPrefix}${errs} Critical Issue${errs === 1 ? "" : "s"} Detected`;
@@ -768,7 +773,7 @@ function renderBentoCockpit(data) {
       heroSubtitle.textContent = `${labelPrefix}${warns} Warning${warns === 1 ? "" : "s"} — Review Advised`;
       heroSubtitle.style.color = "var(--warning)";
     } else if (inconcl > 0) {
-      heroSubtitle.textContent = `${labelPrefix}Base Checks Passed (${inconcl} Check${inconcl === 1 ? "" : "s"} Inconclusive/Unverified)`;
+      heroSubtitle.textContent = `${labelPrefix}Base Checks Passed (${inconcl} Check${inconcl === 1 ? "" : "s"} Inconclusive${checkNames})`;
       heroSubtitle.style.color = "var(--accent)";
     } else {
       heroSubtitle.textContent = `${labelPrefix}All Audited Systems Authenticated & Safe`;

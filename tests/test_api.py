@@ -193,3 +193,36 @@ class TestAPIEndpoints:
             assert resp.status_code == 200
             assert resp.json()["domain"] == "example.com"
 
+    def test_extract_client_ip_proxy_trust(self, monkeypatch):
+        from app.main import _extract_client_ip
+        from starlette.requests import Request
+
+        # Case 1: Proxy trust disabled (default)
+        monkeypatch.delenv("TRUST_REVERSE_PROXY", raising=False)
+        req_scope = {
+            "type": "http",
+            "client": ("192.168.1.50", 12345),
+            "headers": [(b"x-forwarded-for", b"203.0.113.195, 10.0.0.1")],
+        }
+        req = Request(req_scope)
+        assert _extract_client_ip(req) == "192.168.1.50"
+
+        # Case 2: Proxy trust enabled
+        monkeypatch.setenv("TRUST_REVERSE_PROXY", "true")
+        assert _extract_client_ip(req) == "203.0.113.195"
+
+    async def test_force_refresh_bypasses_cache(self, mock_dns_system):
+        from app.main import _store_cached_scan, run_full_scan
+        with patch("dns.asyncresolver.Resolver", return_value=mock_dns_system):
+            scan_obj = await run_full_scan("example.com")
+            _store_cached_scan("example.com", scan_obj)
+
+        with patch("app.main.run_full_scan", return_value=scan_obj) as mock_full_scan:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                # With force_refresh=True, run_full_scan must be called despite cache
+                resp = await client.post("/api/analyze", json={"domain": "example.com", "force_refresh": True})
+            assert resp.status_code == 200
+            assert mock_full_scan.call_count == 1
+
+
