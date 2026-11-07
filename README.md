@@ -40,7 +40,7 @@ bash run.sh --test
 
 ---
 
-### Run with Docker v2 & Docker Compose
+### Run with Docker
 
 #### Option A: Pull & Run Directly from Docker Hub
 
@@ -49,53 +49,30 @@ bash run.sh --test
 docker pull kanishkchahar/dns-analyzer:v2
 
 # Run container on port 8000
-docker run --rm -d -p 8000:8000 --name dns-analyzer-v2 kanishkchahar/dns-analyzer:v2
+docker run -d --name dns-analyzer-v2 --restart unless-stopped -p 8000:8000 kanishkchahar/dns-analyzer:v2
 ```
 
-#### Option B: Docker Compose v2 (Recommended for local dev & orchestration)
-
-Start the production service with health checks and resource limits:
+#### Option B: Build & Run Locally
 
 ```bash
-docker compose up -d
-```
-
-View real-time logs:
-
-```bash
-docker compose logs -f
-```
-
-Run test suite verification inside the container:
-
-```bash
-docker compose --profile test run --rm test
-```
-
-Stop the container:
-
-```bash
-docker compose down
-```
-
-#### Option C: Standalone Local Docker v2 Build
-
-Build the multi-stage production image (`v2`):
-
-```bash
+# Build the multi-stage production image (automatically runs 112 pytest checks during build)
 docker build -t dns-analyzer:v2 .
+
+# Run container on port 8000
+docker run -d --name dns-analyzer-v2 --restart unless-stopped -p 8000:8000 dns-analyzer:v2
 ```
 
-Run containerized on port 8000:
+#### Container Management:
 
 ```bash
-docker run --rm -d -p 8000:8000 --name dns-analyzer-v2 dns-analyzer:v2
-```
+# View real-time container logs
+docker logs -f dns-analyzer-v2
 
-Map to any custom host port (e.g. 9000):
+# Run automated tests inside the container
+docker run --rm dns-analyzer:v2 pytest -v
 
-```bash
-docker run --rm -d -p 9000:8000 -e PORT=8000 --name dns-analyzer-v2 dns-analyzer:v2
+# Stop and remove the container
+docker stop dns-analyzer-v2 && docker rm dns-analyzer-v2
 ```
 
 ---
@@ -192,7 +169,6 @@ dns-analyzer/
 │   ├── test_tls_check.py    # TLS certificate, protocol & header tests
 │   ├── test_network_scan.py # SSRF protection, list scan & port tests
 │   └── test_api.py          # FastAPI endpoints integration tests
-├── docker-compose.yml       # Production service & test profile orchestration
 ├── Dockerfile               # Secure multi-stage build (distroless runtime & test target)
 ├── .dockerignore            # Container build exclusion rules
 ├── pytest.ini               # Pytest discovery and warning configuration

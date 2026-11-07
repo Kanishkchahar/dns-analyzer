@@ -4,7 +4,7 @@
 # Usage:
 #   bash run.sh              # Auto-setup (if needed) & start on port 8000
 #   bash run.sh 9000         # Auto-setup & start on custom port 9000
-#   bash run.sh --docker     # Launch via Docker Compose v2 (isolated container)
+#   bash run.sh --docker     # Build & launch container via Docker
 #   bash run.sh --test       # Run the 112-test automated test suite
 #   bash run.sh --setup-only # Run setup/dependency install only
 #   bash run.sh --help       # Display help reference
@@ -40,7 +40,7 @@ for arg in "$@"; do
     echo "Usage:"
     echo "  bash run.sh              Start server on http://127.0.0.1:8000"
     echo "  bash run.sh <port>       Start server on custom port (e.g., 9000)"
-    echo "  bash run.sh --docker, -d Launch production service via Docker Compose v2"
+    echo "  bash run.sh --docker, -d Build & launch containerized service via Docker"
     echo "  bash run.sh --test, -t   Run the 112 automated pytest suite"
     echo "  bash run.sh --setup-only Prepare virtual environment without running server"
     echo "  bash run.sh --help, -h   Show this help message"
@@ -58,12 +58,14 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 
 if [ "$RUN_DOCKER" = true ]; then
-  echo -e "  ${CYAN}➜ Starting DNS Analyzer v2 container via Docker Compose...${NC}"
-  docker compose up -d --build
+  echo -e "  ${CYAN}➜ Building and starting DNS Analyzer v2 container via Docker...${NC}"
+  docker build -t kanishkchahar/dns-analyzer:v2 .
+  docker rm -f dns-analyzer-v2 2>/dev/null || true
+  docker run -d --name dns-analyzer-v2 --restart unless-stopped -p "${PORT:-8000}:8000" kanishkchahar/dns-analyzer:v2
   echo ""
   echo -e "  ${GREEN}✔ Container running on http://127.0.0.1:${PORT:-8000}/${NC}"
-  echo -e "  To view logs:  ${YELLOW}docker compose logs -f${NC}"
-  echo -e "  To stop:       ${YELLOW}docker compose down${NC}"
+  echo -e "  To view logs:  ${YELLOW}docker logs -f dns-analyzer-v2${NC}"
+  echo -e "  To stop:       ${YELLOW}docker stop dns-analyzer-v2${NC}"
   echo ""
   exit 0
 fi

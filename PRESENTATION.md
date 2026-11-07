@@ -427,9 +427,8 @@ Here is the exhaustive inventory of all scans performed during each analysis:
 |:---|:---|
 | `bash run.sh` | **Recommended:** Auto-setup environment, verify dependencies, and launch server on `http://127.0.0.1:8000` |
 | `bash run.sh <port>` | Launch server on custom port (e.g. `bash run.sh 9000`) |
-| `bash run.sh --docker` | **Docker v2:** Build and run containerized multi-stage service via Docker Compose v2 |
+| `bash run.sh --docker` | **Docker v2:** Build and run containerized multi-stage service via Docker |
 | `bash run.sh --test` | Run the complete automated test suite (112 tests) |
 | `bash run.sh --setup-only` | Pre-install dependencies and prepare `venv/` without launching server |
-| `docker compose up -d` | Launch production container in background with healthchecks & resource limits |
-| `docker compose --profile test run --rm test` | Execute test runner container profile |
+| `docker run -d -p 8000:8000 kanishkchahar/dns-analyzer:v2` | Run containerized production service directly via Docker |
 | `bash run.sh --help` | Display command usage and script flags |
