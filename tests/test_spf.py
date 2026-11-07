@@ -184,6 +184,31 @@ class TestSPFAsyncOperations:
         assert res3["flattened_record"] is None
         assert "uses qualifier '-'" in res3["reason"]
 
+        # 4. Included record with +all
+        root_inc_rr = MockRR(strings=[b"v=spf1 include:partner.com -all"])
+        partner_all_rr = MockRR(strings=[b"v=spf1 ip4:1.2.3.4 +all"])
+        res4 = await flatten_spf("example.com", MockResolver({
+            ("example.com", "TXT"): MockAnswer([root_inc_rr]),
+            ("partner.com", "TXT"): MockAnswer([partner_all_rr]),
+        }))
+        assert res4["can_flatten"] is False
+        assert res4["flattened_record"] is None
+        assert "+all" in res4["reason"]
+
+        # 5. Failed A resolution
+        root_a_rr = MockRR(strings=[b"v=spf1 a:missing.example.com -all"])
+        res5 = await flatten_spf("example.com", MockResolver({("example.com", "TXT"): MockAnswer([root_a_rr])}))
+        assert res5["can_flatten"] is False
+        assert res5["flattened_record"] is None
+        assert "failed to resolve A/AAAA IP addresses" in res5["reason"]
+
+        # 6. Failed MX resolution
+        root_mx_rr = MockRR(strings=[b"v=spf1 mx:missing.example.com -all"])
+        res6 = await flatten_spf("example.com", MockResolver({("example.com", "TXT"): MockAnswer([root_mx_rr])}))
+        assert res6["can_flatten"] is False
+        assert res6["flattened_record"] is None
+        assert "failed to resolve MX" in res6["reason"]
+
     async def test_count_spf_lookups_shared_includes_evaluated(self):
         # Branch 1 and Branch 2 both include shared.com
         root_txt = MockRR(strings=[b"v=spf1 include:branch1.com include:branch2.com -all"])

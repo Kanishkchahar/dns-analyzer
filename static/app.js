@@ -659,15 +659,15 @@ function updateTabBadges(data) {
   const threatsPill = document.getElementById("overview-threats-pill");
   const threatsDesc = document.getElementById("overview-threats-desc");
   const isTakeoverVuln = Boolean(data.security?.takeover?.vulnerable);
-  const isDnssecSecured = data.security?.dnssec?.status === "secured";
+  const isDnssecDelegationVerified = data.security?.dnssec?.status === "delegation_match_verified";
 
   if (threatsBadge) {
     threatsBadge.className = "tab-badge";
     if (isTakeoverVuln) {
       threatsBadge.textContent = "Alert";
       threatsBadge.classList.add("badge-red");
-    } else if (isDnssecSecured) {
-      threatsBadge.textContent = "Secured";
+    } else if (isDnssecDelegationVerified) {
+      threatsBadge.textContent = "Verified";
       threatsBadge.classList.add("badge-green");
     } else {
       threatsBadge.textContent = "Audit";
@@ -887,9 +887,9 @@ function renderBentoCockpit(data) {
     const takeover = data.security?.takeover;
 
     let dnssecText = "Unsigned Zone", dnssecClass = "warn";
-    if (dnssec?.status === "secured") {
+    if (dnssec?.status === "delegation_match_verified") {
       const algo = dnssec.keys?.[0]?.algorithm || "Standard";
-      dnssecText = `Signed (${algo})`; dnssecClass = "ok";
+      dnssecText = `DS Match (${algo})`; dnssecClass = "ok";
     } else if (dnssec?.status === "incomplete_chain") {
       dnssecText = "Incomplete DS Chain"; dnssecClass = "warn";
     } else if (dnssec?.status === "bogus") {
@@ -909,8 +909,8 @@ function renderBentoCockpit(data) {
     let headline, statusClass = "ok", statusText = "Secured";
     if (takeover?.vulnerable) {
       headline = "Takeover Risk Detected"; statusClass = "danger"; statusText = "Vulnerable";
-    } else if (dnssec?.status === "secured") {
-      headline = "Hardened Against Hijacking";
+    } else if (dnssec?.status === "delegation_match_verified") {
+      headline = "Delegation Match Verified"; statusText = "DS Verified";
     } else {
       headline = "Partially Protected"; statusClass = "warn"; statusText = "Unsigned";
     }
@@ -1483,15 +1483,15 @@ function renderSecuritySuite(security) {
   // 1. DNSSEC Card
   if (security.dnssec) {
     const sec = security.dnssec;
-    const isOk = sec.status === "secured";
-    const pill = isOk
-      ? `<span class="pill pill-ok">Secured</span>`
-      : (sec.status === "bogus" ? `<span class="pill pill-fail">Bogus</span>` : `<span class="pill pill-warn">Unsigned</span>`);
+    const isDelegationVerified = sec.status === "delegation_match_verified";
+    const pill = isDelegationVerified
+          ? `<span class="pill pill-ok">Delegation Verified</span>`
+          : (sec.status === "bogus" ? `<span class="pill pill-fail">Bogus</span>` : `<span class="pill pill-warn">Unsigned</span>`);
 
     let desc = "Protects against DNS cache poisoning (Kaminsky attacks) and spoofing.";
-    if (isOk) {
+    if (isDelegationVerified) {
       const algo = sec.keys && sec.keys[0] ? sec.keys[0].algorithm : "Standard";
-      desc = `Cryptographically signed zone using ${algo}. DS record validated at parent registry.`;
+      desc = `Parent DS record matches published DNSKEY digest (${algo}). Parent-child delegation link verified; full RRSIG root anchor chain unvalidated.`;
     } else if (sec.status === "incomplete_chain") {
       desc = "DNSKEY exists in zone, but missing DS delegation in parent registrar.";
     }
@@ -1504,7 +1504,7 @@ function renderSecuritySuite(security) {
           <span class="sec-card-title">🔐 DNSSEC Validation <span class="info-badge" title="Cryptographically signs DNS records to prevent spoofing and cache poisoning.">?</span></span>
           ${pill}
         </div>
-        <div class="sec-card-status">${isOk ? "Cryptographically Authenticated" : "Not Authenticated"}</div>
+        <div class="sec-card-status">${isDelegationVerified ? "Delegation Link Verified" : "Not Authenticated"}</div>
         <div class="sec-card-desc">${escapeHtml(desc)}</div>
       </div>
       <div style="margin-top:12px; font-size:11px; color:var(--text-muted); font-family:'Geist Mono', monospace;">
@@ -2352,14 +2352,59 @@ if (btnRunPortScan && listScanInput && networkResults) {
     btnRunPortScan.disabled = true;
     btnRunPortScan.textContent = "Probing Standard Ports...";
 
+    const authToken = document.getElementById("port-scan-auth-token")?.value?.trim() || null;
+
     try {
       const resp = await fetch("/api/network/port-scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target: firstTarget, confirmed: true }),
+        body: JSON.stringify({
+          target: firstTarget,
+          confirmed: true,
+          auth_token: authToken,
+        }),
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.detail || "Port scan failed.");
+
+      if (data.status !== "completed") {
+        networkResults.style.display = "block";
+        let pillClass = "pill-warn", titleText = "Active Scan Refused";
+        if (data.status === "disabled") {
+          pillClass = "pill-info";
+          titleText = "Active Probes Disabled";
+        } else if (data.status === "unauthorized") {
+          pillClass = "pill-warn";
+          titleText = "Authorization Required";
+        } else if (data.status === "blocked") {
+          pillClass = "pill-fail";
+          titleText = "Blocked by SSRF Guard";
+        } else if (data.status === "confirmation_required") {
+          pillClass = "pill-warn";
+          titleText = "Confirmation Required";
+        }
+
+        networkResults.innerHTML = `
+          <div class="audit-card">
+            <div class="audit-card-header">
+              <span class="audit-card-title">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                  <circle cx="7" cy="7" r="5"/>
+                  <path d="M11 11l3.5 3.5" stroke-linecap="round"/>
+                </svg>
+                ${escapeHtml(titleText)}: <span class="audit-card-target">${escapeHtml(data.target || firstTarget)}</span>
+              </span>
+              <span class="pill ${pillClass}">
+                Status: ${escapeHtml(data.status)}
+              </span>
+            </div>
+            <div style="padding: 16px 20px; font-size: 13px; color: var(--text-secondary); line-height: 1.5;">
+              ${escapeHtml(data.message || "Active port scanning could not be executed for this target.")}
+            </div>
+          </div>
+        `;
+        return;
+      }
 
       networkResults.style.display = "block";
       networkResults.innerHTML = `

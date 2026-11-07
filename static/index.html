@@ -417,13 +417,23 @@
                   <input type="checkbox" id="port-scan-confirm" class="scope-checkbox" />
                   <span>I confirm I am authorized to probe standard service ports on these approved targets.</span>
                 </label>
-                <button class="btn btn-secondary" id="btn-run-port-scan" type="button" disabled>
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                    <circle cx="7" cy="7" r="5"/>
-                    <path d="M11 11l3.5 3.5" stroke-linecap="round"/>
-                  </svg>
-                  <span>Verify Standard Ports</span>
-                </button>
+                <div class="port-scan-auth-row" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+                  <input
+                    type="password"
+                    id="port-scan-auth-token"
+                    class="search-input"
+                    style="font-size:12px; padding:6px 10px; width:280px; height:34px;"
+                    placeholder="API Key (if required by server policy)"
+                    autocomplete="off"
+                  />
+                  <button class="btn btn-secondary" id="btn-run-port-scan" type="button" disabled>
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                      <circle cx="7" cy="7" r="5"/>
+                      <path d="M11 11l3.5 3.5" stroke-linecap="round"/>
+                    </svg>
+                    <span>Verify Standard Ports</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>

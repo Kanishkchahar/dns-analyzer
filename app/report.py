@@ -266,13 +266,22 @@ _TEMPLATE = """<!DOCTYPE html>
   <h2>🛡️ Advanced Security &amp; Threat Defense</h2>
   <div class="auth-card">
     <div class="auth-card-title">
-      {% if security.dnssec and security.dnssec.enabled %}<span class="pill pill-ok">Secured</span>{% else %}<span class="pill pill-warn">Unsigned</span>{% endif %}
+      {% if security.dnssec and security.dnssec.status == 'delegation_match_verified' %}<span class="pill pill-ok">Delegation Verified</span>
+      {% elif security.dnssec and security.dnssec.status == 'incomplete_chain' %}<span class="pill pill-warn">Incomplete Chain</span>
+      {% elif security.dnssec and security.dnssec.status == 'bogus' %}<span class="pill pill-fail">Bogus</span>
+      {% else %}<span class="pill pill-warn">Unsigned</span>{% endif %}
       DNSSEC Validation
     </div>
     <div class="auth-card-row">
       <span class="auth-card-key">Status</span>
       <span class="auth-card-val">{{ security.dnssec.status }}</span>
     </div>
+    {% if security.dnssec and security.dnssec.status == 'delegation_match_verified' %}
+    <div class="auth-card-row">
+      <span class="auth-card-key">Validation Scope</span>
+      <span class="auth-card-val">DS-to-DNSKEY match verified; RRSIG and root trust-anchor chain not validated</span>
+    </div>
+    {% endif %}
     <div class="auth-card-row">
       <span class="auth-card-key">DNSKEY / DS Records</span>
       <span class="auth-card-val">{{ security.dnssec.dnskey_count }} keys / {{ security.dnssec.ds_count }} DS</span>

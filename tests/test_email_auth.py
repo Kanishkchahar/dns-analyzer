@@ -167,11 +167,11 @@ class TestEmailScore:
         }
         dns_findings = [Finding(severity="info", record_type="A", message="IPv4 resolves")]
         email_score = {"score": 100, "grade": "A+", "label": "Excellent"}
-        dnssec_data = {"status": "secured", "enabled": True}
+        dnssec_data = {"status": "delegation_match_verified", "enabled": True}
         takeover_data = {"vulnerable": False, "status": "safe"}
 
         domain_score = compute_domain_score(records, dns_findings, email_score, dnssec_data, takeover_data)
-        assert domain_score["score"] == 100
+        assert domain_score["score"] == 96
         assert domain_score["grade"] == "A+"
         assert "infrastructure" in domain_score["factors"]
         assert "email_auth" in domain_score["factors"]
@@ -179,7 +179,7 @@ class TestEmailScore:
         assert "threats" in domain_score["factors"]
         assert domain_score["factors"]["infrastructure"]["score"] == 25
         assert domain_score["factors"]["email_auth"]["score"] == 35
-        assert domain_score["factors"]["dnssec"]["score"] == 20
+        assert domain_score["factors"]["dnssec"]["score"] == 16
         assert domain_score["factors"]["threats"]["score"] == 20
 
     def test_compute_domain_score_threat_deduction(self):
@@ -193,3 +193,14 @@ class TestEmailScore:
         assert domain_score["factors"]["threats"]["score"] == 0
         assert domain_score["factors"]["threats"]["status"] == "critical"
         assert domain_score["score"] < 60
+
+    def test_compute_domain_score_dnssec_delegation_match_scored_separately(self):
+        records = {"A": {"status": "ok", "records": ["93.184.216.34"]}}
+        email_score = {"score": 100, "grade": "A+", "label": "Excellent"}
+        dnssec_data = {"status": "delegation_match_verified", "enabled": False}
+        takeover_data = {"vulnerable": False, "status": "safe"}
+
+        domain_score = compute_domain_score(records, [], email_score, dnssec_data, takeover_data)
+        assert domain_score["factors"]["dnssec"]["score"] == 16
+        assert domain_score["factors"]["dnssec"]["status"] == "delegation_match_verified"
+        assert "DNSSEC Root Anchor & RRSIG Validation" in domain_score["inconclusive_checks"]

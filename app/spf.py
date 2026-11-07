@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 import dns.asyncresolver
+import dns.resolver
 import dns.exception
 
 from app.models import Finding
@@ -111,7 +112,10 @@ def parse_spf(txt_records: list[str]) -> dict[str, Any] | None:
         mechanisms.append(parsed)
 
         if parsed["type"] == "all":
-            all_mechanism = f"{parsed['qualifier']}all"
+            # Evaluation stops at the first matching all mechanism. Keep that
+            # first one so flattening can preserve its qualifier and position.
+            if all_mechanism is None:
+                all_mechanism = f"{parsed['qualifier']}all"
         elif parsed["type"] == "redirect":
             redirect = parsed["value"]
         elif parsed["type"] == "include" and parsed["value"]:
@@ -353,9 +357,18 @@ async def _flatten_terms_recursive(
         value = mech["value"]
 
         if mtype == "all":
-            # For top-level, all is appended at the very end.
-            # For included records, RFC 7208 specifies that the included record's 'all'
-            # mechanism is ignored by the calling record.
+            if not is_top and qualifier == "+":
+                return (
+                    False,
+                    f"Cannot safely flatten '{domain}': included domain specifies '+all' (matches all senders); flattening would alter evaluation policy.",
+                )
+            if is_top:
+                # Later mechanisms are unreachable after a top-level all.
+                # The caller appends this first all qualifier to the result.
+                break
+            # For included records with -all, ~all, or ?all, RFC 7208 §5.2 specifies
+            # that non-matching senders return Fail/SoftFail/Neutral to the include caller,
+            # which does not match and falls through to the caller's next mechanism.
             continue
 
         if qualifier != "+":
@@ -382,14 +395,18 @@ async def _flatten_terms_recursive(
             terms.append(f"ip6:{value}")
         elif mtype == "a":
             target = value or domain
-            a_ips, aaaa_ips = await _resolve_host_ips(target, resolver)
+            a_ips, aaaa_ips, a_err = await _resolve_host_ips(target, resolver)
+            if a_err or (not a_ips and not aaaa_ips):
+                return False, f"Cannot safely flatten '{domain}': failed to resolve A/AAAA IP addresses for 'a:{target}' ({a_err or 'no records found'})."
             for ip in a_ips:
                 terms.append(f"ip4:{ip}")
             for ip in aaaa_ips:
                 terms.append(f"ip6:{ip}")
         elif mtype == "mx":
             target = value or domain
-            mx_a_ips, mx_aaaa_ips = await _resolve_mx_ips(target, resolver)
+            mx_a_ips, mx_aaaa_ips, mx_err = await _resolve_mx_ips(target, resolver)
+            if mx_err or (not mx_a_ips and not mx_aaaa_ips):
+                return False, f"Cannot safely flatten '{domain}': failed to resolve MX mail host IP addresses for 'mx:{target}' ({mx_err or 'no records found'})."
             for ip in mx_a_ips:
                 terms.append(f"ip4:{ip}")
             for ip in mx_aaaa_ips:
@@ -409,44 +426,56 @@ async def _flatten_terms_recursive(
 async def _resolve_host_ips(
     host: str,
     resolver: dns.asyncresolver.Resolver,
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], str | None]:
     a_ips: list[str] = []
     aaaa_ips: list[str] = []
+    errors: list[str] = []
     try:
         answer = await resolver.resolve(host, "A")
         for rr in answer:
             a_ips.append(rr.address)
-    except Exception:
-        pass
+    except dns.resolver.NoAnswer:
+        pass  # A query succeeded; this name has no A records.
+    except Exception as exc:
+        errors.append(f"A lookup failed: {exc}")
 
     try:
         answer = await resolver.resolve(host, "AAAA")
         for rr in answer:
             aaaa_ips.append(rr.address)
-    except Exception:
-        pass
-    return a_ips, aaaa_ips
+    except dns.resolver.NoAnswer:
+        pass  # A query succeeded; this name has no AAAA records.
+    except Exception as exc:
+        errors.append(f"AAAA lookup failed: {exc}")
+
+    err = "; ".join(errors) if errors else None
+    return a_ips, aaaa_ips, err
 
 
 async def _resolve_mx_ips(
     domain: str,
     resolver: dns.asyncresolver.Resolver,
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], str | None]:
     hosts: list[str] = []
     try:
         answer = await resolver.resolve(domain, "MX")
-        hosts = [str(rr.exchange).rstrip(".") for rr in answer]
-    except Exception:
-        return [], []
+        hosts = [str(rr.exchange).rstrip(".") for rr in answer if str(rr.exchange).strip() != "."]
+    except Exception as exc:
+        return [], [], f"MX lookup failed: {exc}"
+
+    if not hosts:
+        return [], [], f"No MX hosts configured on '{domain}'"
 
     all_a: list[str] = []
     all_aaaa: list[str] = []
     tasks = [_resolve_host_ips(h, resolver) for h in hosts]
     results = await asyncio.gather(*tasks)
-    for a_list, aaaa_list in results:
+    for a_list, aaaa_list, err in results:
+        if err or (not a_list and not aaaa_list):
+            return [], [], f"Failed resolving mail exchange host: {err or 'no IPs'}"
         all_a.extend(a_list)
         all_aaaa.extend(aaaa_list)
-    return all_a, all_aaaa
+    return all_a, all_aaaa, None
 
 
 # ---------------------------------------------------------------------------

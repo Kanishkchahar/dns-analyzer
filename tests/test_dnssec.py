@@ -8,7 +8,7 @@ from tests.conftest import MockAnswer, MockResolver, MockRR
 
 @pytest.mark.asyncio
 class TestDNSSEC:
-    async def test_dnssec_secured_status(self):
+    async def test_dnssec_delegation_match_status(self):
         # KSK flag = 257 (bit 15 set: 257 & 1 == 1)
         dnskey_rr = MockRR(flags=257, protocol=3, algorithm=13)
         ds_rr = MockRR(key_tag=12345, algorithm=13, digest_type=2)
@@ -19,7 +19,8 @@ class TestDNSSEC:
         })
 
         data, findings = await check_dnssec("example.com", resolver)
-        assert data["status"] == "secured"
+        assert data["status"] == "delegation_match_verified"
+        assert data["delegation_verified"] is True
         assert data["enabled"] is True
         assert data["dnskey_count"] == 1
         assert data["ds_count"] == 1

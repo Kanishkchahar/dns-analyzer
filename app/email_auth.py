@@ -420,10 +420,11 @@ def compute_domain_score(
 
     # 3. DNSSEC (20 pts max)
     dnssec_status = dnssec_data.get("status", "unsigned") if dnssec_data else "unsigned"
-    if dnssec_status == "secured":
-        dnssec_score = 20
-        dnssec_stat = "secured"
-        dnssec_summary = "DNSKEY and parent DS records published and aligned"
+    if dnssec_status == "delegation_match_verified":
+        dnssec_score = 16
+        dnssec_stat = "delegation_match_verified"
+        dnssec_summary = "Parent DS record matches zone DNSKEY digest (full RRSIG root anchor chain unvalidated)"
+        inconclusive_checks.append("DNSSEC Root Anchor & RRSIG Validation")
     elif dnssec_status == "incomplete_chain":
         dnssec_score = 8
         dnssec_stat = "warning"

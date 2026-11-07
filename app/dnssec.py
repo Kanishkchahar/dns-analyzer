@@ -161,7 +161,7 @@ async def check_dnssec(
     if has_dnskey and has_ds:
         algo = dnskey_records[0]["algorithm"] if dnskey_records else "Standard"
         if cryptographically_verified:
-            status = "secured"
+            status = "delegation_match_verified"
             if inherited_from:
                 findings.append(Finding(
                     severity="info",
@@ -210,7 +210,10 @@ async def check_dnssec(
         ))
 
     return {
-        "enabled": status == "secured",
+        # DNSSEC is configured and its delegation link matches. Full RRSIG and
+        # root trust-anchor validation is outside this module's current scope.
+        "enabled": status == "delegation_match_verified",
+        "delegation_verified": status == "delegation_match_verified",
         "status": status,
         "cryptographically_verified": cryptographically_verified,
         "matching_key_tag": matching_tag if cryptographically_verified else None,
