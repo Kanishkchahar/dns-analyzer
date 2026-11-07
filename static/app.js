@@ -2392,9 +2392,6 @@ if (btnRunPortScan && listScanInput && networkResults) {
     }
   });
 }
-    }
-  });
-}
 
 // ── Initialize ─────────────────────────────────────────────────
 renderRecentChips();
