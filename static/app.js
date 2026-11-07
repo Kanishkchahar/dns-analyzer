@@ -1369,17 +1369,25 @@ function renderSpfCard(emailAuth) {
 
   // Flattened SPF suggestion
   if (emailAuth.spf_flattened && emailAuth.spf_lookups && emailAuth.spf_lookups.over_limit) {
-    const flatHeading = document.createElement("h4");
-    flatHeading.style.cssText = "font-size:13px; margin-top:16px; margin-bottom:6px; color: var(--text-primary);";
-    flatHeading.textContent = "✅ Suggested Flattened SPF Record (0 Lookups)";
-    card.appendChild(flatHeading);
+    if (emailAuth.spf_flattened.can_flatten !== false && emailAuth.spf_flattened.flattened_record) {
+      const flatHeading = document.createElement("h4");
+      flatHeading.style.cssText = "font-size:13px; margin-top:16px; margin-bottom:6px; color: var(--text-primary);";
+      flatHeading.textContent = "✅ Suggested Flattened SPF Record (0 Lookups)";
+      card.appendChild(flatHeading);
 
-    card.appendChild(makeCopyBlock(emailAuth.spf_flattened.flattened_record));
+      card.appendChild(makeCopyBlock(emailAuth.spf_flattened.flattened_record));
 
-    const flatHint = document.createElement("p");
-    flatHint.className = "flattened-hint";
-    flatHint.textContent = "This flattened record resolves all includes directly to ip4/ip6 ranges, eliminating RFC 7208 lookup errors.";
-    card.appendChild(flatHint);
+      const flatHint = document.createElement("p");
+      flatHint.className = "flattened-hint";
+      flatHint.textContent = "This flattened record resolves all includes directly to ip4/ip6 ranges, eliminating RFC 7208 lookup errors.";
+      card.appendChild(flatHint);
+    } else if (emailAuth.spf_flattened.can_flatten === false) {
+      const notice = document.createElement("p");
+      notice.className = "flattened-hint";
+      notice.style.color = "var(--warning)";
+      notice.textContent = `⚠️ SPF Flattening Notice: ${emailAuth.spf_flattened.reason || "Automated flattening is not safe for this record."}`;
+      card.appendChild(notice);
+    }
   }
 
   return card;

@@ -60,6 +60,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Ensure automated test verification passes before assembling final image
+COPY --from=test /app/app /tmp/.test_passed
+RUN rm -rf /tmp/.test_passed
+
 # Copy isolated virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
 

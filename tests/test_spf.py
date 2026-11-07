@@ -145,10 +145,44 @@ class TestSPFAsyncOperations:
         resolver = MockResolver(responses)
 
         res = await flatten_spf("example.com", resolver)
+        assert res["can_flatten"] is True
         assert "v=spf1" in res["flattened_record"]
+        assert res["flattened_record"].endswith("-all")
         assert "10.0.0.1" in res["ip4_ranges"]
         assert "10.0.0.2" in res["ip4_ranges"]
         assert res["flattened_lookups"] == 0
+
+    async def test_flatten_spf_preserves_softfail_all_qualifier(self):
+        root_txt = MockRR(strings=[b"v=spf1 ip4:192.168.1.1 ~all"])
+        responses = {("example.com", "TXT"): MockAnswer([root_txt])}
+        resolver = MockResolver(responses)
+
+        res = await flatten_spf("example.com", resolver)
+        assert res["can_flatten"] is True
+        assert res["flattened_record"] == "v=spf1 ip4:192.168.1.1 ~all"
+        assert res["flattened_record"].endswith("~all")
+
+    async def test_flatten_spf_refuses_unsafe_records(self):
+        # 1. Missing explicit 'all' mechanism
+        no_all_rr = MockRR(strings=[b"v=spf1 ip4:192.168.1.1"])
+        res1 = await flatten_spf("example.com", MockResolver({("example.com", "TXT"): MockAnswer([no_all_rr])}))
+        assert res1["can_flatten"] is False
+        assert res1["flattened_record"] is None
+        assert "lacks an explicit 'all'" in res1["reason"]
+
+        # 2. Unsupported mechanism: ptr
+        ptr_rr = MockRR(strings=[b"v=spf1 ptr:isp.com -all"])
+        res2 = await flatten_spf("example.com", MockResolver({("example.com", "TXT"): MockAnswer([ptr_rr])}))
+        assert res2["can_flatten"] is False
+        assert res2["flattened_record"] is None
+        assert "unsupported dynamic mechanism 'ptr'" in res2["reason"]
+
+        # 3. Non-positive mechanism qualifier: -ip4
+        neg_rr = MockRR(strings=[b"v=spf1 -ip4:10.0.0.1 ip4:10.0.0.2 -all"])
+        res3 = await flatten_spf("example.com", MockResolver({("example.com", "TXT"): MockAnswer([neg_rr])}))
+        assert res3["can_flatten"] is False
+        assert res3["flattened_record"] is None
+        assert "uses qualifier '-'" in res3["reason"]
 
     async def test_count_spf_lookups_shared_includes_evaluated(self):
         # Branch 1 and Branch 2 both include shared.com

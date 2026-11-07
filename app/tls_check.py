@@ -20,11 +20,12 @@ import httpx
 from app.models import Finding
 
 
-class PinnedIPBackend(httpcore.AnyIOBackend):
+class PinnedIPBackend(httpcore.AsyncNetworkBackend):
     """Network backend that pins TCP connections directly to a validated safe IP, eliminating DNS rebinding."""
 
     def __init__(self, target_ip: str):
         self.target_ip = target_ip
+        self._backend = httpcore.AnyIOBackend()
 
     async def connect_tcp(
         self,
@@ -34,7 +35,7 @@ class PinnedIPBackend(httpcore.AnyIOBackend):
         local_address: str | None = None,
         socket_options: Any = None,
     ) -> httpcore.AsyncNetworkStream:
-        return await super().connect_tcp(
+        return await self._backend.connect_tcp(
             self.target_ip,
             port,
             timeout=timeout,
@@ -42,13 +43,32 @@ class PinnedIPBackend(httpcore.AnyIOBackend):
             socket_options=socket_options,
         )
 
+    async def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: Any = None,
+    ) -> httpcore.AsyncNetworkStream:
+        return await self._backend.connect_unix_socket(
+            path,
+            timeout=timeout,
+            socket_options=socket_options,
+        )
+
+    async def sleep(self, seconds: float) -> None:
+        await self._backend.sleep(seconds)
+
 
 class PinnedIPTransport(httpx.AsyncHTTPTransport):
     """Transport that routes TCP traffic strictly to target_ip while preserving SNI and Host header."""
 
     def __init__(self, target_ip: str, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
-        self._pool._network_backend = PinnedIPBackend(target_ip)
+        # Use supported constructor parameter to attach the pinned network backend
+        self._pool = httpcore.AsyncConnectionPool(
+            ssl_context=self._pool._ssl_context,
+            network_backend=PinnedIPBackend(target_ip),
+        )
 
 
 
@@ -191,8 +211,14 @@ async def audit_tls_and_https(
             message=f"TLS/HTTPS audit on port {port} was inconclusive: target host was unreachable or timed out.",
         ))
         return result, findings
-    except Exception:
-        pass
+    except Exception as exc:
+        result["scanned"] = False
+        findings.append(Finding(
+            severity="warning",
+            record_type="TLS",
+            message=f"TLS/HTTPS audit on port {port} encountered an error: {type(exc).__name__} ({str(exc) or 'handshake failed'}).",
+        ))
+        return result, findings
 
     # 3. Analyze Certificate Details
     if cert_dict:
@@ -277,94 +303,103 @@ async def audit_tls_and_https(
     try:
         http_transport = PinnedIPTransport(target_ip)
         async with httpx.AsyncClient(transport=http_transport, timeout=3.0, follow_redirects=False) as client:
-            resp_http = await client.get(f"http://{norm_domain}/")
-            if resp_http.status_code in (301, 302, 307, 308):
+            async with client.stream("GET", f"http://{norm_domain}/") as resp_http:
+                status_code = resp_http.status_code
                 loc = resp_http.headers.get("location", "")
-                parsed_loc = urlparse(loc)
-                redirect_host = parsed_loc.hostname or norm_domain
-                redir_safe, redir_ips, redir_reason = await resolve_and_verify_all_ips(redirect_host, parsed_loc.port or 443)
-                if not redir_safe:
-                    findings.append(Finding(
-                        severity="error",
-                        record_type="HTTPS",
-                        message=f"SSRF Alert: HTTP redirect points to blocked target '{redirect_host}' ({redir_reason}). Redirect halted.",
-                    ))
-                elif loc.lower().startswith("https://"):
-                    redirect_ok = True
+                if status_code in (301, 302, 307, 308):
+                    parsed_loc = urlparse(loc)
+                    redirect_host = parsed_loc.hostname or norm_domain
+                    redir_safe, redir_ips, redir_reason = await resolve_and_verify_all_ips(redirect_host, parsed_loc.port or 443)
+                    if not redir_safe:
+                        findings.append(Finding(
+                            severity="error",
+                            record_type="HTTPS",
+                            message=f"SSRF Alert: HTTP redirect points to blocked target '{redirect_host}' ({redir_reason}). Redirect halted.",
+                        ))
+                    elif loc.lower().startswith("https://"):
+                        redirect_ok = True
+                        result["https_redirect"] = {
+                            "enforced": True,
+                            "status_code": status_code,
+                            "location": loc,
+                        }
+                        findings.append(Finding(
+                            severity="info",
+                            record_type="HTTPS",
+                            message=f"Port 80 unencrypted HTTP automatically redirects to HTTPS ({status_code} -> {loc}).",
+                        ))
+                if not redirect_ok and not any(f.record_type == "HTTPS" and f.severity == "error" for f in findings):
                     result["https_redirect"] = {
-                        "enforced": True,
-                        "status_code": resp_http.status_code,
-                        "location": loc,
+                        "enforced": False,
+                        "status_code": status_code,
+                        "location": loc or None,
                     }
                     findings.append(Finding(
-                        severity="info",
+                        severity="warning",
                         record_type="HTTPS",
-                        message=f"Port 80 unencrypted HTTP automatically redirects to HTTPS ({resp_http.status_code} -> {loc}).",
+                        message=f"Port 80 HTTP does not redirect to HTTPS (HTTP {status_code}). Cleartext web traffic may be exposed to interception.",
                     ))
-            if not redirect_ok and not any(f.record_type == "HTTPS" and f.severity == "error" for f in findings):
-                result["https_redirect"] = {
-                    "enforced": False,
-                    "status_code": resp_http.status_code,
-                    "location": resp_http.headers.get("location"),
-                }
-                findings.append(Finding(
-                    severity="warning",
-                    record_type="HTTPS",
-                    message=f"Port 80 HTTP does not redirect to HTTPS (HTTP {resp_http.status_code}). Cleartext web traffic may be exposed to interception.",
-                ))
-    except Exception:
+    except Exception as exc:
         result["https_redirect"] = {"enforced": False, "status_code": None, "location": None}
+        findings.append(Finding(
+            severity="info",
+            record_type="HTTPS",
+            message=f"Port 80 HTTP redirect check was inconclusive: {type(exc).__name__}.",
+        ))
 
-    # 5. Check HTTPS Web Security Headers (Strict TLS verification, pinned IP, no arbitrary redirects)
+    # 5. Check HTTPS Web Security Headers (Strict TLS verification, pinned IP, stream headers without body download)
     try:
         https_transport = PinnedIPTransport(target_ip, verify=True)
         async with httpx.AsyncClient(transport=https_transport, timeout=3.0, follow_redirects=False) as client:
-            resp_https = await client.get(f"https://{norm_domain}/")
-            h = resp_https.headers
+            async with client.stream("GET", f"https://{norm_domain}/") as resp_https:
+                h = resp_https.headers
 
+                hsts = h.get("strict-transport-security")
+                csp = h.get("content-security-policy")
+                xfo = h.get("x-frame-options")
+                xcto = h.get("x-content-type-options")
+                rp = h.get("referrer-policy")
 
-            hsts = h.get("strict-transport-security")
-            csp = h.get("content-security-policy")
-            xfo = h.get("x-frame-options")
-            xcto = h.get("x-content-type-options")
-            rp = h.get("referrer-policy")
+                sec_headers = {
+                    "hsts": bool(hsts),
+                    "hsts_raw": hsts,
+                    "csp": bool(csp),
+                    "x_frame_options": xfo,
+                    "x_content_type_options": xcto,
+                    "referrer_policy": rp,
+                }
+                result["security_headers"] = sec_headers
 
-            sec_headers = {
-                "hsts": bool(hsts),
-                "hsts_raw": hsts,
-                "csp": bool(csp),
-                "x_frame_options": xfo,
-                "x_content_type_options": xcto,
-                "referrer_policy": rp,
-            }
-            result["security_headers"] = sec_headers
+                if hsts:
+                    findings.append(Finding(
+                        severity="info",
+                        record_type="HTTPS",
+                        message=f"HTTP Strict Transport Security (HSTS) is active: `{hsts}`.",
+                    ))
+                else:
+                    findings.append(Finding(
+                        severity="warning",
+                        record_type="HTTPS",
+                        message="Strict-Transport-Security (HSTS) header is missing. Browsers may allow unencrypted downgrade attacks.",
+                    ))
 
-            if hsts:
-                findings.append(Finding(
-                    severity="info",
-                    record_type="HTTPS",
-                    message=f"HTTP Strict Transport Security (HSTS) is active: `{hsts}`.",
-                ))
-            else:
-                findings.append(Finding(
-                    severity="warning",
-                    record_type="HTTPS",
-                    message="Strict-Transport-Security (HSTS) header is missing. Browsers may allow unencrypted downgrade attacks.",
-                ))
-
-            if csp:
-                findings.append(Finding(
-                    severity="info",
-                    record_type="HTTPS",
-                    message="Content-Security-Policy (CSP) is deployed to defend against XSS and clickjacking.",
-                ))
-            else:
-                findings.append(Finding(
-                    severity="info",
-                    record_type="HTTPS",
-                    message="Content-Security-Policy (CSP) header is not published.",
-                ))
-    except Exception:
-        pass
+                if csp:
+                    findings.append(Finding(
+                        severity="info",
+                        record_type="HTTPS",
+                        message="Content-Security-Policy (CSP) is deployed to defend against XSS and clickjacking.",
+                    ))
+                else:
+                    findings.append(Finding(
+                        severity="info",
+                        record_type="HTTPS",
+                        message="Content-Security-Policy (CSP) header is not published.",
+                    ))
+    except Exception as exc:
+        findings.append(Finding(
+            severity="info",
+            record_type="HTTPS",
+            message=f"HTTPS web security header inspection on port {port} was inconclusive: {type(exc).__name__}.",
+        ))
 
     return result, findings

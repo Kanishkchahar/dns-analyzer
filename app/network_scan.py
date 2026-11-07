@@ -45,6 +45,17 @@ def verify_port_scan_authorization(
 ) -> tuple[bool, str]:
     """Verify server-side authorization credentials and scope for active port probes."""
     expected_key = os.environ.get("PORT_SCAN_API_KEY", "").strip()
+    allowed_targets_env = os.environ.get("PORT_SCAN_ALLOWED_DOMAINS", "").strip()
+
+    # Explicit server-side policy requirement:
+    # When active port scanning is enabled, the server must have an explicit policy configured.
+    # If neither an API key nor an approved domain list is configured, probes are refused.
+    if not expected_key and not allowed_targets_env:
+        return (
+            False,
+            "Active port scanning requires an explicit server policy: configure PORT_SCAN_API_KEY and/or PORT_SCAN_ALLOWED_DOMAINS in the server environment.",
+        )
+
     if expected_key:
         provided = (auth_token or "").strip()
         if not provided and auth_header:
@@ -52,15 +63,20 @@ def verify_port_scan_authorization(
                 provided = auth_header[7:].strip()
             else:
                 provided = auth_header.strip()
-        if provided != expected_key:
-            return False, "Access denied: Valid server authorization token (PORT_SCAN_API_KEY) required to run active probes."
+        if not provided or provided != expected_key:
+            return (
+                False,
+                "Access denied: Valid server authorization token (PORT_SCAN_API_KEY) required to run active probes.",
+            )
 
-    allowed_targets_env = os.environ.get("PORT_SCAN_ALLOWED_DOMAINS", "").strip()
     if allowed_targets_env:
         allowed = [d.strip().lower() for d in allowed_targets_env.split(",") if d.strip()]
         clean_target = target.strip().lower().rstrip(".")
-        if not any(clean_target == a or clean_target.endswith(f".{a}") for a in allowed):
-            return False, f"Target '{clean_target}' is not in approved server scan scope ({', '.join(allowed)})."
+        if "*" not in allowed and not any(clean_target == a or clean_target.endswith(f".{a}") for a in allowed):
+            return (
+                False,
+                f"Target '{clean_target}' is not in approved server scan scope ({', '.join(allowed)}).",
+            )
 
     return True, "Authorized"
 

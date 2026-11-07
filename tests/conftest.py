@@ -8,6 +8,16 @@ from starlette.testclient import TestClient
 from app.main import app
 
 
+@pytest.fixture(autouse=True)
+def reset_scan_cache():
+    from app.main import _CLIENT_REQUESTS, _SCAN_CACHE
+    _SCAN_CACHE.clear()
+    _CLIENT_REQUESTS.clear()
+    yield
+    _SCAN_CACHE.clear()
+    _CLIENT_REQUESTS.clear()
+
+
 class MockRR:
     """Mock dnspython Resource Record."""
 

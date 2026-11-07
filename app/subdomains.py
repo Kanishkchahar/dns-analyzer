@@ -51,13 +51,43 @@ async def discover_passive_subdomains(
                         if bytes_read >= max_bytes:
                             break
                     raw_text = b"".join(chunks).decode("utf-8", errors="replace")
-                    raw_json = json.loads(raw_text)
-                    for item in raw_json:
-                        name_val = item.get("name_value", "")
-                        for line in name_val.splitlines():
-                            clean_name = line.strip().lower().lstrip("*.")
-                            if clean_name.endswith(f".{norm_domain}") and clean_name != norm_domain:
-                                discovered_names.add(clean_name)
+                    raw_json: list[dict[str, Any]] | None = None
+                    is_truncated = bytes_read >= max_bytes
+                    try:
+                        raw_json = json.loads(raw_text)
+                    except json.JSONDecodeError:
+                        # If stream was cut at 512 KB, repair array at last complete JSON object
+                        last_brace = raw_text.rfind("}")
+                        if last_brace != -1:
+                            try:
+                                repaired_text = raw_text[:last_brace + 1] + "]"
+                                raw_json = json.loads(repaired_text)
+                                is_truncated = True
+                            except Exception:
+                                raw_json = None
+
+                    if raw_json and isinstance(raw_json, list):
+                        for item in raw_json:
+                            if isinstance(item, dict):
+                                name_val = item.get("name_value", "")
+                                for line in name_val.splitlines():
+                                    clean_name = line.strip().lower().lstrip("*.")
+                                    if clean_name.endswith(f".{norm_domain}") and clean_name != norm_domain:
+                                        discovered_names.add(clean_name)
+                        if is_truncated:
+                            result["incomplete"] = True
+                            findings.append(Finding(
+                                severity="info",
+                                record_type="Inventory",
+                                message=f"Certificate Transparency log stream reached {max_bytes // 1024} KB limit. Partial inventory returned ({len(discovered_names)} subdomains discovered).",
+                            ))
+                    elif is_truncated:
+                        result["incomplete"] = True
+                        findings.append(Finding(
+                            severity="info",
+                            record_type="Inventory",
+                            message=f"Certificate Transparency log response exceeded {max_bytes // 1024} KB limit and could not be parsed; inventory incomplete.",
+                        ))
     except Exception:
         # crt.sh can occasionally be slow or rate-limited; gracefully continue with empty set
         pass

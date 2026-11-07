@@ -219,10 +219,12 @@ def _sum_tree_lookups(tree: list[dict[str, Any]]) -> int:
 # ---------------------------------------------------------------------------
 
 async def flatten_spf(domain: str, resolver: dns.asyncresolver.Resolver) -> dict[str, Any]:
-    """Resolve all include / a / mx / redirect mechanisms to final IPs.
+    """Resolve all include / a / mx mechanisms to static IP terms preserving semantics.
 
-    Produces a flattened SPF record that uses only ``ip4`` / ``ip6`` terms,
-    eliminating all DNS lookups at evaluation time.
+    Produces a flattened SPF record ONLY when the original policy semantics can be
+    safely preserved. If the record uses non-default qualifiers on mechanisms, unsupported
+    mechanisms (such as ptr or exists), dynamic macros, or lacks an explicit 'all' mechanism,
+    it returns can_flatten=False and no flattened_record replacement.
 
     Parameters
     ----------
@@ -234,36 +236,86 @@ async def flatten_spf(domain: str, resolver: dns.asyncresolver.Resolver) -> dict
     Returns
     -------
     dict
-        ``flattened_record`` (str), ``ip4_ranges``, ``ip6_ranges``,
-        ``original_lookups`` (int), and ``flattened_lookups`` (always 0).
+        ``can_flatten`` (bool), ``flattened_record`` (str | None), ``reason`` (str | None),
+        ``ip4_ranges`` (list[str]), ``ip6_ranges`` (list[str]),
+        ``original_lookups`` (int), and ``flattened_lookups`` (int).
     """
+    try:
+        lookup_data = await count_spf_lookups(domain, resolver)
+        original_lookups = lookup_data.get("total_lookups", 0)
+    except Exception:
+        original_lookups = 0
+
+    try:
+        answer = await resolver.resolve(domain, "TXT")
+        txt_records = [b"".join(rr.strings).decode("utf-8", errors="replace") for rr in answer]
+    except Exception as exc:
+        return {
+            "can_flatten": False,
+            "flattened_record": None,
+            "reason": f"Unable to retrieve SPF TXT record for '{domain}': {exc}",
+            "ip4_ranges": [],
+            "ip6_ranges": [],
+            "original_lookups": original_lookups,
+            "flattened_lookups": original_lookups,
+        }
+
+    top_spf = parse_spf(txt_records)
+    if top_spf is None:
+        return {
+            "can_flatten": False,
+            "flattened_record": None,
+            "reason": f"No valid SPF record found on '{domain}'.",
+            "ip4_ranges": [],
+            "ip6_ranges": [],
+            "original_lookups": original_lookups,
+            "flattened_lookups": original_lookups,
+        }
+
+    # Requirement: preserve source 'all' mechanism. If no explicit 'all' is defined,
+    # defaulting to -all changes RFC neutral semantics to hard-fail rejection, which is unsafe.
+    if not top_spf.get("all_mechanism"):
+        return {
+            "can_flatten": False,
+            "flattened_record": None,
+            "reason": "Cannot safely flatten: source SPF record lacks an explicit 'all' mechanism (implicit neutral policy cannot be converted without altering sender evaluation).",
+            "ip4_ranges": [],
+            "ip6_ranges": [],
+            "original_lookups": original_lookups,
+            "flattened_lookups": original_lookups,
+        }
+
     visited: set[str] = set()
-    ip4_ranges: list[str] = []
-    ip6_ranges: list[str] = []
-    original_lookups = 0
-    all_mechanism = "-all"  # default fallback
-
-    await _flatten_recursive(
-        domain, resolver, visited, ip4_ranges, ip6_ranges, 0,
-        lookup_counter=[0], all_mech_holder=[all_mechanism],
+    terms: list[str] = []
+    can_flatten, reason = await _flatten_terms_recursive(
+        domain, resolver, visited, terms, depth=0, is_top=True
     )
-    original_lookups = lookup_counter_value = 0  # recalculate below
 
-    # Re-count lookups from the count helper for accuracy
-    lookup_data = await count_spf_lookups(domain, dns.asyncresolver.Resolver())
-    original_lookups = lookup_data["total_lookups"]
+    if not can_flatten:
+        return {
+            "can_flatten": False,
+            "flattened_record": None,
+            "reason": reason,
+            "ip4_ranges": [],
+            "ip6_ranges": [],
+            "original_lookups": original_lookups,
+            "flattened_lookups": original_lookups,
+        }
 
-    # Deduplicate while preserving order
-    ip4_ranges = list(dict.fromkeys(ip4_ranges))
-    ip6_ranges = list(dict.fromkeys(ip6_ranges))
+    # Deduplicate terms in-place preserving order
+    deduped_terms = list(dict.fromkeys(terms))
+    ip4_ranges = [t.split(":", 1)[1] for t in deduped_terms if t.startswith("ip4:")]
+    ip6_ranges = [t.split(":", 1)[1] for t in deduped_terms if t.startswith("ip6:")]
 
     parts = ["v=spf1"]
-    parts.extend(f"ip4:{addr}" for addr in ip4_ranges)
-    parts.extend(f"ip6:{addr}" for addr in ip6_ranges)
-    parts.append(all_mechanism)
+    parts.extend(deduped_terms)
+    parts.append(top_spf["all_mechanism"])  # Preserves exact qualifier (+all, -all, ~all, ?all)
+    flattened_record = " ".join(parts)
 
     return {
-        "flattened_record": " ".join(parts),
+        "can_flatten": True,
+        "flattened_record": flattened_record,
+        "reason": None,
         "ip4_ranges": ip4_ranges,
         "ip6_ranges": ip6_ranges,
         "original_lookups": original_lookups,
@@ -271,104 +323,130 @@ async def flatten_spf(domain: str, resolver: dns.asyncresolver.Resolver) -> dict
     }
 
 
-async def _flatten_recursive(
+async def _flatten_terms_recursive(
     domain: str,
     resolver: dns.asyncresolver.Resolver,
     visited: set[str],
-    ip4_ranges: list[str],
-    ip6_ranges: list[str],
+    terms: list[str],
     depth: int,
-    *,
-    lookup_counter: list[int],
-    all_mech_holder: list[str],
-) -> None:
-    """Recursively resolve mechanisms into raw IP ranges."""
-    if depth >= _MAX_DEPTH or domain in visited:
-        return
+    is_top: bool = False,
+) -> tuple[bool, str | None]:
+    if depth >= _MAX_DEPTH:
+        return False, f"Include recursion depth exceeded limit ({_MAX_DEPTH}) at '{domain}'."
+    if domain in visited:
+        return False, f"Circular include reference detected at '{domain}'."
     visited.add(domain)
 
     try:
         answer = await resolver.resolve(domain, "TXT")
         txt_records = [b"".join(rr.strings).decode("utf-8", errors="replace") for rr in answer]
-    except Exception:
-        return
+    except Exception as exc:
+        return False, f"Failed resolving TXT record for '{domain}': {exc}"
 
     spf = parse_spf(txt_records)
     if spf is None:
-        return
-
-    # Capture the all mechanism from the top-level record
-    if depth == 0 and spf["all_mechanism"]:
-        all_mech_holder[0] = spf["all_mechanism"]
+        return False, f"Missing or invalid SPF record in included domain '{domain}'."
 
     for mech in spf["mechanisms"]:
         mtype = mech["type"]
+        qualifier = mech["qualifier"]
         value = mech["value"]
 
+        if mtype == "all":
+            # For top-level, all is appended at the very end.
+            # For included records, RFC 7208 specifies that the included record's 'all'
+            # mechanism is ignored by the calling record.
+            continue
+
+        if qualifier != "+":
+            return (
+                False,
+                f"Cannot safely flatten '{domain}': mechanism '{qualifier}{mtype}' uses qualifier '{qualifier}'. Flattening requires positive (+) evaluation semantics to preserve policy.",
+            )
+
+        if mtype in ("ptr", "exists", "exp"):
+            return (
+                False,
+                f"Cannot safely flatten '{domain}': unsupported dynamic mechanism '{mtype}' cannot be expanded into static IP ranges.",
+            )
+
+        if value and "%" in value:
+            return (
+                False,
+                f"Cannot safely flatten '{domain}': dynamic macro expression in '{mtype}:{value}' cannot be expanded statically.",
+            )
+
         if mtype == "ip4" and value:
-            ip4_ranges.append(value)
+            terms.append(f"ip4:{value}")
         elif mtype == "ip6" and value:
-            ip6_ranges.append(value)
+            terms.append(f"ip6:{value}")
         elif mtype == "a":
             target = value or domain
-            lookup_counter[0] += 1
-            await _resolve_a_aaaa(target, resolver, ip4_ranges, ip6_ranges)
+            a_ips, aaaa_ips = await _resolve_host_ips(target, resolver)
+            for ip in a_ips:
+                terms.append(f"ip4:{ip}")
+            for ip in aaaa_ips:
+                terms.append(f"ip6:{ip}")
         elif mtype == "mx":
             target = value or domain
-            lookup_counter[0] += 1
-            await _resolve_mx(target, resolver, ip4_ranges, ip6_ranges)
-        elif mtype == "include" and value:
-            lookup_counter[0] += 1
-            await _flatten_recursive(
-                value, resolver, visited, ip4_ranges, ip6_ranges, depth + 1,
-                lookup_counter=lookup_counter, all_mech_holder=all_mech_holder,
+            mx_a_ips, mx_aaaa_ips = await _resolve_mx_ips(target, resolver)
+            for ip in mx_a_ips:
+                terms.append(f"ip4:{ip}")
+            for ip in mx_aaaa_ips:
+                terms.append(f"ip6:{ip}")
+        elif mtype in ("include", "redirect") and value:
+            ok, err = await _flatten_terms_recursive(
+                value, resolver, visited, terms, depth + 1, is_top=False
             )
-        elif mtype == "redirect" and value:
-            lookup_counter[0] += 1
-            await _flatten_recursive(
-                value, resolver, visited, ip4_ranges, ip6_ranges, depth + 1,
-                lookup_counter=lookup_counter, all_mech_holder=all_mech_holder,
-            )
-        # ptr / exists / all / exp — no IPs to collect
+            if not ok:
+                return False, err
+        else:
+            return False, f"Cannot safely flatten '{domain}': unrecognized mechanism '{mtype}'."
+
+    return True, None
 
 
-async def _resolve_a_aaaa(
+async def _resolve_host_ips(
     host: str,
     resolver: dns.asyncresolver.Resolver,
-    ip4_ranges: list[str],
-    ip6_ranges: list[str],
-) -> None:
-    """Resolve a host to A and AAAA records and append to the IP lists."""
+) -> tuple[list[str], list[str]]:
+    a_ips: list[str] = []
+    aaaa_ips: list[str] = []
     try:
         answer = await resolver.resolve(host, "A")
         for rr in answer:
-            ip4_ranges.append(rr.address)
+            a_ips.append(rr.address)
     except Exception:
         pass
 
     try:
         answer = await resolver.resolve(host, "AAAA")
         for rr in answer:
-            ip6_ranges.append(rr.address)
+            aaaa_ips.append(rr.address)
     except Exception:
         pass
+    return a_ips, aaaa_ips
 
 
-async def _resolve_mx(
+async def _resolve_mx_ips(
     domain: str,
     resolver: dns.asyncresolver.Resolver,
-    ip4_ranges: list[str],
-    ip6_ranges: list[str],
-) -> None:
-    """Resolve MX records for *domain*, then resolve each mail host to IPs."""
+) -> tuple[list[str], list[str]]:
+    hosts: list[str] = []
     try:
         answer = await resolver.resolve(domain, "MX")
         hosts = [str(rr.exchange).rstrip(".") for rr in answer]
     except Exception:
-        return
+        return [], []
 
-    tasks = [_resolve_a_aaaa(h, resolver, ip4_ranges, ip6_ranges) for h in hosts]
-    await asyncio.gather(*tasks)
+    all_a: list[str] = []
+    all_aaaa: list[str] = []
+    tasks = [_resolve_host_ips(h, resolver) for h in hosts]
+    results = await asyncio.gather(*tasks)
+    for a_list, aaaa_list in results:
+        all_a.extend(a_list)
+        all_aaaa.extend(aaaa_list)
+    return all_a, all_aaaa
 
 
 # ---------------------------------------------------------------------------

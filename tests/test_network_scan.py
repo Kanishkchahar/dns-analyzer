@@ -28,18 +28,21 @@ class TestNetworkScan:
 
     async def test_port_scan_requires_explicit_confirmation(self, monkeypatch):
         monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        monkeypatch.setenv("PORT_SCAN_ALLOWED_DOMAINS", "*")
         res = await run_port_scan("93.184.216.34", ports=[80, 443], confirmed=False)
         assert res["status"] == "confirmation_required"
         assert "Explicit confirmation required" in res["message"]
 
     async def test_port_scan_ssrf_blocks_private_target(self, monkeypatch):
         monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        monkeypatch.setenv("PORT_SCAN_ALLOWED_DOMAINS", "*")
         res = await run_port_scan("127.0.0.1", ports=[80], confirmed=True)
         assert res["status"] == "blocked"
         assert "SSRF Guard" in res["message"]
 
     async def test_port_scan_port_limit_and_validation(self, monkeypatch):
         monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        monkeypatch.setenv("PORT_SCAN_ALLOWED_DOMAINS", "*")
         # Exceeds max 10 ports
         many_ports = list(range(1, 15))
         res = await run_port_scan("93.184.216.34", ports=many_ports, confirmed=True)
@@ -50,6 +53,14 @@ class TestNetworkScan:
         res_invalid = await run_port_scan("93.184.216.34", ports=[0, 80], confirmed=True)
         assert res_invalid["status"] == "error"
         assert "Invalid port number" in res_invalid["message"]
+
+    async def test_port_scan_requires_explicit_server_policy(self, monkeypatch):
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        monkeypatch.delenv("PORT_SCAN_API_KEY", raising=False)
+        monkeypatch.delenv("PORT_SCAN_ALLOWED_DOMAINS", raising=False)
+        res = await run_port_scan("93.184.216.34", ports=[80], confirmed=True)
+        assert res["status"] == "unauthorized"
+        assert "requires an explicit server policy" in res["message"]
 
     async def test_port_scan_authorization_and_domain_scope(self, monkeypatch):
         monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")

@@ -128,7 +128,7 @@ def analyze_dmarc(dmarc_data: dict[str, Any] | None) -> list[Finding]:
     if dmarc_data.get("inherited_from"):
         findings.append(_finding(
             "info", "DMARC",
-            f"DMARC policy is inherited from organizational zone apex `{dmarc_data['inherited_from']}` per RFC 7489.",
+            f"DMARC policy is inherited from organizational zone apex `{dmarc_data['inherited_from']}` per RFC 7489 (heuristic based on discovered SOA zone apex; organizational domain boundaries may differ across multi-part public suffixes).",
         ))
 
     # -- Policy strength --

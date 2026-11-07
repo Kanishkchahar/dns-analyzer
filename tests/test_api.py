@@ -164,6 +164,7 @@ class TestAPIEndpoints:
 
     async def test_post_network_port_scan_confirmation_required(self, monkeypatch):
         monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        monkeypatch.setenv("PORT_SCAN_ALLOWED_DOMAINS", "*")
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post("/api/network/port-scan", json={"target": "93.184.216.34", "confirmed": False})
@@ -171,6 +172,30 @@ class TestAPIEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "confirmation_required"
+
+    async def test_post_network_port_scan_wires_auth_token_and_header(self, monkeypatch):
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        monkeypatch.setenv("PORT_SCAN_API_KEY", "super-secret-token")
+        transport = ASGITransport(app=app)
+
+        # 1. Without credentials -> 200 with unauthorized status
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/api/network/port-scan", json={"target": "93.184.216.34", "confirmed": False})
+        assert resp.json()["status"] == "unauthorized"
+
+        # 2. With auth_token in json body -> authorized
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/api/network/port-scan", json={"target": "93.184.216.34", "confirmed": False, "auth_token": "super-secret-token"})
+        assert resp.json()["status"] == "confirmation_required"
+
+        # 3. With Authorization: Bearer <token> header -> authorized
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/network/port-scan",
+                json={"target": "93.184.216.34", "confirmed": False},
+                headers={"Authorization": "Bearer super-secret-token"},
+            )
+        assert resp.json()["status"] == "confirmation_required"
 
     async def test_get_report_reuses_cached_scan(self, mock_dns_system):
         from app.main import _store_cached_scan, run_full_scan
@@ -224,5 +249,43 @@ class TestAPIEndpoints:
                 resp = await client.post("/api/analyze", json={"domain": "example.com", "force_refresh": True})
             assert resp.status_code == 200
             assert mock_full_scan.call_count == 1
+
+    async def test_api_analyze_reuses_cached_scan(self, mock_dns_system):
+        from app.main import _store_cached_scan, run_full_scan
+        with patch("dns.asyncresolver.Resolver", return_value=mock_dns_system):
+            scan_obj = await run_full_scan("example.com")
+            _store_cached_scan("example.com", scan_obj)
+
+        with patch("app.main.run_full_scan") as mock_full_scan:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post("/api/analyze", json={"domain": "example.com"})
+            assert resp.status_code == 200
+            assert mock_full_scan.call_count == 0  # Reused cache!
+
+    async def test_semaphore_wait_timeout_returns_503(self):
+        from app.main import SCAN_SEMAPHORE
+        import asyncio
+
+        # Acquire all permits so next request times out waiting on semaphore
+        permits = []
+        for _ in range(8):
+            await SCAN_SEMAPHORE.acquire()
+            permits.append(None)
+
+        try:
+            with patch("app.main.SEMAPHORE_WAIT_TIMEOUT", 0.05):
+                transport = ASGITransport(app=app)
+                async with AsyncClient(transport=transport, base_url="http://test") as client:
+                    resp_analyze = await client.post("/api/analyze", json={"domain": "example.com"})
+                    assert resp_analyze.status_code == 503
+                    assert "high scan volume" in resp_analyze.json()["detail"]
+
+                    resp_report = await client.get("/api/report/example.com")
+                    assert resp_report.status_code == 503
+                    assert "high scan volume" in resp_report.json()["detail"]
+        finally:
+            for _ in permits:
+                SCAN_SEMAPHORE.release()
 
 

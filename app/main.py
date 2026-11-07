@@ -84,7 +84,12 @@ def _store_cached_scan(domain: str, response: AnalyzeResponse) -> None:
 
 
 def _extract_client_ip(request: Request) -> str:
-    """Extract client IP, inspecting X-Forwarded-For only if proxy trust is enabled."""
+    """Extract client IP, inspecting X-Forwarded-For only if proxy trust is enabled.
+
+    WARNING: Only enable TRUST_REVERSE_PROXY=true when running behind an upstream reverse
+    proxy that strips or overwrites untrusted incoming X-Forwarded-For headers from external
+    clients. If enabled on an exposed direct host, callers may spoof their rate-limiting IP.
+    """
     trust_proxy = os.environ.get("TRUST_REVERSE_PROXY", "false").strip().lower() in ("true", "1", "yes")
     if trust_proxy and "x-forwarded-for" in request.headers:
         forwarded = request.headers["x-forwarded-for"].split(",")
@@ -245,22 +250,38 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
 async def api_analyze(req: AnalyzeRequest, request: Request) -> AnalyzeResponse:
     _enforce_rate_limit(request)
 
-    async with SCAN_SEMAPHORE:
-        try:
-            res = await asyncio.wait_for(run_full_scan(req.domain), timeout=SCAN_TIMEOUT_SECONDS)
-            _store_cached_scan(req.domain, res)
-            return res
-        except asyncio.TimeoutError:
-            raise HTTPException(
-                status_code=504,
-                detail="DNS and security audit timed out after 15 seconds. Please try again.",
-            )
-        except Exception as exc:
-            logger.exception("Analysis failed for domain: %s", req.domain)
-            raise HTTPException(
-                status_code=500,
-                detail="An error occurred during DNS analysis. Please check the domain and try again.",
-            ) from exc
+    # Fast-path cache lookup unless force_refresh is requested
+    if not req.force_refresh:
+        cached = _get_cached_scan(req.domain)
+        if cached:
+            return cached
+
+    # Bound concurrency queue wait
+    try:
+        await asyncio.wait_for(SCAN_SEMAPHORE.acquire(), timeout=SEMAPHORE_WAIT_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=503,
+            detail="Server is experiencing high scan volume. Please retry shortly.",
+        )
+
+    try:
+        res = await asyncio.wait_for(run_full_scan(req.domain), timeout=SCAN_TIMEOUT_SECONDS)
+        _store_cached_scan(req.domain, res)
+        return res
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail="DNS and security audit timed out after 15 seconds. Please try again.",
+        )
+    except Exception as exc:
+        logger.exception("Analysis failed for domain: %s", req.domain)
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred during DNS analysis. Please check the domain and try again.",
+        ) from exc
+    finally:
+        SCAN_SEMAPHORE.release()
 
 
 @app.post("/api/network/list-scan")
@@ -278,7 +299,14 @@ async def api_network_port_scan(req: PortScanRequest, request: Request) -> dict[
     _enforce_rate_limit(request)
     if not req.target or len(req.target) > 253:
         raise HTTPException(status_code=400, detail="Invalid target provided.")
-    return await run_port_scan(req.target, ports=req.ports, confirmed=req.confirmed)
+    auth_header = request.headers.get("authorization")
+    return await run_port_scan(
+        req.target,
+        ports=req.ports,
+        confirmed=req.confirmed,
+        auth_token=req.auth_token,
+        auth_header=auth_header,
+    )
 
 
 @app.get("/api/subdomains/{domain}")
@@ -317,9 +345,18 @@ async def api_report(domain: str, request: Request) -> HTMLResponse:
     try:
         scan = _get_cached_scan(req.domain)
         if not scan:
-            async with SCAN_SEMAPHORE:
+            try:
+                await asyncio.wait_for(SCAN_SEMAPHORE.acquire(), timeout=SEMAPHORE_WAIT_TIMEOUT)
+            except asyncio.TimeoutError:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Server is experiencing high scan volume. Please retry shortly.",
+                )
+            try:
                 scan = await asyncio.wait_for(run_full_scan(req.domain), timeout=SCAN_TIMEOUT_SECONDS)
                 _store_cached_scan(req.domain, scan)
+            finally:
+                SCAN_SEMAPHORE.release()
 
         html = build_report(
             domain=scan.domain,
@@ -337,6 +374,8 @@ async def api_report(domain: str, request: Request) -> HTMLResponse:
                 "Content-Disposition": f'attachment; filename="dns-report-{req.domain}.html"'
             },
         )
+    except HTTPException:
+        raise
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Report generation timed out.")
     except Exception as exc:

@@ -25,7 +25,7 @@ class TestDNSSEC:
         assert data["ds_count"] == 1
         assert data["keys"][0]["algorithm"] == "ECDSA Curve P-256 with SHA-256"
         assert any(
-            f.severity == "info" and "fully enabled" in f.message for f in findings
+            f.severity == "info" and "DS-to-DNSKEY delegation link verified" in f.message for f in findings
         )
 
     async def test_dnssec_incomplete_chain(self):

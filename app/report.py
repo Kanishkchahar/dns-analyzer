@@ -194,10 +194,13 @@ _TEMPLATE = """<!DOCTYPE html>
       <span class="auth-card-val">{{ email_auth.spf.all_mechanism }}</span>
     </div>
     {% endif %}
-    {% if email_auth.spf_flattened and email_auth.spf_lookups and email_auth.spf_lookups.over_limit %}
+    {% if email_auth.spf_flattened and email_auth.spf_flattened.get('can_flatten', true) and email_auth.spf_flattened.flattened_record and email_auth.spf_lookups and email_auth.spf_lookups.over_limit %}
     <h2 style="font-size:13px; margin-top:16px;">✅ Suggested Flattened SPF Record</h2>
     <div class="copy-block">{{ email_auth.spf_flattened.flattened_record }}</div>
     <p style="font-size:12px; color: var(--text-muted); margin-top:4px;">This flattened record uses 0 DNS lookups (all IPs resolved to ip4/ip6 entries).</p>
+    {% elif email_auth.spf_flattened and email_auth.spf_flattened.get('can_flatten') is false and email_auth.spf_lookups and email_auth.spf_lookups.over_limit %}
+    <h2 style="font-size:13px; margin-top:16px;">⚠️ SPF Flattening Notice</h2>
+    <p style="font-size:12px; color: var(--warning); margin-top:4px;">Automated flattening is not safe for this record: {{ email_auth.spf_flattened.reason }}. Manual optimization advised.</p>
     {% endif %}
     {% else %}
     <p style="color: var(--text-muted); font-size: 13px;">No SPF record found in TXT records.</p>

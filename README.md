@@ -30,7 +30,7 @@ bash run.sh 9000
 bash run.sh --setup-only
 ```
 
-#### Automated Test Suite (125 Automated Tests)
+#### Automated Test Suite (132 Automated Tests)
 
 ```bash
 bash run.sh --test
@@ -55,7 +55,7 @@ docker run -d --name dns-analyzer-v2 --restart unless-stopped -p 8000:8000 kanis
 #### Option B: Build & Run Locally
 
 ```bash
-# Build the multi-stage production image (automatically runs 125 pytest checks during build)
+# Build the multi-stage production image (automatically runs 132 pytest checks during build)
 docker build -t dns-analyzer:v2 .
 
 # Run container on port 8000
@@ -153,7 +153,7 @@ dns-analyzer/
 │   ├── index.html           # Dashboard UI with Asymmetric Bento Grid Cockpit
 │   ├── style.css            # Geist design tokens, dark mode, responsive styles
 │   └── app.js               # Vanilla JS controller, tab navigation, SVG score ring
-├── tests/                   # Complete automated test suite (125 tests)
+├── tests/                   # Complete automated test suite (132 tests)
 │   ├── conftest.py          # Shared fixtures, mock DNS resolvers & network mocks
 │   ├── test_models.py       # Domain sanitization & Pydantic models
 │   ├── test_analyzer.py     # 9 RFC infrastructure checks & summary tests
@@ -235,6 +235,26 @@ Returns a self-contained `.html` file with embedded CSS, fully viewable offline.
 
 ---
 
+## ⚙️ Deployment & Environment Configuration
+
+The application is configured via environment variables:
+
+| Variable | Default | Purpose / Security Guard |
+|:---|:---|:---|
+| `ENABLE_ACTIVE_PORT_SCAN` | `false` | Master toggle for active TCP port probes. Requires explicit server policy (`PORT_SCAN_API_KEY` and/or `PORT_SCAN_ALLOWED_DOMAINS`) before probes are permitted. |
+| `PORT_SCAN_API_KEY` | *(unset)* | Shared secret token required for authenticating active port scan requests via `auth_token` or `Authorization: Bearer <key>` header. |
+| `PORT_SCAN_ALLOWED_DOMAINS`| *(unset)* | Comma-separated list of approved target domains/hostnames for active port scans (e.g. `example.com, target.org`). |
+| `TRUST_REVERSE_PROXY` | `false` | Inspects `X-Forwarded-For` for client rate limiting. **Security Notice**: Only enable this behind an upstream reverse proxy (e.g. Nginx, Cloudflare) that strips or overwrites untrusted incoming `X-Forwarded-For` headers from external clients to prevent identity spoofing. |
+| `TESTING` | `false` | Internal flag used by test harnesses to bypass artificial IP rate limits. |
+
+#### Docker Multi-Stage Testing Note
+The [`Dockerfile`](file:///home/kanishk/Desktop/dns-analyzer/Dockerfile) uses a multi-stage build where the final production runtime stage depends on the test verification stage (`COPY --from=test`). Building the image automatically executes `pytest -v` inside the container. You can also explicitly run the test stage using:
+```bash
+docker build --target test -t dns-analyzer-test .
+```
+
+---
+
 ## 📜 RFC Standards Referenced
 
 | RFC | Specification | Diagnostic Scope |
@@ -252,7 +272,7 @@ Returns a self-contained `.html` file with embedded CSS, fully viewable offline.
 
 ## 🧪 Testing
 
-The platform features an automated test suite with **125 unit and integration tests**:
+The platform features an automated test suite with **132 unit and integration tests**:
 
 ```bash
 # Run via all-in-one runner:

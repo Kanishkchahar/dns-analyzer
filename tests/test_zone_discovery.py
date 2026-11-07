@@ -44,3 +44,38 @@ class TestZoneApexDiscovery:
         resolver = MockResolver({})
         apex = await discover_zone_apex("example.com", resolver)
         assert apex == "example.com"
+
+
+@pytest.mark.asyncio
+class TestSubdomainDiscovery:
+    async def test_ct_stream_truncation_repairs_json(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from app.subdomains import discover_passive_subdomains
+        import json
+
+        # Simulate a CT log response cut off mid-JSON at 512KB boundary
+        # Full list would have item1 and item2, but item2 is cut in half
+        items = [{"name_value": "api.example.com\nadmin.example.com"}]
+        valid_part = json.dumps(items)[:-1] # cut off trailing ']'
+        truncated_payload = (valid_part + ', {"name_value": "cut-off.examp').encode("utf-8")
+
+        mock_stream = AsyncMock()
+        mock_stream.status_code = 200
+        mock_stream.aiter_bytes = MagicMock(return_value=_async_iter([truncated_payload]))
+
+        mock_client = MagicMock()
+        mock_client.stream.return_value.__aenter__.return_value = mock_stream
+
+        with patch("httpx.AsyncClient") as mock_http_client:
+            mock_http_client.return_value.__aenter__.return_value = mock_client
+            resolver = MockResolver({})
+            data, findings = await discover_passive_subdomains("example.com", resolver)
+
+        # Repaired JSON must salvage the complete items before the cut
+        assert "api.example.com" in [s["subdomain"] for s in data["subdomains"]]
+        assert "admin.example.com" in [s["subdomain"] for s in data["subdomains"]]
+
+
+async def _async_iter(items):
+    for item in items:
+        yield item

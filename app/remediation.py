@@ -60,10 +60,16 @@ def generate_remediation_fixes(
             }
         ))
     else:
-        # Check if over limit and flattened record is available
+        # Check if over limit and flattened record is available and semantics-safe
         spf_lookups = getattr(email_auth, "spf_lookups", None) if email_auth else None
         spf_flat = getattr(email_auth, "spf_flattened", None) if email_auth else None
-        if spf_lookups and spf_lookups.get("over_limit") and spf_flat:
+        if (
+            spf_lookups
+            and spf_lookups.get("over_limit")
+            and spf_flat
+            and spf_flat.get("can_flatten", True)
+            and spf_flat.get("flattened_record")
+        ):
             fixes.append(RemediationFix(
                 title="Replace SPF with Flattened Record (Bypass 10-Lookup Limit — Advanced Review)",
                 record_type="TXT",

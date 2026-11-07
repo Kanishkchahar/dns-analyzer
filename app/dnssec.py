@@ -166,15 +166,15 @@ async def check_dnssec(
                 findings.append(Finding(
                     severity="info",
                     record_type="DNSSEC",
-                    message=f"Zone apex '{inherited_from}' is cryptographically verified (DS tag #{matching_tag} matches DNSKEY {algo}). "
-                            f"Hostname '{domain}' is protected under verified parent apex authority."
+                    message=f"Zone apex '{inherited_from}' DS record matches zone DNSKEY #{matching_tag} digest ({algo}). "
+                            f"Hostname '{domain}' is protected under verified parent apex DS delegation (RRSIG signatures and root trust anchor chain not evaluated)."
                 ))
             else:
                 findings.append(Finding(
                     severity="info",
                     record_type="DNSSEC",
-                    message=f"DNSSEC is fully enabled and cryptographically verified (parent DS record matches zone DNSKEY #{matching_tag}, algorithm {algo}). "
-                            f"Full cryptographic chain-of-trust validated against parent registry."
+                    message=f"DNSSEC parent delegation verified: DS record matches zone DNSKEY #{matching_tag} digest ({algo}). "
+                            f"DS-to-DNSKEY delegation link verified (full RRSIG signatures and root trust anchor chain not evaluated)."
                 ))
         else:
             status = "bogus"
