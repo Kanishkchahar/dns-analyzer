@@ -45,21 +45,21 @@ bash run.sh --test
 #### Option A: Pull & Run Directly from Docker Hub
 
 ```bash
-# Pull the verified v2 release image
-docker pull kanishkchahar/dns-analyzer:v2
+# Pull the versioned release image
+docker pull kanishkchahar/dns-analyzer:v2.1.0
 
 # Run container on port 8000
-docker run -d --name dns-analyzer-v2 --restart unless-stopped -p 8000:8000 kanishkchahar/dns-analyzer:v2
+docker run -d --name dns-analyzer-v2 --restart unless-stopped -p 8000:8000 kanishkchahar/dns-analyzer:v2.1.0
 ```
 
 #### Option B: Build & Run Locally
 
 ```bash
 # Build the multi-stage production image (the test stage runs during the build)
-docker build -t dns-analyzer:v2 .
+docker build -t dns-analyzer:v2.1.0 -t dns-analyzer:v2 .
 
 # Run container on port 8000
-docker run -d --name dns-analyzer-v2 --restart unless-stopped -p 8000:8000 dns-analyzer:v2
+docker run -d --name dns-analyzer-v2 --restart unless-stopped -p 8000:8000 dns-analyzer:v2.1.0
 ```
 
 #### Container Management:
@@ -69,7 +69,7 @@ docker run -d --name dns-analyzer-v2 --restart unless-stopped -p 8000:8000 dns-a
 docker logs -f dns-analyzer-v2
 
 # Run automated tests inside the container
-docker run --rm dns-analyzer:v2 pytest -v
+docker run --rm dns-analyzer:v2.1.0 pytest -v
 
 # Stop and remove the container
 docker stop dns-analyzer-v2 && docker rm dns-analyzer-v2

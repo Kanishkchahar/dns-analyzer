@@ -50,7 +50,7 @@ RUN pytest -v
 FROM python:3.11-slim AS runtime
 
 LABEL maintainer="DNS Analyzer Team" \
-      version="2.0.0" \
+      version="2.1.0" \
       description="DNS Analyzer v2 — Security Posture Cockpit & DNS/Email Diagnostic Engine"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

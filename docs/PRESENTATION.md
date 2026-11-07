@@ -2,7 +2,7 @@
 ## Master Presentation, Demo Script & Technical Viva Reference
 
 > **Project Author:** Kanishk  
-> **Version:** 2.0 — Security Posture Cockpit Edition  
+> **Version:** 2.1.0 — Security Posture Cockpit Edition
 > **Tech Stack:** Python 3.11+ · FastAPI · dnspython · Vanilla JS · Jinja2 · Uvicorn · Pytest
 
 ---
@@ -457,5 +457,5 @@ The main analysis runs the checks below. Common web path checks and active port 
 | `bash run.sh --docker` | **Docker v2:** Build and run containerized multi-stage service via Docker |
 | `bash run.sh --test` | Run the automated test suite |
 | `bash run.sh --setup-only` | Pre-install dependencies and prepare `venv/` without launching server |
-| `docker run -d -p 8000:8000 kanishkchahar/dns-analyzer:v2` | Run containerized production service directly via Docker |
+| `docker run -d -p 8000:8000 kanishkchahar/dns-analyzer:v2.1.0` | Run the versioned production image directly via Docker |
 | `bash run.sh --help` | Display command usage and script flags |
