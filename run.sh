@@ -5,7 +5,7 @@
 #   bash run.sh              # Auto-setup (if needed) & start on port 8000
 #   bash run.sh 9000         # Auto-setup & start on custom port 9000
 #   bash run.sh --docker     # Build & launch container via Docker
-#   bash run.sh --test       # Run the 132-test automated test suite
+#   bash run.sh --test       # Run the automated test suite
 #   bash run.sh --setup-only # Run setup/dependency install only
 #   bash run.sh --help       # Display help reference
 # ============================================================
@@ -41,7 +41,7 @@ for arg in "$@"; do
     echo "  bash run.sh              Start server on http://127.0.0.1:8000"
     echo "  bash run.sh <port>       Start server on custom port (e.g., 9000)"
     echo "  bash run.sh --docker, -d Build & launch containerized service via Docker"
-    echo "  bash run.sh --test, -t   Run the 132 automated pytest suite"
+    echo "  bash run.sh --test, -t   Run the automated pytest suite"
     echo "  bash run.sh --setup-only Prepare virtual environment without running server"
     echo "  bash run.sh --help, -h   Show this help message"
     echo ""
@@ -120,7 +120,7 @@ fi
 
 if [ "$RUN_TESTS" = true ]; then
   echo ""
-  echo -e "  ${CYAN}➜ Running automated test suite (132 tests)...${NC}"
+  echo -e "  ${CYAN}➜ Running automated test suite...${NC}"
   "$PYTHON" -m pytest -v
   exit $?
 fi

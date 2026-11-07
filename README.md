@@ -1,6 +1,6 @@
 # DNS Analyzer v2 — Security Posture Cockpit Edition
 
-A high-performance, asynchronous DNS audit and email authentication security scanner. Enter any domain — or paste a full URL like `https://example.com/page` — and get real DNS records (A, AAAA, MX, NS, TXT, CNAME, SOA) fetched concurrently via non-blocking I/O, plus SPF / DMARC / DKIM analysis, DNSSEC chain validation, subdomain takeover defense, BIMI logo auditing, an executive Bento Grid security cockpit, and downloadable diagnostic reports.
+A high-performance, asynchronous DNS and web security posture scanner. Enter a domain or full URL to review DNS records (including CAA), SPF / DMARC / DKIM, DNSSEC, MTA-STS and TLS-RPT, TLS certificates, browser security headers, passive Certificate Transparency subdomains, and more. The dashboard includes optional scoped path discovery, scan coverage and browser-local history, CSV and report exports, and actionable findings.
 
 ---
 
@@ -30,7 +30,7 @@ bash run.sh 9000
 bash run.sh --setup-only
 ```
 
-#### Automated Test Suite (132 Automated Tests)
+#### Automated Test Suite
 
 ```bash
 bash run.sh --test
@@ -55,7 +55,7 @@ docker run -d --name dns-analyzer-v2 --restart unless-stopped -p 8000:8000 kanis
 #### Option B: Build & Run Locally
 
 ```bash
-# Build the multi-stage production image (automatically runs 132 pytest checks during build)
+# Build the multi-stage production image (the test stage runs during the build)
 docker build -t dns-analyzer:v2 .
 
 # Run container on port 8000
@@ -89,16 +89,19 @@ docker stop dns-analyzer-v2 && docker rm dns-analyzer-v2
   - **🔧 1-Click Remediation**: Number of copy-paste zone fixes ready with direct jump navigation.
 
 ### 2. Comprehensive Scan Suite
-- **7 Core DNS Record Types**: A, AAAA, MX, NS, TXT, CNAME, SOA fetched in parallel via `asyncio.gather`.
+- **8 DNS Record Types**: A, AAAA, MX, NS, TXT, CNAME, SOA, and CAA queried concurrently. CAA policy inherited from parent labels is shown where applicable.
 - **Authoritative Zone Apex Discovery (RFC 1034/2181)**: Discovers the authoritative zone apex before checking NS, SOA, and DNSSEC, preventing false alarms when analyzing subdomains (e.g. `mail.example.com`).
 - **9 RFC Infrastructure Rules**: Dual-stack reachability, NS redundancy, NS/MX IP resolution, CNAME coexistence conflicts (RFC 1034), SOA refresh/retry sanity (RFC 1912), and TTL bounds.
 - **SPF Deep Audit (RFC 7208)**: Syntax validation, recursion tree traversal against the 10-lookup limit, `+all` spoof detection, and automatic CIDR flattening.
 - **DMARC Security Engine (RFC 7489)**: Evaluates policy enforcement (`none` → `quarantine` → `reject`), organizational domain fallback discovery, alignment flags (`adkim`, `aspf`), and aggregate reporting (`rua`).
-- **DKIM Multi-Selector Scanner (RFC 6376)**: Concurrently audits 15 common selector endpoints (`google`, `default`, `s1`, `mail`, `k1`, `zendesk`, `amazonses`, etc.) and extracts public keys with transparent negative-result labeling.
+- **DKIM Multi-Selector Scanner (RFC 6376)**: Checks common selectors and lets users supply up to 20 additional selector names. Results include public key metadata and distinguish missing records from inconclusive DNS lookups.
+- **Mail Transport Security**: Checks `_mta-sts` and `_smtp._tls` DNS records, safely retrieves a published MTA-STS policy file, and reports TLS-RPT destinations. It does not send email.
 - **Subdomain Takeover Defense (CVE Threat Hunting)**: Detects dangling CNAMEs pointing to abandoned cloud endpoints (AWS S3, GitHub Pages, Heroku, Shopify, Zendesk, Surge, Azure, Vercel) before attackers hijack them.
 - **DNSSEC Chain-of-Trust (RFC 4033–4035)**: Audits Key Signing Keys (KSK), Zone Signing Keys (ZSK), algorithms (ECDSA, Ed25519, RSA), and parent registry DS records to guarantee immunity against DNS cache poisoning (Kaminsky attacks).
-- **TLS & HTTPS Security Audit**: Non-invasive SSL/TLS certificate validity & expiration audit, TLS 1.2/1.3 protocol negotiation, cipher suites, HTTP-to-HTTPS 301 redirection, and HTTP security headers (HSTS, CSP, X-Frame-Options).
-- **Passive Subdomain Inventory**: Queries Certificate Transparency (CT) logs to discover publicly exposed subdomains and monitors for dangling CNAME takeovers with zero packets sent to target infrastructure.
+- **TLS & HTTPS Security Audit**: Certificate validity, negotiated TLS, HTTPS redirection, HSTS, CSP risk notes, Permissions-Policy, cross-origin isolation headers, and cookie security flags. An `OPTIONS` request reports advertised methods only; the scanner does not send write-method probes.
+- **Passive Subdomain Inventory**: Queries Certificate Transparency (CT) logs for publicly logged hostnames, checks discovered DNS pointers, and provides CSV export.
+- **Optional Common Path Scan**: Checks a bounded set of common web paths and reads same-origin `robots.txt` and sitemap references. It does not crawl directories; discovered paths are labeled for review and are not accessed automatically beyond the bounded checks.
+- **Scan Coverage & Change History**: Shows completed, partial, blocked, and optional checks. The browser can compare DNS, CT, TLS certificate, and optional path results with earlier scans stored locally.
 - **Scoped Network Inventory & Port Verification**: Nmap-style scoped target resolution and safe port auditing with strict SSRF guardrails (blocking RFC 1918 private subnets `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and loopback `127.0.0.0/8`).
 - **BIMI Brand Certification (RFC 8617)**: Verifies SVG brand logo publication and VMC eligibility for inbox verification in Gmail, Apple Mail, and Yahoo Mail.
 
@@ -134,49 +137,20 @@ docker stop dns-analyzer-v2 && docker rm dns-analyzer-v2
 
 ```
 dns-analyzer/
-├── app/
-│   ├── main.py              # FastAPI application & REST routing gateway
-│   ├── resolver.py          # Non-blocking concurrent DNS resolution & zone discovery
-│   ├── analyzer.py          # 9 core RFC infrastructure validation checks
-│   ├── spf.py               # SPF recursive parser, 10-lookup counter & flattener
-│   ├── email_auth.py        # DMARC enforcement, DKIM selector scanner & score engine
-│   ├── dnssec.py            # DNSSEC cryptographic chain-of-trust audit
-│   ├── takeover.py          # Subdomain takeover & dangling CNAME threat scanner
-│   ├── bimi.py              # BIMI inbox logo brand validation
-│   ├── tls_check.py         # TLS encryption, certificate expiry & HTTP security headers
-│   ├── subdomains.py        # Passive CT log discovery & dangling takeover checker
-│   ├── network_scan.py      # Scoped target resolution & SSRF-safe port auditor
-│   ├── remediation.py       # 1-Click DNS fix generator & BIND zone builder
-│   ├── models.py            # Strict Pydantic request/response validation schemas
-│   └── report.py            # Offline self-contained HTML diagnostic report builder
-├── static/
-│   ├── index.html           # Dashboard UI with Asymmetric Bento Grid Cockpit
-│   ├── style.css            # Geist design tokens, dark mode, responsive styles
-│   └── app.js               # Vanilla JS controller, tab navigation, SVG score ring
-├── tests/                   # Complete automated test suite (132 tests)
-│   ├── conftest.py          # Shared fixtures, mock DNS resolvers & network mocks
-│   ├── test_models.py       # Domain sanitization & Pydantic models
-│   ├── test_analyzer.py     # 9 RFC infrastructure checks & summary tests
-│   ├── test_spf.py          # SPF parser, lookup counter & flattener tests
-│   ├── test_email_auth.py   # DMARC, DKIM & email health score tests
-│   ├── test_dnssec.py       # DNSSEC chain-of-trust audit tests
-│   ├── test_takeover.py     # Subdomain takeover & dangling CNAME tests
-│   ├── test_bimi.py         # BIMI brand logo inbox tests
-│   ├── test_remediation.py   # 1-Click fixes & BIND zone generator tests
-│   ├── test_report.py       # Standalone HTML report rendering tests
-│   ├── test_resolver.py     # Concurrent async DNS resolver tests
-│   ├── test_zone_discovery.py # Authoritative zone discovery & label tests
-│   ├── test_tls_check.py    # TLS certificate, protocol & header tests
-│   ├── test_network_scan.py # SSRF protection, list scan & port tests
-│   └── test_api.py          # FastAPI endpoints integration tests
-├── Dockerfile               # Secure multi-stage build (distroless runtime & test target)
-├── .dockerignore            # Container build exclusion rules
+├── app/                     # FastAPI backend, scans, models, and report builder
+├── static/                  # Browser UI (HTML, CSS, and JavaScript)
+├── tests/                   # Unit, integration, and API tests
+├── docs/
+│   └── PRESENTATION.md      # Demo guide, scan catalog, and viva notes
+├── README.md                # Setup, features, API, and deployment guide
+├── Dockerfile               # Multi-stage image build and test gate
+├── .dockerignore            # Files excluded from Docker build context
 ├── pytest.ini               # Pytest discovery and warning configuration
-├── run.sh                   # Unified CLI runner (setup, launch, docker & test)
-├── requirements.txt         # Python dependencies with version boundaries
-├── PRESENTATION.md          # Master demo script, scan directory & viva reference
-└── README.md
+├── requirements.txt         # Python runtime and test dependencies
+└── run.sh                   # Local setup, test, Docker, and server commands
 ```
+
+The local `venv/` (or `.venv/`) is generated by the setup script and ignored by Git; it is not part of the application source tree.
 
 ---
 
@@ -233,6 +207,27 @@ dns-analyzer/
 
 Returns a self-contained `.html` file with embedded CSS, fully viewable offline.
 
+### 3. Run a Bounded Common Path Scan
+`POST /api/network/path-scan`
+
+```json
+{ "targets": ["example.com"] }
+```
+
+Accepts up to five hostnames or public IPs. Checks a fixed list of common paths and same-origin paths advertised by `robots.txt` or sitemap files. This is not a recursive directory crawler.
+
+### 4. Check Custom DKIM Selectors
+`POST /api/email/dkim-selectors`
+
+```json
+{ "domain": "example.com", "selectors": ["selector3", "mail2026"] }
+```
+
+Accepts 1–20 selector names for the specified domain.
+
+### 5. Scoped Network Tools
+`POST /api/network/list-scan` resolves target scope. `POST /api/network/port-scan` performs standard-port checks only when authorization and server policy permit them. Active port probing is opt-in and remains subject to the configured allowlist and SSRF controls.
+
 ---
 
 ## ⚙️ Deployment & Environment Configuration
@@ -248,7 +243,7 @@ The application is configured via environment variables:
 | `TESTING` | `false` | Internal flag used by test harnesses to bypass artificial IP rate limits. |
 
 #### Docker Multi-Stage Testing Note
-The [`Dockerfile`](file:///home/kanishk/Desktop/dns-analyzer/Dockerfile) uses a multi-stage build where the final production runtime stage depends on the test verification stage (`COPY --from=test`). Building the image automatically executes `pytest -v` inside the container. You can also explicitly run the test stage using:
+The [`Dockerfile`](Dockerfile) uses a multi-stage build where the final production runtime stage depends on the test verification stage (`COPY --from=test`). Building the image automatically executes `pytest -v` inside the container. You can also explicitly run the test stage using:
 ```bash
 docker build --target test -t dns-analyzer-test .
 ```
@@ -267,12 +262,15 @@ docker build --target test -t dns-analyzer-test .
 | **RFC 6376** | DomainKeys Identified Mail (DKIM) | Selector discovery, public key extraction, cryptographic integrity |
 | **RFC 4033 / 4034 / 4035** | DNS Security Extensions (DNSSEC) | RRSIG validation, DNSKEY verification, DS parent trust delegation |
 | **RFC 8617** | Brand Indicators for Message Identification (BIMI) | Official logo presentation in verified client inboxes |
+| **RFC 8659** | DNS Certification Authority Authorization (CAA) | Certificate issuance policy and inherited parent records |
+| **RFC 8461** | SMTP MTA Strict Transport Security (MTA-STS) | Published mail transport policy and HTTPS policy-file checks |
+| **RFC 8460** | SMTP TLS Reporting (TLS-RPT) | DNS reporting destination configuration |
 
 ---
 
 ## 🧪 Testing
 
-The platform features an automated test suite with **132 unit and integration tests**:
+The repository includes unit and integration tests runnable with:
 
 ```bash
 # Run via all-in-one runner:

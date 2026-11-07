@@ -3,7 +3,7 @@
 
 > **Project Author:** Kanishk  
 > **Version:** 2.0 — Security Posture Cockpit Edition  
-> **Tech Stack:** Python 3.11+ · FastAPI · dnspython · Vanilla JS · Jinja2 · Uvicorn · Pytest (132 Automated Tests)  
+> **Tech Stack:** Python 3.11+ · FastAPI · dnspython · Vanilla JS · Jinja2 · Uvicorn · Pytest
 
 ---
 
@@ -28,7 +28,7 @@
 >  
 > *DNS is the foundational routing fabric of the modern internet, and email authentication is our frontline defense against identity spoofing and credential theft. Yet, misconfigured DNS zones silently bring down mission-critical platforms, cause transactional emails to be marked as spam, and expose companies to catastrophic subdomain hijacking.*  
 >  
-> *Traditional command-line utilities like `dig` or `nslookup` are manual, sequential, and output cryptic text that requires deep RFC expertise to interpret. I engineered a modern, non-blocking platform that queries all 7 primary DNS record types in parallel, evaluates 18+ RFC compliance and vulnerability checks, audits SPF / DMARC / DKIM / DNSSEC / Subdomain Takeover / BIMI, and organizes the results into an executive **Asymmetric Bento Grid** cockpit — complete with 1-click BIND zone fixes, in under 200 milliseconds."*
+> *Traditional command-line utilities like `dig` or `nslookup` expose low-level answers that take experience to interpret. DNS Analyzer brings DNS, email, TLS, and selected web-surface checks into one dashboard. It reports scan coverage and inconclusive results, and provides focused exports and remediation guidance. Scan time depends on DNS and remote service response times."*
 
 ---
 
@@ -51,7 +51,7 @@ bash run.sh
 | **5** | `invalid!!!domain` | **Resilience & Validation:** Pydantic validation rejects malformed input with a clean HTTP 400 error banner — no server exceptions or unhandled tracebacks. |
 
 ### Key Features to Highlight During the Demo:
-1. ⚡ **Asynchronous Concurrency**: *"All 7 record types + SPF + DMARC + DKIM + DNSSEC + Subdomain Takeover + BIMI return simultaneously in under 200ms using Python's `asyncio.gather` — zero sequential blocking."*
+1. ⚡ **Asynchronous Concurrency**: *"Independent DNS and security checks run concurrently with bounded timeouts. Results can vary with DNS, CT, and target response times."*
 2. 🍱 **Bento Grid Security Cockpit**: *"The left hero card features an animated circular score ring anchoring the overall posture (A+ to F), accompanied by a 2×2 grid of rich, un-truncated diagnostic telemetry."*
 3. 🛡️ **Subdomain Takeover Defense**: *"Scans CNAME pointers against known cloud fingerprints (AWS S3, GitHub Pages, Heroku, Shopify) to catch dangling CNAMEs before malicious actors seize them."*
 4. 🔐 **DNSSEC Cryptographic Chain-of-Trust**: *"Validates Zone Signing Keys (ZSK), Key Signing Keys (KSK), algorithms (ECDSA, Ed25519), and parent DS records to guarantee protection against DNS cache poisoning (Kaminsky attacks)."*
@@ -59,6 +59,8 @@ bash run.sh
 6. ✨ **BIMI Brand Inbox Validation**: *"Audits whether the domain publishes a verified SVG logo and satisfies strict DMARC criteria for official avatar display in Gmail and Apple Mail."*
 7. 🔧 **1-Click Copyable Fixes & BIND Export**: *"Not just a problem spotter — an automated solution. Generates exact zone fixes tailored for Cloudflare, AWS Route 53, and GoDaddy, plus downloadable standard BIND zone files."*
 8. ⌨️ **Radical Keyboard Ergonomics**: *"Operate the entire dashboard without a mouse: `/` focuses search, `?` opens help, `1`–`4` test samples, `f` filters findings, `v` toggles CLI dig view, `c` copies shareable links, `m` copies Markdown summaries, `j` exports JSON, `d` downloads offline reports, and `z` exports BIND zone files."*
+9. 🧭 **Scan Coverage & Change History**: *"See which checks completed, were partial, were blocked, or are optional. Compare DNS, CT inventory, TLS certificate, and optional path results with earlier scans saved in this browser."*
+10. 🌐 **Bounded Web Path Review**: *"Run a separate fixed-path check that can read same-origin robots.txt and sitemap references. It is bounded and does not recursively crawl directories."*
 
 ---
 
@@ -157,7 +159,7 @@ DNS Analyzer v2 automates full-zone resolution, email spoofing protection audits
 
 ## 6. Comprehensive Scan Directory: What Scans It Runs, What They Tell You & Why They Are Critical
 
-Here is the exhaustive inventory of all scans performed during each analysis:
+The main analysis runs the checks below. Common web path checks and active port probes are separate, optional actions; coverage labels identify checks that were not run or could not complete.
 
 ---
 
@@ -212,11 +214,16 @@ Here is the exhaustive inventory of all scans performed during each analysis:
   - `TTL = 0`: Disables caching completely. Every single user request hammers the authoritative nameserver, causing severe server load and slow page-load times.
   - `TTL > 7 days`: Changes to IP addresses or server migrations take up to a week to propagate, paralyzing emergency failover responses during incidents or outages.
 
+#### 10. Certificate Authority Authorization (CAA) Policy Check
+* **What It Does**: Queries CAA records and checks parent labels when the submitted hostname has no direct CAA answer.
+* **What It Tells You**: Shows whether certificate issuance is restricted to listed certificate authorities and identifies inherited policy.
+* **Why It Is Important**: CAA gives domain owners a DNS mechanism to express which certificate authorities may issue certificates for their names. Interpret wildcard (`issuewild`) and ordinary issuance policy separately when reviewing the records.
+
 ---
 
 ### Category 2: Email Authentication & Anti-Spoofing Scans (InboxShield)
 
-#### 10. SPF (Sender Policy Framework) Record & Policy Scan (RFC 7208)
+#### 11. SPF (Sender Policy Framework) Record & Policy Scan (RFC 7208)
 * **What It Does**: Parses `v=spf1` TXT records, evaluates mechanisms (`ip4`, `ip6`, `include`, `a`, `mx`), and evaluates the trailing policy (`-all`, `~all`, `?all`, `+all`).
 * **What It Tells You**: Identifies the exact IP addresses and cloud providers legally authorized to send email for this domain.
 * **Why It Is Important**: 
@@ -224,56 +231,66 @@ Here is the exhaustive inventory of all scans performed during each analysis:
   - `+all` explicitly authorizes the entire internet to spoof your domain.
   - `-all` (HardFail) informs recipient servers to outright reject unauthorized senders.
 
-#### 11. Multiple SPF Record Conflict Scan (RFC 7208 §3.2)
+#### 12. Multiple SPF Record Conflict Scan (RFC 7208 §3.2)
 * **What It Does**: Detects whether more than one `v=spf1` TXT record exists in the zone.
 * **What It Tells You**: Detects duplicate SPF records created when different teams or IT admins publish separate records for Google, Salesforce, or Zendesk.
 * **Why It Is Important**: RFC 7208 §3.2 mandates that a domain MUST NOT publish multiple SPF records. When receiving mail servers encounter multiple SPF records, they immediately return `PermError`, causing legitimate marketing, transactional, and executive emails to be marked as spam or dropped.
 
-#### 12. SPF Recursive 10-Lookup Limit & Tree Traversal Scan (RFC 7208 §4.6.4)
+#### 13. SPF Recursive 10-Lookup Limit & Tree Traversal Scan (RFC 7208 §4.6.4)
 * **What It Does**: Recursively traverses and counts every DNS lookup triggered by `include:`, `a`, `mx`, `ptr`, and `redirect` mechanisms.
 * **What It Tells You**: The exact number of DNS lookups required to evaluate the SPF record, warning if approaching the limit (8–10) or in violation (>10).
 * **Why It Is Important**: RFC 7208 limits lookups to 10 to prevent infinite recursive DNS amplification attacks. When a company uses Google Workspace (1 lookup) + Zendesk (2 lookups) + Salesforce (4 lookups) + SendGrid (3 lookups) + HubSpot (2 lookups) = 12 lookups, the record fails with `PermError`. Receivers stop reading the record and treat legitimate mail as unauthenticated.
 
-#### 13. Automatic SPF CIDR Record Flattening Engine
+#### 14. Automatic SPF CIDR Record Flattening Engine
 * **What It Does**: Recursively resolves all nested `include:` domains down to raw `ip4:` and `ip6:` CIDR blocks, assembling an optimized zero-lookup record.
 * **What It Tells You**: Provides a drop-in replacement SPF record with 0 DNS lookups.
 * **Why It Is Important**: Eliminates the 10-lookup limit problem forever without removing any authorized cloud senders.
 
-#### 14. DMARC Enforcement & Alignment Policy Scan (RFC 7489)
+#### 15. DMARC Enforcement & Alignment Policy Scan (RFC 7489)
 * **What It Does**: Queries `_dmarc.{domain}` and evaluates policy enforcement: `p=none` (monitoring), `p=quarantine` (deliver to spam), and `p=reject` (block at gateway), plus alignment flags (`adkim`, `aspf`).
 * **What It Tells You**: Whether recipient mail servers actively block phishing emails or merely log them.
 * **Why It Is Important**: `p=none` offers **zero protection** against spoofing. Attackers can still send phishing emails as your brand. Only `p=quarantine` and `p=reject` protect customers, employees, and partners from phishing.
 
-#### 15. DMARC Aggregate (`rua`) & Forensic (`ruf`) Telemetry Scan
+#### 16. DMARC Aggregate (`rua`) & Forensic (`ruf`) Telemetry Scan
 * **What It Does**: Verifies whether DMARC aggregate reporting URIs (`rua=mailto:...`) are configured.
 * **What It Tells You**: Confirms whether the domain owner receives daily XML telemetry reports from Gmail, Microsoft, and Yahoo about who is attempting to send email as their domain worldwide.
 * **Why It Is Important**: Without `rua`, IT administrators operate blind. They have no visibility into active phishing campaigns targeting their brand, nor do they know if a legitimate SaaS provider's emails are failing authentication.
 
-#### 16. DKIM (DomainKeys Identified Mail) Multi-Selector Scan (RFC 6376)
+#### 17. DKIM (DomainKeys Identified Mail) Multi-Selector Scan (RFC 6376)
 * **What It Does**: Concurrently probes 15 industry-standard DKIM selectors (`google`, `default`, `s1`, `selector1`, `mail`, `k1`, `zendesk`, `amazonses`, `mandrill`, etc.) at `{selector}._domainkey.{domain}` and extracts RSA/Ed25519 public keys.
 * **What It Tells You**: Validates whether cryptographic signatures are published and confirms which cloud providers sign outgoing messages.
 * **Why It Is Important**: DKIM creates a cryptographic tamper-evident seal on outgoing emails. If an email is altered in transit (e.g. malicious invoice link substitution), the DKIM signature breaks and recipient servers flag the tampering.
+
+#### Custom DKIM Selector Checks
+* **What It Does**: Allows the user to submit up to 20 additional selector names for DNS TXT lookup, beyond the built-in common selector list.
+* **What It Tells You**: Helps check selectors used by a particular mail provider or organization.
+* **Limit**: A selector not found in DNS does not prove that a domain has no DKIM; selectors depend on the mail provider and signing configuration.
+
+#### MTA-STS and TLS-RPT Mail Transport Checks
+* **What It Does**: Checks `_mta-sts` and `_smtp._tls` DNS TXT records. If MTA-STS is published, it retrieves the policy file over validated HTTPS and summarizes its settings.
+* **What It Tells You**: Reports whether a published policy file is reachable and whether TLS failure reporting destinations are configured.
+* **Limit**: These checks inspect DNS and the policy file; they do not send email or prove that every sender enforces the policy.
 
 ---
 
 ### Category 3: Cryptography & Threat Defense Scans
 
-#### 17. Subdomain Takeover & Dangling CNAME Threat Scanner (CVE Threat Hunting)
+#### 18. Subdomain Takeover & Dangling CNAME Threat Scanner
 * **What It Does**: Analyzes CNAME pointers against known cloud provider fingerprints (AWS S3, GitHub Pages, Heroku, Shopify, Zendesk, Surge, Ghost, Azure, Vercel) and verifies whether the target endpoint resolves or is unclaimed.
 * **What It Tells You**: Discovers "dangling" CNAME records pointing to decommissioned or deleted cloud instances.
 * **Why It Is Important**: **Critical CVE Vulnerability**. If a company deletes an AWS S3 bucket (`old-assets.s3.amazonaws.com`) but forgets to delete the DNS CNAME (`assets.company.com`), any attacker can register that bucket name on AWS for $0 and take over `assets.company.com`. They can then host phishing login pages, steal session cookies via cross-domain access, and distribute malware under the company's trusted domain.
 
-#### 18. DNSSEC Cryptographic Chain-of-Trust Audit (RFC 4033, 4034, 4035)
+#### 19. DNSSEC Cryptographic Chain-of-Trust Audit (RFC 4033, 4034, 4035)
 * **What It Does**: Queries Zone Signing Keys (ZSK), Key Signing Keys (KSK), public key algorithms (ECDSA P-256, Ed25519, RSA), and validates parent TLD Delegation Signer (`DS`) records.
 * **What It Tells You**: Confirms whether the zone's DNS records are digitally signed and cryptographically tied to the global root trust anchor.
 * **Why It Is Important**: Standard DNS queries travel in plain unencrypted UDP. Attackers on public Wi-Fi, malicious ISPs, or compromised routers can inject fake DNS responses (DNS Cache Poisoning / Kaminsky attacks) to silently redirect users entering `yourbank.com` to an identical phishing server. DNSSEC renders cache poisoning mathematically impossible.
 
-#### 19. BIMI (Brand Indicators for Message Identification) Certification (RFC 8617)
+#### 20. BIMI (Brand Indicators for Message Identification) Check (RFC 8617)
 * **What It Does**: Queries `default._bimi.{domain}` for verified SVG brand logos and checks whether the domain's DMARC policy meets the strict eligibility criteria (`p=quarantine` or `p=reject` with `pct=100`).
 * **What It Tells You**: Confirms whether the company's verified brand avatar will display next to emails in Gmail, Apple Mail, and Yahoo Mail.
 * **Why It Is Important**: BIMI increases email open rates by up to 21%, dramatically boosts consumer brand trust, and visually proves to non-technical users that an email is 100% authentic.
 
-#### 20. 1-Click Remediation & BIND Zone File Engine
+#### 21. Remediation Suggestions & BIND Zone File Export
 * **What It Does**: Cross-correlates all diagnostic findings to synthesize exact copy-paste DNS records tailored for Cloudflare, AWS Route 53, and GoDaddy, plus an exportable RFC-compliant BIND zone file (`.zone`).
 * **What It Tells You**: The precise configuration lines needed to transition a domain from a failing security posture to a hardened Grade A+.
 * **Why It Is Important**: A scanner that only reports errors creates friction. This feature bridges diagnosis and resolution, allowing administrators to harden their domain in under 60 seconds.
@@ -282,25 +299,35 @@ Here is the exhaustive inventory of all scans performed during each analysis:
 
 ### Category 4: Web Security, Certificate Transparency & Scoped Network Audits
 
-#### 21. Authoritative Zone Apex Discovery (RFC 1034, 2181)
+#### 22. Authoritative Zone Apex Discovery (RFC 1034, 2181)
 * **What It Does**: Recursively traverses domain labels to locate the true authoritative zone cut (`SOA` / `NS`) prior to running zone-level checks.
 * **What It Tells You**: Identifies whether the submitted target is an apex zone or a subdomain delegating to a parent zone, and isolates authoritative zone records accurately.
 * **Why It Is Important**: Prevents false positive security alerts. A hostname like `api.example.com` rarely publishes its own `SOA` or `NS` records at that leaf node; checking the leaf directly causes incorrect failure reports. Authoritative discovery guarantees accurate diagnostics.
 
-#### 22. TLS Encryption & HTTPS Security Posture Audit
-* **What It Does**: Initiates non-blocking TLS handshakes to verify SSL/TLS certificate validity, issuer authority, expiration window, supported protocols (TLS 1.2 / 1.3), cipher suites, HTTP-to-HTTPS 301 enforcement, and security headers (HSTS, CSP, X-Frame-Options).
-* **What It Tells You**: Exposes expired or misconfigured certificates, legacy protocol vulnerabilities (SSLv3, TLS 1.0, 1.1), and missing transport encryption protections.
+#### 23. TLS Encryption & HTTPS Security Posture Audit
+* **What It Does**: Checks certificate validity, negotiated TLS details, HTTP-to-HTTPS behavior, and observed response headers. Header review includes HSTS, CSP risk notes, Permissions-Policy, COOP/CORP, and cookie flags. A safe `OPTIONS` request reports methods advertised in the `Allow` header.
+* **What It Tells You**: Highlights certificate and browser-policy issues visible from the scanned endpoint. Cookie values are not retained. Advertised HTTP methods are hints, not proof that those methods accept requests; no write-method request is sent.
 * **Why It Is Important**: Modern web applications must enforce end-to-end transport encryption. Missing HSTS allows SSL stripping attacks, and expired certificates trigger browser security warnings that destroy user trust.
 
-#### 23. Passive Subdomain Inventory via Certificate Transparency (RFC 6962)
+#### 24. Passive Subdomain Inventory via Certificate Transparency (RFC 6962)
 * **What It Does**: Queries public Certificate Transparency (CT) logs via `crt.sh` to extract publicly logged subdomains associated with the root apex, then non-intrusively resolves their IP addresses and inspects CNAME pointers.
 * **What It Tells You**: Uncovers forgotten external attack surface assets, dev/staging environments, and potential dangling CNAME takeover candidates.
 * **Why It Is Important**: Passive reconnaissance sends zero probe packets to target infrastructure, making it 100% non-invasive, safe, and invisible to target firewalls while giving defenders complete visibility into their public exposure.
 
-#### 24. Scoped Network Inventory & SSRF-Guarded Port Auditing
+#### 25. Scoped Network Inventory & SSRF-Guarded Port Auditing
 * **What It Does**: Provides Nmap-style target scope resolution (List Scan) and scoped TCP port verification for standard services (HTTP 80, HTTPS 443, SSH 22, SMTP 25/465/587, DNS 53) with built-in SSRF protections.
 * **What It Tells You**: Lists in-scope public targets and detects open listening services with banner grabbing and TCP SYN/ACK verification.
 * **Why It Is Important**: Enforces strict SSRF defense by disallowing probes against loopback (`127.0.0.0/8`), link-local (`169.254.0.0/16`), and RFC 1918 private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), ensuring the tool cannot be weaponized to map internal networks.
+
+#### 25. Optional Common Web Path and Publication-File Review
+* **What It Does**: Checks a bounded list of common paths, then may read same-origin `robots.txt` and sitemap files to identify referenced paths. It follows only permitted same-host redirects and limits the number of sitemap references checked.
+* **What It Tells You**: Shows public responses and paths intentionally listed in publication files. Names that look sensitive are labeled for manual review; the tool does not attempt authentication or access-control bypass.
+* **Limit**: This is not directory brute forcing or recursive crawling. A listed path is not necessarily sensitive, and a response status alone does not establish an exposure.
+
+#### 26. Scan Coverage, Browser-Local History, and Exports
+* **What It Does**: The coverage panel reports completed, partial, blocked, and optional checks. Browser-local history compares DNS records and, when both samples are complete, CT names; it can also compare certificate and optional path results. CT subdomains can be exported as CSV.
+* **Privacy**: History snapshots are stored in the current browser's local storage and can be cleared from the dashboard. They are not a server-side monitoring service.
+* **Reports**: The standalone HTML report includes available scan findings and coverage information; recent path scan results may be included when available.
 
 ---
 
@@ -383,7 +410,7 @@ Here is the exhaustive inventory of all scans performed during each analysis:
 
 ### Category F: Reliability & Code Quality
 * **Q: How do you guarantee stability across Python versions?**  
-  *Answer:* The platform includes an automated test suite of **132 unit and integration tests** running under `pytest`. Tests mock network queries to verify RFC check logic deterministically and test edge cases like dirty URLs, malformed domains, and CNAME loops. Furthermore, `run.sh` features self-healing virtual environment checks that automatically verify Python 3.11+ and rebuild corrupted environments.
+  *Answer:* The repository includes unit and integration tests runnable under `pytest`; many network-facing code paths use mocks for deterministic checks. `run.sh` can prepare the virtual environment and launch the application.
 
 ---
 
@@ -391,7 +418,7 @@ Here is the exhaustive inventory of all scans performed during each analysis:
 * **Q: Why is SSRF protection critical when building network diagnostic tools?**  
   *Answer:* Web diagnostic tools that accept user-provided hostnames or IP addresses can be abused by attackers as an open proxy or Server-Side Request Forgery (SSRF) vector to probe internal infrastructure (e.g. AWS metadata `169.254.169.254`, Kubernetes services, Docker networks, or private database ports `10.0.0.0/8`, `192.168.0.0/16`). Our engine uses `ipaddress.ip_network` boundaries to strictly disallow loopback, link-local, multicast, and RFC 1918 private subnets prior to initiating any TCP connections.
 * **Q: How does passive subdomain enumeration differ from active brute-forcing?**  
-  *Answer:* Active tools (like `amass` or `dnsenum` brute-forcing) send thousands of DNS packets directly to nameservers, generating significant network noise, triggering rate limits, and alerting SOC intrusion detection systems. Passive enumeration queries public Certificate Transparency (CT) logs (`crt.sh`) via HTTPS. Zero packets are transmitted to the target domain's nameservers, making the discovery 100% stealthy, legal, and non-disruptive.
+  *Answer:* Passive CT discovery queries a public certificate-log service over HTTPS. The CT query itself does not probe the target web server; discovered hostnames may then be resolved through DNS as part of the inventory workflow.
 * **Q: Why must authoritative zone discovery happen before checking NS, SOA, and DNSSEC?**  
   *Answer:* When scanning subdomains like `app.dashboard.company.com`, checking NS or SOA at the leaf node directly will fail because subdomains do not typically possess independent zone apex authority unless delegated. Traversing upward to locate the authoritative SOA cut ensures the diagnostic engine evaluates the true responsible nameservers without issuing false-alarm security warnings.
 
@@ -428,7 +455,7 @@ Here is the exhaustive inventory of all scans performed during each analysis:
 | `bash run.sh` | **Recommended:** Auto-setup environment, verify dependencies, and launch server on `http://127.0.0.1:8000` |
 | `bash run.sh <port>` | Launch server on custom port (e.g. `bash run.sh 9000`) |
 | `bash run.sh --docker` | **Docker v2:** Build and run containerized multi-stage service via Docker |
-| `bash run.sh --test` | Run the complete automated test suite (132 tests) |
+| `bash run.sh --test` | Run the automated test suite |
 | `bash run.sh --setup-only` | Pre-install dependencies and prepare `venv/` without launching server |
 | `docker run -d -p 8000:8000 kanishkchahar/dns-analyzer:v2` | Run containerized production service directly via Docker |
 | `bash run.sh --help` | Display command usage and script flags |
