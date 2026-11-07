@@ -1,10 +1,15 @@
 """Tests for Native TLS & HTTPS Security Auditor (app/tls_check.py)."""
 
 import pytest
-from app.tls_check import is_safe_ip, match_san_hostname, audit_tls_and_https
+from app.tls_check import is_safe_ip, match_san_hostname, audit_tls_and_https, resolve_and_verify_all_ips
 
 
 class TestTLSUtilities:
+    async def test_resolve_and_verify_all_ips_blocks_loopback(self):
+        safe, ips, reason = await resolve_and_verify_all_ips("127.0.0.1", 80)
+        assert safe is False
+        assert "Unsafe address" in reason
+
     def test_ssrf_safety_blocks_private_and_loopback_ips(self):
         # Loopback
         safe, reason = is_safe_ip("127.0.0.1")

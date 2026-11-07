@@ -5,12 +5,13 @@ and opt-in Port & Service checks against explicitly approved public targets.
 """
 
 import asyncio
+import os
 import socket
 from typing import Any
 import dns.asyncresolver
 
 from app.models import Finding
-from app.tls_check import is_safe_ip
+from app.tls_check import is_safe_ip, resolve_and_verify_all_ips
 
 # Curated, safe default ports for standard public infrastructure auditing
 STANDARD_PORTS: dict[int, str] = {
@@ -23,6 +24,16 @@ STANDARD_PORTS: dict[int, str] = {
     53: "DNS (Domain Name System)",
     22: "SSH (Secure Remote Administration)",
 }
+
+# Server-side controls: active scanning requires server-side policy authorization
+MAX_PORTS_PER_SCAN = 10
+GLOBAL_PORT_SCAN_SEMAPHORE = asyncio.Semaphore(4)
+
+
+def is_active_scan_allowed() -> bool:
+    """Check if server configuration permits active port scanning."""
+    val = os.environ.get("ENABLE_ACTIVE_PORT_SCAN", "true").strip().lower()
+    return val in ("true", "1", "yes", "enabled")
 
 
 async def run_list_scan(
@@ -93,7 +104,27 @@ async def run_port_scan(
     timeout: float = 1.5,
 ) -> dict[str, Any]:
     """Execute scoped, opt-in port and service verification on approved target."""
+    if not is_active_scan_allowed():
+        return {
+            "status": "disabled",
+            "message": "Active port scanning is disabled by server deployment policy. Enable server-side authorization via ENABLE_ACTIVE_PORT_SCAN=true.",
+        }
+
     target_ports = sorted(list(set(ports or list(STANDARD_PORTS.keys()))))
+
+    # Validate port numbers and cap ports per request
+    if len(target_ports) > MAX_PORTS_PER_SCAN:
+        return {
+            "status": "error",
+            "message": f"Port count exceeds allowed limit: maximum {MAX_PORTS_PER_SCAN} ports allowed per scan request.",
+        }
+
+    for p in target_ports:
+        if not isinstance(p, int) or p < 1 or p > 65535:
+            return {
+                "status": "error",
+                "message": f"Invalid port number: {p}. Ports must be integers between 1 and 65535.",
+            }
 
     if not confirmed:
         return {
@@ -104,65 +135,59 @@ async def run_port_scan(
             "message": "Explicit confirmation required before initiating active port probes. Set 'confirmed: true'.",
         }
 
-    # Resolve target and enforce SSRF check
+    # Resolve target and enforce strict SSRF check across all resolved IPs
     clean_host = target.strip().lower().rstrip(".")
-    loop = asyncio.get_running_loop()
-    try:
-        addr_info = await loop.getaddrinfo(clean_host, None, type=socket.SOCK_STREAM)
-        if not addr_info:
-            return {"status": "error", "message": f"Target '{clean_host}' does not resolve to an IP."}
-        target_ip = addr_info[0][4][0]
-    except Exception as exc:
-        return {"status": "error", "message": f"Target resolution failed: {exc}"}
-
-    safe, reason = is_safe_ip(target_ip)
-    if not safe:
+    safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(clean_host, port=target_ports[0])
+    if not safe_all or not resolved_ips:
         return {
             "status": "blocked",
-            "message": f"SSRF Guard: Target '{clean_host}' resolves to blocked IP '{target_ip}' ({reason}). Scanning aborted.",
+            "message": f"SSRF Guard: Target '{clean_host}' cannot be probed ({reason}). Scanning aborted.",
         }
 
-    semaphore = asyncio.Semaphore(8)
+    target_ip = resolved_ips[0]
 
-    async def _probe_port(port: int) -> dict[str, Any]:
-        svc_name = STANDARD_PORTS.get(port, "Unknown Service")
-        async with semaphore:
-            try:
-                conn = asyncio.open_connection(target_ip, port)
-                reader, writer = await asyncio.wait_for(conn, timeout=timeout)
-                # Read banner if immediately available
-                banner: str | None = None
+    async with GLOBAL_PORT_SCAN_SEMAPHORE:
+        semaphore = asyncio.Semaphore(4)
+
+        async def _probe_port(port: int) -> dict[str, Any]:
+            svc_name = STANDARD_PORTS.get(port, "Unknown Service")
+            async with semaphore:
                 try:
-                    raw = await asyncio.wait_for(reader.read(128), timeout=0.4)
-                    if raw:
-                        banner = raw.decode("utf-8", errors="replace").strip()[:80]
-                except Exception:
-                    pass
-                writer.close()
-                await writer.wait_closed()
-                return {
-                    "port": port,
-                    "service": svc_name,
-                    "state": "open",
-                    "banner": banner,
-                    "confidence": "confirmed",
-                }
-            except (ConnectionRefusedError, OSError):
-                return {
-                    "port": port,
-                    "service": svc_name,
-                    "state": "closed",
-                    "banner": None,
-                    "confidence": "confirmed",
-                }
-            except asyncio.TimeoutError:
-                return {
-                    "port": port,
-                    "service": svc_name,
-                    "state": "filtered",
-                    "banner": None,
-                    "confidence": "confirmed",
-                }
+                    conn = asyncio.open_connection(target_ip, port)
+                    reader, writer = await asyncio.wait_for(conn, timeout=timeout)
+                    # Read banner if immediately available (bounded read)
+                    banner: str | None = None
+                    try:
+                        raw = await asyncio.wait_for(reader.read(128), timeout=0.35)
+                        if raw:
+                            banner = raw.decode("utf-8", errors="replace").strip()[:80]
+                    except Exception:
+                        pass
+                    writer.close()
+                    await writer.wait_closed()
+                    return {
+                        "port": port,
+                        "service": svc_name,
+                        "state": "open",
+                        "banner": banner,
+                        "confidence": "confirmed",
+                    }
+                except (ConnectionRefusedError, OSError):
+                    return {
+                        "port": port,
+                        "service": svc_name,
+                        "state": "closed",
+                        "banner": None,
+                        "confidence": "confirmed",
+                    }
+                except asyncio.TimeoutError:
+                    return {
+                        "port": port,
+                        "service": svc_name,
+                        "state": "filtered",
+                        "banner": None,
+                        "confidence": "confirmed",
+                    }
 
     tasks = [_probe_port(p) for p in target_ports]
     port_results = await asyncio.gather(*tasks)

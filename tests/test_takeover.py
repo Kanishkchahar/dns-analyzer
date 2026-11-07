@@ -84,3 +84,18 @@ class TestSubdomainTakeover:
         assert any(
             f.severity == "warning" and "Dangling CNAME alias" in f.message for f in findings
         )
+
+    async def test_takeover_resolver_timeout_does_not_false_positive(self):
+        import dns.exception
+        records = {"CNAME": {"status": "ok", "records": ["abandoned.github.io"]}}
+
+        class TimeoutResolver:
+            async def resolve(self, domain, rdtype):
+                raise dns.exception.Timeout()
+
+        data, findings = await check_subdomain_takeover("docs.example.com", records, TimeoutResolver())
+        assert data["vulnerable"] is False
+        assert data["status"] == "could_not_verify"
+        assert data["evidence_state"] == "timeout"
+        assert any("Could not verify takeover status" in f.message for f in findings)
+

@@ -30,7 +30,7 @@ bash run.sh 9000
 bash run.sh --setup-only
 ```
 
-#### Automated Test Suite (94 Automated Tests)
+#### Automated Test Suite (117 Automated Tests)
 
 ```bash
 bash run.sh --test
@@ -252,7 +252,7 @@ Returns a self-contained `.html` file with embedded CSS, fully viewable offline.
 
 ## 🧪 Testing
 
-The platform features an automated test suite with **94 unit and integration tests**:
+The platform features an automated test suite with **117 unit and integration tests**:
 
 ```bash
 # Run via all-in-one runner:
@@ -269,9 +269,12 @@ Coverage spans:
 - `test_dnssec.py`: Cryptographic chain-of-trust, algorithm detection, and DS validation
 - `test_takeover.py`: Subdomain takeover fingerprints and dangling CNAME detection
 - `test_bimi.py`: BIMI logo parsing, VMC verification, and DMARC eligibility
+- `test_network_scan.py`: Scope verification, SSRF blocking, and active port scan policies
+- `test_tls_check.py`: Certificate auditing, SAN wildcard validation, and IP rebinding protection
 - `test_remediation.py`: 1-Click fix generator and BIND zone file creation
 - `test_report.py`: Standalone offline HTML report rendering
 - `test_resolver.py`: Concurrent asynchronous DNS resolution
+- `test_zone_discovery.py`: Zone apex detection and delegated SOA handling
 - `test_api.py`: FastAPI endpoints and HTTP contract validation
 - `test_models.py`: Domain validation regex and Pydantic schemas
 

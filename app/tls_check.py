@@ -3,6 +3,7 @@
 Audits X.509 certificate validity, expiration, SAN wildcard coverage,
 negotiated TLS protocol version, HTTP-to-HTTPS redirection, and essential
 web security headers (HSTS, CSP, X-Frame-Options) without external binaries.
+Hardened with strict SSRF controls, direct IP binding, and validated redirects.
 """
 
 import asyncio
@@ -12,6 +13,7 @@ import ipaddress
 import socket
 import ssl
 from typing import Any
+from urllib.parse import urlparse
 import httpx
 
 from app.models import Finding
@@ -40,6 +42,25 @@ def is_safe_ip(ip_str: str) -> tuple[bool, str]:
     return True, "Public IP"
 
 
+async def resolve_and_verify_all_ips(hostname: str, port: int = 443) -> tuple[bool, list[str], str]:
+    """Resolve hostname once and verify that all resolved IPs are public and safe (reject mixed answers)."""
+    loop = asyncio.get_running_loop()
+    try:
+        addr_info = await loop.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        if not addr_info:
+            return False, [], "Hostname did not resolve to any addresses"
+        all_ips = list(dict.fromkeys(info[4][0] for info in addr_info))
+    except Exception as exc:
+        return False, [], f"Resolution error: {exc}"
+
+    for ip in all_ips:
+        safe, reason = is_safe_ip(ip)
+        if not safe:
+            return False, all_ips, f"Unsafe address '{ip}': {reason}"
+
+    return True, all_ips, "All resolved addresses are public"
+
+
 def match_san_hostname(hostname: str, san_list: list[str]) -> bool:
     """Check if *hostname* matches any entry in *san_list* including wildcards (*.domain)."""
     norm_host = hostname.lower().rstrip(".")
@@ -62,7 +83,7 @@ async def audit_tls_and_https(
     port: int = 443,
     timeout: float = 3.5,
 ) -> tuple[dict[str, Any], list[Finding]]:
-    """Execute end-to-end TLS certificate and HTTPS posture verification."""
+    """Execute end-to-end TLS certificate and HTTPS posture verification with strict SSRF controls."""
     findings: list[Finding] = []
     norm_domain = domain.strip().lower().rstrip(".")
 
@@ -76,28 +97,22 @@ async def audit_tls_and_https(
         "score_impact": 0,
     }
 
-    # 1. DNS pre-resolution and SSRF guard
-    try:
-        loop = asyncio.get_running_loop()
-        addr_info = await loop.getaddrinfo(norm_domain, port, type=socket.SOCK_STREAM)
-        if not addr_info:
-            return result, findings
-        target_ip = addr_info[0][4][0]
-    except Exception as exc:
-        return result, findings
-
-    safe, reason = is_safe_ip(target_ip)
-    if not safe:
+    # 1. DNS pre-resolution and strict SSRF guard (resolve once, reject non-public IPs)
+    safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(norm_domain, port)
+    if not safe_all:
         findings.append(Finding(
             severity="error",
             record_type="TLS",
-            message=f"SSRF Safety Guard: Target host '{norm_domain}' resolved to blocked address '{target_ip}' ({reason}). Scan halted.",
+            message=f"SSRF Safety Guard: Target host '{norm_domain}' cannot be safely audited ({reason}). Scan halted.",
         ))
         return result, findings
 
+    target_ip = resolved_ips[0]
+
     # 2. TLS Handshake & Certificate Extraction
+    # Connect directly to the validated IP to prevent DNS rebinding, while passing server_hostname for SNI & verification
     ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
+    ssl_context.check_hostname = True
     ssl_context.verify_mode = ssl.CERT_REQUIRED
 
     cert_dict: dict[str, Any] = {}
@@ -106,7 +121,12 @@ async def audit_tls_and_https(
 
     try:
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(norm_domain, port, ssl=ssl_context, server_hostname=norm_domain),
+            asyncio.open_connection(
+                host=target_ip,
+                port=port,
+                ssl=ssl_context,
+                server_hostname=norm_domain,
+            ),
             timeout=timeout,
         )
         ssl_obj = writer.get_extra_info("ssl_object")
@@ -139,7 +159,6 @@ async def audit_tls_and_https(
         not_before_str = cert_dict.get("notBefore", "")
         san_entries = [val for key, val in cert_dict.get("subjectAltName", []) if key.lower() in ("dns", "ip address")]
         
-        # Issuer CN or O
         issuer_parts = []
         for rdn in cert_dict.get("issuer", ()):
             for key, val in rdn:
@@ -151,7 +170,6 @@ async def audit_tls_and_https(
         is_expired = False
         if not_after_str:
             try:
-                # Format: 'May 10 12:00:00 2026 GMT'
                 exp_dt = datetime.strptime(not_after_str, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
                 now_dt = datetime.now(timezone.utc)
                 days_remaining = (exp_dt - now_dt).days
@@ -174,18 +192,17 @@ async def audit_tls_and_https(
         result["tls_version"] = tls_version
         result["cipher"] = cipher_name
 
-        # Findings for Certificate
         if is_expired:
             findings.append(Finding(
                 severity="error",
                 record_type="TLS",
-                message=f"CRITICAL: TLS certificate for '{norm_domain}' expired {abs(days_remaining)} days ago ({not_after_str}). Browsers will block access.",
+                message=f"TLS certificate for '{norm_domain}' expired on {not_after_str}. Browsers will block connections.",
             ))
         elif days_remaining <= 14:
             findings.append(Finding(
                 severity="warning",
                 record_type="TLS",
-                message=f"TLS certificate for '{norm_domain}' will expire in {days_remaining} days ({not_after_str}). Immediate renewal required.",
+                message=f"TLS certificate expires soon ({days_remaining} days remaining, {not_after_str}). Renew immediately.",
             ))
         else:
             findings.append(Finding(
@@ -214,14 +231,23 @@ async def audit_tls_and_https(
                 message=f"Legacy or deprecated TLS protocol negotiated: {tls_version}. Upgrade to TLS 1.2 or TLS 1.3.",
             ))
 
-    # 4. Check HTTP (Port 80) -> HTTPS (Port 443) Redirection
+    # 4. Check HTTP (Port 80) -> HTTPS (Port 443) Redirection with strict redirect validation
     redirect_ok = False
     try:
-        async with httpx.AsyncClient(timeout=3.0, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=3.0, follow_redirects=False, verify=True) as client:
             resp_http = await client.get(f"http://{norm_domain}/")
             if resp_http.status_code in (301, 302, 307, 308):
                 loc = resp_http.headers.get("location", "")
-                if loc.lower().startswith("https://"):
+                parsed_loc = urlparse(loc)
+                redirect_host = parsed_loc.hostname or norm_domain
+                redir_safe, _, redir_reason = await resolve_and_verify_all_ips(redirect_host, parsed_loc.port or 443)
+                if not redir_safe:
+                    findings.append(Finding(
+                        severity="error",
+                        record_type="HTTPS",
+                        message=f"SSRF Alert: HTTP redirect points to blocked target '{redirect_host}' ({redir_reason}). Redirect halted.",
+                    ))
+                elif loc.lower().startswith("https://"):
                     redirect_ok = True
                     result["https_redirect"] = {
                         "enforced": True,
@@ -233,7 +259,7 @@ async def audit_tls_and_https(
                         record_type="HTTPS",
                         message=f"Port 80 unencrypted HTTP automatically redirects to HTTPS ({resp_http.status_code} -> {loc}).",
                     ))
-            if not redirect_ok:
+            if not redirect_ok and not any(f.record_type == "HTTPS" and f.severity == "error" for f in findings):
                 result["https_redirect"] = {
                     "enforced": False,
                     "status_code": resp_http.status_code,
@@ -245,12 +271,11 @@ async def audit_tls_and_https(
                     message=f"Port 80 HTTP does not redirect to HTTPS (HTTP {resp_http.status_code}). Cleartext web traffic may be exposed to interception.",
                 ))
     except Exception:
-        # HTTP port 80 might be completely closed or filtered
         result["https_redirect"] = {"enforced": False, "status_code": None, "location": None}
 
-    # 5. Check HTTPS Web Security Headers
+    # 5. Check HTTPS Web Security Headers (Strict TLS verification, no arbitrary redirects, capped read size)
     try:
-        async with httpx.AsyncClient(timeout=3.0, verify=False, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=3.0, verify=True, follow_redirects=False) as client:
             resp_https = await client.get(f"https://{norm_domain}/")
             h = resp_https.headers
 
@@ -288,6 +313,12 @@ async def audit_tls_and_https(
                     severity="info",
                     record_type="HTTPS",
                     message="Content-Security-Policy (CSP) is deployed to defend against XSS and clickjacking.",
+                ))
+            else:
+                findings.append(Finding(
+                    severity="info",
+                    record_type="HTTPS",
+                    message="Content-Security-Policy (CSP) header is not published.",
                 ))
     except Exception:
         pass

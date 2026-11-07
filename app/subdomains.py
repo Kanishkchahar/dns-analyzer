@@ -39,16 +39,25 @@ async def discover_passive_subdomains(
     try:
         url = f"https://crt.sh/?q=%25.{norm_domain}&output=json"
         headers = {"User-Agent": "Mozilla/5.0 (compatible; DNSAnalyzer/2.0)"}
-        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code == 200:
-                raw_json = resp.json()
-                for item in raw_json:
-                    name_val = item.get("name_value", "")
-                    for line in name_val.splitlines():
-                        clean_name = line.strip().lower().lstrip("*.")
-                        if clean_name.endswith(f".{norm_domain}") and clean_name != norm_domain:
-                            discovered_names.add(clean_name)
+        async with httpx.AsyncClient(timeout=timeout, verify=True) as client:
+            async with client.stream("GET", url, headers=headers) as resp:
+                if resp.status_code == 200:
+                    chunks = []
+                    bytes_read = 0
+                    max_bytes = 512 * 1024  # Cap response body to 512 KB
+                    async for chunk in resp.aiter_bytes():
+                        bytes_read += len(chunk)
+                        chunks.append(chunk)
+                        if bytes_read >= max_bytes:
+                            break
+                    raw_text = b"".join(chunks).decode("utf-8", errors="replace")
+                    raw_json = json.loads(raw_text)
+                    for item in raw_json:
+                        name_val = item.get("name_value", "")
+                        for line in name_val.splitlines():
+                            clean_name = line.strip().lower().lstrip("*.")
+                            if clean_name.endswith(f".{norm_domain}") and clean_name != norm_domain:
+                                discovered_names.add(clean_name)
     except Exception:
         # crt.sh can occasionally be slow or rate-limited; gracefully continue with empty set
         pass
@@ -60,23 +69,26 @@ async def discover_passive_subdomains(
     if not sorted_hosts:
         return result, findings
 
-    # Concurrently resolve each discovered host passively via DNS
+    # Concurrently resolve each discovered host passively via DNS with bounded concurrency
+    sub_semaphore = asyncio.Semaphore(10)
+
     async def _resolve_subdomain(sub: str) -> dict[str, Any]:
-        a_task = _safe_query(resolver, sub, "A")
-        cname_task = _safe_query(resolver, sub, "CNAME")
-        a_res, cname_res = await asyncio.gather(a_task, cname_task)
+        async with sub_semaphore:
+            a_task = _safe_query(resolver, sub, "A")
+            cname_task = _safe_query(resolver, sub, "CNAME")
+            a_res, cname_res = await asyncio.gather(a_task, cname_task)
 
-        ips = a_res.get("records", []) if a_res.get("status") == "ok" else []
-        cnames = cname_res.get("records", []) if cname_res.get("status") == "ok" else []
-        cname_target = cnames[0] if cnames else None
+            ips = a_res.get("records", []) if a_res.get("status") == "ok" else []
+            cnames = cname_res.get("records", []) if cname_res.get("status") == "ok" else []
+            cname_target = cnames[0] if cnames else None
 
-        status = "resolving" if ips else ("dangling" if cname_target else "inactive")
-        return {
-            "subdomain": sub,
-            "ips": ips,
-            "cname": cname_target,
-            "status": status,
-        }
+            status = "resolving" if ips else ("dangling" if cname_target else "inactive")
+            return {
+                "subdomain": sub,
+                "ips": ips,
+                "cname": cname_target,
+                "status": status,
+            }
 
     sub_tasks = [_resolve_subdomain(h) for h in sorted_hosts]
     sub_results = await asyncio.gather(*sub_tasks)

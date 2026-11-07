@@ -29,3 +29,22 @@ class TestNetworkScan:
         res = await run_port_scan("127.0.0.1", ports=[80], confirmed=True)
         assert res["status"] == "blocked"
         assert "SSRF Guard" in res["message"]
+
+    async def test_port_scan_disabled_by_policy(self, monkeypatch):
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "false")
+        res = await run_port_scan("93.184.216.34", ports=[80], confirmed=True)
+        assert res["status"] == "disabled"
+        assert "disabled by server deployment policy" in res["message"]
+
+    async def test_port_scan_port_limit_and_validation(self):
+        # Exceeds max 10 ports
+        many_ports = list(range(1, 15))
+        res = await run_port_scan("93.184.216.34", ports=many_ports, confirmed=True)
+        assert res["status"] == "error"
+        assert "Port count exceeds allowed limit" in res["message"]
+
+        # Invalid port number
+        res_invalid = await run_port_scan("93.184.216.34", ports=[0, 80], confirmed=True)
+        assert res_invalid["status"] == "error"
+        assert "Invalid port number" in res_invalid["message"]
+

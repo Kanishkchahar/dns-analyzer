@@ -63,3 +63,23 @@ class TestDNSSEC:
         assert any(
             f.severity == "info" and "not enabled" in f.message for f in findings
         )
+
+    def test_safe_key_tag_and_verify_ds_matches_dnskey(self):
+        from app.dnssec import _safe_key_tag, verify_ds_matches_dnskey
+        import dns.name
+
+        mock_key = MockRR(key_tag=54321)
+        assert _safe_key_tag(mock_key) == 54321
+
+        domain_name = dns.name.from_text("example.com")
+        ds_match = MockRR(key_tag=54321)
+        ds_mismatch = MockRR(key_tag=11111)
+
+        matched, tag = verify_ds_matches_dnskey(domain_name, [mock_key], [ds_match])
+        assert matched is True
+        assert tag == 54321
+
+        unmatched, tag2 = verify_ds_matches_dnskey(domain_name, [mock_key], [ds_mismatch])
+        assert unmatched is False
+        assert tag2 == 0
+
