@@ -121,26 +121,43 @@ async def check_subdomain_takeover(
 
     # If unresolvable (NXDOMAIN / NoAnswer)
     if not target_resolves:
-        prov_name = matched_provider["provider"] if matched_provider else "third-party host"
-        remedy = matched_provider["remediation"] if matched_provider else "Delete this record or register the target destination immediately."
-        
-        findings.append(Finding(
-            severity="error",
-            record_type="TAKEOVER",
-            message=f"CRITICAL: Dangling CNAME alias pointing to unresolvable host '{cname_target}' ({prov_name}). "
-                    f"Attackers can claim the destination endpoint and hijack your subdomain! {remedy}"
-        ))
-
-        return {
-            "scanned": True,
-            "has_cname": True,
-            "cname_target": cname_target,
-            "provider": matched_provider["provider"] if matched_provider else "Unknown",
-            "vulnerable": True,
-            "status": "critical_vulnerability",
-            "details": f"CNAME points to '{cname_target}', which does not resolve. Vulnerable to takeover.",
-            "remediation": remedy
-        }, findings
+        if matched_provider:
+            prov_name = matched_provider["provider"]
+            remedy = matched_provider["remediation"]
+            findings.append(Finding(
+                severity="error",
+                record_type="TAKEOVER",
+                message=f"CRITICAL: Dangling CNAME alias pointing to unresolvable host '{cname_target}' ({prov_name}). "
+                        f"Attackers can claim the destination endpoint and hijack your subdomain! {remedy}"
+            ))
+            return {
+                "scanned": True,
+                "has_cname": True,
+                "cname_target": cname_target,
+                "provider": prov_name,
+                "vulnerable": True,
+                "status": "critical_vulnerability",
+                "details": f"CNAME points to '{cname_target}' on {prov_name}, which does not resolve. Vulnerable to takeover.",
+                "remediation": remedy,
+            }, findings
+        else:
+            remedy = "Delete this obsolete CNAME record or point it to an active destination host."
+            findings.append(Finding(
+                severity="warning",
+                record_type="TAKEOVER",
+                message=f"Dangling CNAME alias: points to '{cname_target}', which does not resolve to any active IP address. "
+                        f"This broken alias causes resolution failures; remove or point it to an active host."
+            ))
+            return {
+                "scanned": True,
+                "has_cname": True,
+                "cname_target": cname_target,
+                "provider": "Custom / Unknown",
+                "vulnerable": False,
+                "status": "dangling_alias",
+                "details": f"CNAME points to '{cname_target}', which does not resolve (suspicious dangling alias).",
+                "remediation": remedy,
+            }, findings
 
     # If it resolves but points to a known cloud provider
     if matched_provider:

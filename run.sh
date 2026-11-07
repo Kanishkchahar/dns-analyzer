@@ -4,7 +4,8 @@
 # Usage:
 #   bash run.sh              # Auto-setup (if needed) & start on port 8000
 #   bash run.sh 9000         # Auto-setup & start on custom port 9000
-#   bash run.sh --test       # Run the 94-test automated test suite
+#   bash run.sh --docker     # Launch via Docker Compose v2 (isolated container)
+#   bash run.sh --test       # Run the 112-test automated test suite
 #   bash run.sh --setup-only # Run setup/dependency install only
 #   bash run.sh --help       # Display help reference
 # ============================================================
@@ -22,21 +23,25 @@ NC='\033[0m'
 
 SETUP_ONLY=false
 RUN_TESTS=false
+RUN_DOCKER=false
 PORT=8000
 
 # Parse arguments
 for arg in "$@"; do
   if [ "$arg" = "--setup-only" ]; then
     SETUP_ONLY=true
+  elif [ "$arg" = "--docker" ] || [ "$arg" = "-d" ]; then
+    RUN_DOCKER=true
   elif [ "$arg" = "--test" ] || [ "$arg" = "-t" ]; then
     RUN_TESTS=true
   elif [ "$arg" = "--help" ] || [ "$arg" = "-h" ]; then
     echo ""
-    echo -e "${GREEN}DNS Analyzer v2 — InboxShield Edition${NC}"
+    echo -e "${GREEN}DNS Analyzer v2 — Security Posture Cockpit Edition${NC}"
     echo "Usage:"
     echo "  bash run.sh              Start server on http://127.0.0.1:8000"
     echo "  bash run.sh <port>       Start server on custom port (e.g., 9000)"
-    echo "  bash run.sh --test, -t   Run the 94 automated pytest suite"
+    echo "  bash run.sh --docker, -d Launch production service via Docker Compose v2"
+    echo "  bash run.sh --test, -t   Run the 112 automated pytest suite"
     echo "  bash run.sh --setup-only Prepare virtual environment without running server"
     echo "  bash run.sh --help, -h   Show this help message"
     echo ""
@@ -51,6 +56,17 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║   DNS Analyzer v2 — Security Posture Cockpit         ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
 echo ""
+
+if [ "$RUN_DOCKER" = true ]; then
+  echo -e "  ${CYAN}➜ Starting DNS Analyzer v2 container via Docker Compose...${NC}"
+  docker compose up -d --build
+  echo ""
+  echo -e "  ${GREEN}✔ Container running on http://127.0.0.1:${PORT:-8000}/${NC}"
+  echo -e "  To view logs:  ${YELLOW}docker compose logs -f${NC}"
+  echo -e "  To stop:       ${YELLOW}docker compose down${NC}"
+  echo ""
+  exit 0
+fi
 
 # ── 1. Python version check ───────────────────────────────────
 if ! command -v python3 &>/dev/null; then
@@ -102,7 +118,7 @@ fi
 
 if [ "$RUN_TESTS" = true ]; then
   echo ""
-  echo -e "  ${CYAN}➜ Running automated test suite (94 tests)...${NC}"
+  echo -e "  ${CYAN}➜ Running automated test suite (112 tests)...${NC}"
   "$PYTHON" -m pytest -v
   exit $?
 fi

@@ -42,30 +42,40 @@ def _parse_tags(raw: str) -> dict[str, str]:
 # DMARC
 # ---------------------------------------------------------------------------
 
-async def fetch_dmarc(domain: str, resolver: dns.asyncresolver.Resolver) -> dict[str, Any] | None:
+async def fetch_dmarc(
+    domain: str,
+    resolver: dns.asyncresolver.Resolver,
+    apex: str | None = None,
+) -> dict[str, Any] | None:
     """Fetch and parse the DMARC record for *domain*.
 
-    Queries ``_dmarc.{domain}`` for TXT records and extracts the first
-    record that starts with ``v=DMARC1``.  All standard DMARC tags are
-    parsed into a structured dict.
+    Queries ``_dmarc.{domain}``. Per RFC 7489 §6.6.3, if no DMARC record is found
+    for a subdomain, falls back to the organizational zone apex (``_dmarc.{apex}``).
 
     Returns:
-        A dict with parsed DMARC data, or ``None`` if no DMARC record is
-        found or a DNS error occurs.
+        A dict with parsed DMARC data, or ``None`` if no DMARC record is found.
     """
-    qname = f"_dmarc.{domain}"
-    try:
-        answer = await resolver.resolve(qname, "TXT")
-        txt_records = [
-            b"".join(rr.strings).decode("utf-8", errors="replace")
-            for rr in answer
-        ]
-    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
-        return None
-    except dns.exception.Timeout:
-        return None
-    except Exception:
-        return None
+    async def _query_dmarc(target_domain: str) -> list[str]:
+        qname = f"_dmarc.{target_domain}"
+        try:
+            answer = await resolver.resolve(qname, "TXT")
+            return [
+                b"".join(rr.strings).decode("utf-8", errors="replace")
+                for rr in answer
+            ]
+        except Exception:
+            return []
+
+    txt_records = await _query_dmarc(domain)
+    inherited_from: str | None = None
+
+    # RFC 7489 Organizational Domain Fallback
+    if not any(txt.strip().startswith("v=DMARC1") for txt in txt_records):
+        if apex and apex.lower().rstrip(".") != domain.lower().rstrip("."):
+            apex_txts = await _query_dmarc(apex)
+            if any(txt.strip().startswith("v=DMARC1") for txt in apex_txts):
+                txt_records = apex_txts
+                inherited_from = apex.lower().rstrip(".")
 
     # Find the DMARC record among TXT results
     dmarc_raw: str | None = None
@@ -96,6 +106,7 @@ async def fetch_dmarc(domain: str, resolver: dns.asyncresolver.Resolver) -> dict
         "adkim": tags.get("adkim", "r"),
         "aspf": tags.get("aspf", "r"),
         "fo": tags.get("fo", "0"),
+        "inherited_from": inherited_from,
     }
 
 
@@ -113,6 +124,12 @@ def analyze_dmarc(dmarc_data: dict[str, Any] | None) -> list[Finding]:
             "Your domain has no DMARC policy. Any server can spoof emails from your domain.",
         ))
         return findings
+
+    if dmarc_data.get("inherited_from"):
+        findings.append(_finding(
+            "info", "DMARC",
+            f"DMARC policy is inherited from organizational zone apex `{dmarc_data['inherited_from']}` per RFC 7489.",
+        ))
 
     # -- Policy strength --
     policy = dmarc_data.get("policy")
@@ -245,10 +262,12 @@ def analyze_dkim(dkim_data: dict[str, Any]) -> list[Finding]:
     findings: list[Finding] = []
 
     if not dkim_data.get("has_dkim"):
+        checked = len(dkim_data.get("selectors_checked", []))
         findings.append(_finding(
-            "warning", "DKIM",
-            "No DKIM records found for common selectors. DKIM signing helps prevent email spoofing. "
-            "Note: custom selectors may exist but were not checked.",
+            "info", "DKIM",
+            f"No DKIM records detected among {checked} checked standard selectors "
+            f"({', '.join(list(_COMMON_SELECTORS)[:5])}...). Domains using private or custom selectors "
+            f"may still be protected. Verify your selector configuration in your email sending provider.",
         ))
         return findings
 
@@ -330,4 +349,152 @@ def compute_email_score(
         "score": score,
         "grade": grade,
         "label": label,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Domain Security & Health Score (Holistic Posture)
+# ---------------------------------------------------------------------------
+
+_DOMAIN_GRADE_THRESHOLDS: list[tuple[int, str, str]] = [
+    (95, "A+", "Optimal Posture"),
+    (85, "A",  "Strong Posture"),
+    (70, "B",  "Moderate Posture"),
+    (55, "C",  "Needs Attention"),
+    (40, "D",  "Vulnerable"),
+    (0,  "F",  "High Risk"),
+]
+
+
+def compute_domain_score(
+    records: dict[str, Any],
+    dns_findings: list[Finding],
+    email_score: dict[str, Any],
+    dnssec_data: dict[str, Any] | None,
+    takeover_data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Compute a holistic domain health & security posture score.
+
+    Combines 4 documented operational pillars:
+      1. DNS Infrastructure & Redundancy (25% weight)
+      2. Email Authentication Defense (35% weight)
+      3. DNSSEC & Cryptographic Integrity (20% weight)
+      4. Subdomain Takeover & Threat Defense (20% weight)
+    """
+    # 1. DNS Infrastructure (25 pts max)
+    infra_pts = 0
+    a_rec = records.get("A", {})
+    if a_rec.get("status") == "ok" and a_rec.get("records"):
+        infra_pts += 10
+    aaaa_rec = records.get("AAAA", {})
+    if aaaa_rec.get("status") == "ok" and aaaa_rec.get("records"):
+        infra_pts += 5
+    ns_rec = records.get("NS", {})
+    ns_count = len(ns_rec.get("records", [])) if ns_rec.get("status") == "ok" else 0
+    if ns_count >= 2:
+        infra_pts += 5
+    elif ns_count == 1:
+        infra_pts += 2
+    soa_rec = records.get("SOA", {})
+    if soa_rec.get("status") == "ok" and soa_rec.get("records"):
+        infra_pts += 5
+
+    for f in dns_findings:
+        if f.severity == "error":
+            infra_pts -= 10
+        elif f.severity == "warning":
+            infra_pts -= 4
+    infra_score = max(0, min(25, infra_pts))
+    infra_status = "healthy" if infra_score >= 20 else ("warning" if infra_score >= 12 else "degraded")
+    infra_summary = f"{'Dual-stack IPv4/IPv6' if aaaa_rec.get('status') == 'ok' else 'IPv4-only'}, {ns_count} NS redundant"
+
+    # 2. Email Authentication (35 pts max)
+    raw_email_score = email_score.get("score", 0)
+    email_factor_score = max(0, min(35, round(raw_email_score * 0.35)))
+    email_status = "enforced" if raw_email_score >= 85 else ("partial" if raw_email_score >= 60 else "vulnerable")
+    email_summary = f"SPF, DMARC, DKIM ({raw_email_score}/100)"
+
+    # 3. DNSSEC (20 pts max)
+    dnssec_status = dnssec_data.get("status", "unsigned") if dnssec_data else "unsigned"
+    if dnssec_status == "secured":
+        dnssec_score = 20
+        dnssec_stat = "secured"
+        dnssec_summary = "DNSKEY and parent DS records published and aligned"
+    elif dnssec_status == "incomplete_chain":
+        dnssec_score = 8
+        dnssec_stat = "warning"
+        dnssec_summary = "DNSKEY present but missing parent DS delegation"
+    elif dnssec_status == "bogus":
+        dnssec_score = 0
+        dnssec_stat = "error"
+        dnssec_summary = "Parent DS record without matching zone DNSKEY (causes SERVFAIL)"
+    else:
+        dnssec_score = 10
+        dnssec_stat = "unsigned"
+        dnssec_summary = "Zone unsigned (standard baseline, vulnerable to cache poisoning)"
+
+    # 4. Takeover & Threat Defense (20 pts max)
+    is_vulnerable = bool(takeover_data.get("vulnerable")) if takeover_data else False
+    takeover_stat_str = takeover_data.get("status", "safe") if takeover_data else "safe"
+    if is_vulnerable:
+        threat_score = 0
+        threat_status = "critical"
+        threat_summary = f"Dangling CNAME pointing to unresolvable {takeover_data.get('provider', 'host')}"
+    elif takeover_stat_str == "dangling_alias":
+        threat_score = 10
+        threat_status = "warning"
+        threat_summary = "Dangling CNAME alias pointing to unresolvable destination"
+    else:
+        threat_score = 20
+        threat_status = "safe"
+        threat_summary = "No dangling CNAME records or takeover vectors detected"
+
+    total_score = max(0, min(100, infra_score + email_factor_score + dnssec_score + threat_score))
+
+    grade = "F"
+    label = "High Risk"
+    for threshold, g, lbl in _DOMAIN_GRADE_THRESHOLDS:
+        if total_score >= threshold:
+            grade = g
+            label = lbl
+            break
+
+    return {
+        "score": total_score,
+        "grade": grade,
+        "label": label,
+        "factors": {
+            "infrastructure": {
+                "category": "DNS Infrastructure",
+                "weight": 25,
+                "score": infra_score,
+                "max_score": 25,
+                "status": infra_status,
+                "summary": infra_summary,
+            },
+            "email_auth": {
+                "category": "Email Spoofing Defense",
+                "weight": 35,
+                "score": email_factor_score,
+                "max_score": 35,
+                "status": email_status,
+                "summary": email_summary,
+            },
+            "dnssec": {
+                "category": "DNSSEC & Integrity",
+                "weight": 20,
+                "score": dnssec_score,
+                "max_score": 20,
+                "status": dnssec_stat,
+                "summary": dnssec_summary,
+            },
+            "threats": {
+                "category": "Subdomain Threat Defense",
+                "weight": 20,
+                "score": threat_score,
+                "max_score": 20,
+                "status": threat_status,
+                "summary": threat_summary,
+            },
+        },
     }

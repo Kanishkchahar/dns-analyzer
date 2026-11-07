@@ -2078,6 +2078,332 @@ dialog.modal::backdrop {
   outline: none;
 }
 
+/* ── Global Button Variants ── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--canvas);
+  border-color: var(--accent);
+  padding: 9px 18px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  box-shadow: 0 4px 12px rgba(101, 185, 232, 0.25);
+  transform: translateY(-1px);
+}
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+.btn-secondary {
+  background: var(--surface);
+  color: var(--text-primary);
+  border-color: var(--hairline);
+  padding: 8px 16px;
+}
+.btn-secondary:hover:not(:disabled) {
+  background: var(--raised);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transform: translateY(-1px);
+}
+.btn-secondary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* ── Scoped Network Inventory & Port Auditing ── */
+.network-scope-section {
+  margin-bottom: 48px;
+}
+.network-scope-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.scope-guard-badge {
+  display: flex;
+  align-items: center;
+}
+.scope-box-card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  padding: 24px;
+  margin-bottom: 24px;
+}
+.scope-box-header {
+  margin-bottom: 10px;
+}
+.scope-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.scope-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.scope-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: #090a0c;
+  color: var(--text-primary);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.scope-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(101, 185, 232, 0.15);
+}
+.scope-textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+.scope-actions-bar {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.scope-action-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.scope-action-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.scope-auth-group {
+  padding-top: 14px;
+  border-top: 1px dashed var(--hairline);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.scope-confirm-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.scope-checkbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* ── Records & Audit Tables (Modern Cockpit Data Grid) ── */
+.audit-card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  padding: 22px 24px;
+  margin-bottom: 24px;
+  animation: fadeIn 0.25s ease-out;
+}
+.audit-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.audit-card-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.audit-card-target {
+  font-family: 'Geist Mono', monospace;
+  color: var(--accent);
+  font-weight: 600;
+}
+.audit-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+}
+.audit-stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.audit-stat-chip strong {
+  color: var(--text-primary);
+  font-family: 'Geist Mono', monospace;
+}
+.audit-stat-chip strong.color-good { color: var(--success); }
+.audit-stat-chip strong.color-danger { color: var(--danger); }
+.audit-stat-chip strong.color-warn { color: var(--warning); }
+.audit-stat-sep {
+  color: var(--hairline);
+  font-size: 12px;
+}
+
+.records-table-container {
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline);
+  background: #090a0c;
+}
+.records-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  text-align: left;
+}
+.records-table thead tr {
+  background: var(--raised);
+}
+.records-table th {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--hairline);
+  white-space: nowrap;
+}
+.records-table td {
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: middle;
+}
+.records-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.records-table tbody tr {
+  transition: background 0.15s ease;
+}
+.records-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+.records-table tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.012);
+}
+.records-table tbody tr:nth-child(even):hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Port Badges & Indicators */
+.port-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.port-badge .port-proto {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-weight: 500;
+}
+.status-indicator-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+}
+.dot-green {
+  background: var(--success);
+  box-shadow: 0 0 6px rgba(99, 185, 149, 0.6);
+}
+.dot-yellow {
+  background: var(--warning);
+  box-shadow: 0 0 6px rgba(224, 164, 88, 0.5);
+}
+.dot-muted {
+  background: var(--text-muted);
+}
+.banner-evidence-cell {
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subdomains-table-container {
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline);
+  background: #090a0c;
+  margin-top: 12px;
+}
+
 /* ── Print / PDF Executive Report Layout ── */
 @media print {
   *, *::before, *::after {

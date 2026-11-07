@@ -594,6 +594,18 @@ function renderResults(data) {
   // Security Suite (DNSSEC, Subdomain Takeover, BIMI)
   renderSecuritySuite(data.security);
 
+  // TLS & HTTPS Web Security
+  renderTLS(data.tls);
+
+  // Passive Subdomain Footprint
+  renderSubdomains(data.subdomains);
+
+  // Default network scope input
+  const scopeInput = document.getElementById("list-scan-input");
+  if (scopeInput && !scopeInput.value.trim()) {
+    scopeInput.value = data.domain;
+  }
+
   // 1-Click Remediation Fixes
   renderRemediation(data.remediation, data.bind_zone_snippet);
 
@@ -700,7 +712,7 @@ function renderBentoCockpit(data) {
   if (!hero) return;
 
   // ── Score Ring in Hero ──
-  const sc = data.email_auth?.score;
+  const sc = data.domain_score || data.email_auth?.score;
   if (sc && bentoRingFg && bentoGrade && bentoScoreNum) {
     const circumference = 2 * Math.PI * 60; // r=60
     const offset = circumference - (circumference * sc.score / 100);
@@ -737,14 +749,15 @@ function renderBentoCockpit(data) {
   if (heroSubtitle) {
     const errs = data.summary?.errors || 0;
     const warns = data.summary?.warnings || 0;
+    const labelPrefix = data.domain_score?.label ? `${data.domain_score.label} · ` : "";
     if (errs > 0) {
-      heroSubtitle.textContent = `${errs} Critical Issue${errs === 1 ? "" : "s"} Detected`;
+      heroSubtitle.textContent = `${labelPrefix}${errs} Critical Issue${errs === 1 ? "" : "s"} Detected`;
       heroSubtitle.style.color = "var(--danger)";
     } else if (warns > 0) {
-      heroSubtitle.textContent = `${warns} Warning${warns === 1 ? "" : "s"} — Review Advised`;
+      heroSubtitle.textContent = `${labelPrefix}${warns} Warning${warns === 1 ? "" : "s"} — Review Advised`;
       heroSubtitle.style.color = "var(--warning)";
     } else {
-      heroSubtitle.textContent = "All Systems Authenticated & Safe";
+      heroSubtitle.textContent = `${labelPrefix}All Systems Authenticated & Safe`;
       heroSubtitle.style.color = "var(--success)";
     }
   }
@@ -1539,6 +1552,194 @@ function renderSecuritySuite(security) {
   securitySuiteSection.style.display = "block";
 }
 
+// ── TLS & HTTPS Diagnostics Rendering ─────────────────────────
+function renderTLS(tls) {
+  const tlsSec = document.getElementById("tls-section");
+  const tlsCards = document.getElementById("tls-cards");
+  const tlsBadge = document.getElementById("tab-badge-tls");
+  if (!tlsSec || !tlsCards) return;
+
+  tlsSec.style.display = "none";
+  tlsCards.innerHTML = "";
+
+  if (!tls || !tls.scanned) {
+    if (tlsBadge) {
+      tlsBadge.textContent = "N/A";
+      tlsBadge.className = "tab-badge";
+    }
+    return;
+  }
+
+  const cert = tls.certificate;
+  let statusClass = "badge-green";
+  let statusText = "TLS 1.3 Active";
+  if (!cert || cert.is_expired) {
+    statusClass = "badge-red";
+    statusText = "Expired";
+  } else if (cert.days_remaining <= 14) {
+    statusClass = "badge-amber";
+    statusText = "Expiring Soon";
+  }
+
+  if (tlsBadge) {
+    tlsBadge.textContent = statusText;
+    tlsBadge.className = "tab-badge " + statusClass;
+  }
+
+  // 1. Certificate Validity Card
+  if (cert) {
+    const cardCert = document.createElement("div");
+    cardCert.className = "security-card";
+    const pill = cert.is_expired
+      ? `<span class="pill pill-fail">Expired</span>`
+      : (cert.days_remaining <= 14 ? `<span class="pill pill-warn">${cert.days_remaining}d Left</span>` : `<span class="pill pill-ok">Valid (${cert.days_remaining}d)</span>`);
+
+    cardCert.innerHTML = `
+      <div>
+        <div class="sec-card-header">
+          <span class="sec-card-title">📜 X.509 Certificate</span>
+          ${pill}
+        </div>
+        <div class="sec-card-status">${escapeHtml(cert.issuer || "Public CA")}</div>
+        <div class="sec-card-desc">Valid until: <strong>${escapeHtml(cert.valid_until || "N/A")}</strong>. Covers domain: <strong>${cert.san_matched ? "Yes (SAN Aligned)" : "No (SAN Mismatch)"}</strong>.</div>
+      </div>
+      <div style="margin-top:12px; font-size:11px; color:var(--text-muted); font-family:'Geist Mono', monospace;">
+        SANs: ${(cert.san || []).slice(0, 4).join(", ")}${(cert.san || []).length > 4 ? "..." : ""}
+      </div>
+    `;
+    tlsCards.appendChild(cardCert);
+  }
+
+  // 2. Encryption Protocol & Cipher Card
+  const cardProto = document.createElement("div");
+  cardProto.className = "security-card";
+  const protoPill = (tls.tls_version === "TLSv1.3" || tls.tls_version === "TLSv1.2")
+    ? `<span class="pill pill-ok">${escapeHtml(tls.tls_version || "Active")}</span>`
+    : `<span class="pill pill-warn">Legacy</span>`;
+
+  cardProto.innerHTML = `
+    <div>
+      <div class="sec-card-header">
+        <span class="sec-card-title">🔐 Negotiated Protocol</span>
+        ${protoPill}
+      </div>
+      <div class="sec-card-status">${escapeHtml(tls.tls_version || "None")}</div>
+      <div class="sec-card-desc">Cipher Suite: <code>${escapeHtml(tls.cipher || "Standard AES/GCM")}</code></div>
+    </div>
+  `;
+  tlsCards.appendChild(cardProto);
+
+  // 3. HTTPS Redirection & Security Headers Card
+  const cardHdrs = document.createElement("div");
+  cardHdrs.className = "security-card";
+  const redir = tls.https_redirect?.enforced;
+  const hsts = tls.security_headers?.hsts;
+  const csp = tls.security_headers?.csp;
+
+  cardHdrs.innerHTML = `
+    <div>
+      <div class="sec-card-header">
+        <span class="sec-card-title">🛡️ Web Security Headers</span>
+        <span class="pill ${hsts ? "pill-ok" : "pill-warn"}">${hsts ? "HSTS Enforced" : "HSTS Missing"}</span>
+      </div>
+      <div class="sec-card-status">${redir ? "HTTP → HTTPS 301 Enforced" : "No Automatic HTTPS Redirect"}</div>
+      <div class="sec-card-desc">
+        HSTS: <strong>${hsts ? "Active" : "None"}</strong> · CSP: <strong>${csp ? "Active" : "None"}</strong> · X-Frame-Options: <strong>${escapeHtml(tls.security_headers?.x_frame_options || "None")}</strong>
+      </div>
+    </div>
+  `;
+  tlsCards.appendChild(cardHdrs);
+
+  tlsSec.style.display = "block";
+}
+
+// ── Passive Subdomain Footprint Rendering ─────────────────────
+function renderSubdomains(subData) {
+  const subSec = document.getElementById("subdomains-section");
+  const subList = document.getElementById("subdomains-list");
+  const subCountPill = document.getElementById("subdomain-count-pill");
+  const subBadge = document.getElementById("tab-badge-subdomains");
+  if (!subSec || !subList) return;
+
+  subSec.style.display = "none";
+  subList.innerHTML = "";
+
+  const subs = subData?.subdomains || [];
+  if (subBadge) {
+    subBadge.textContent = String(subs.length);
+    subBadge.className = "tab-badge " + (subs.length > 0 ? "badge-green" : "");
+  }
+  if (subCountPill) {
+    subCountPill.textContent = `${subs.length} Discovered Host${subs.length === 1 ? "" : "s"}`;
+  }
+
+  if (subs.length === 0) {
+    subList.innerHTML = `
+      <div class="no-issues" role="status" style="margin-top:12px;">
+        No publicly logged subdomains detected via Certificate Transparency for this domain apex.
+      </div>
+    `;
+    subSec.style.display = "block";
+    return;
+  }
+
+  let tableHtml = `
+    <div class="records-table-container" style="margin-top:14px;">
+      <table class="records-table">
+        <thead>
+          <tr>
+            <th>Subdomain</th>
+            <th>Resolved IPv4 / IPv6</th>
+            <th>CNAME Pointer</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+  `;
+
+  for (const s of subs) {
+    const isDangling = s.status === "dangling";
+    const statusPill = isDangling
+      ? `<span class="pill pill-fail"><span class="status-indicator-dot dot-yellow"></span> Dangling CNAME</span>`
+      : (s.status === "resolving"
+          ? `<span class="pill pill-ok"><span class="status-indicator-dot dot-green"></span> Active</span>`
+          : `<span class="pill pill-warn"><span class="status-indicator-dot dot-yellow"></span> Inactive</span>`);
+
+    tableHtml += `
+      <tr>
+        <td style="font-family:'Geist Mono', monospace; font-weight:600; color:var(--text-primary);">${escapeHtml(s.subdomain)}</td>
+        <td style="font-family:'Geist Mono', monospace; font-size:12px;">${(s.ips || []).join(", ") || '<span style="color:var(--text-muted)">None</span>'}</td>
+        <td style="font-family:'Geist Mono', monospace; font-size:12px; color:var(--text-muted);">${escapeHtml(s.cname || "—")}</td>
+        <td>${statusPill}</td>
+        <td>
+          <button class="btn btn-secondary btn-add-scope" data-host="${escapeHtml(s.subdomain)}" style="padding:4px 10px; font-size:11px;" type="button">
+            + Add to Scope
+          </button>
+        </td>
+      </tr>
+    `;
+  }
+
+  tableHtml += `</tbody></table></div>`;
+  subList.innerHTML = tableHtml;
+
+  // Add click handlers for "+ Add to Scope"
+  subList.querySelectorAll(".btn-add-scope").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const host = btn.getAttribute("data-host");
+      const scopeInput = document.getElementById("list-scan-input");
+      if (scopeInput && host) {
+        const cur = scopeInput.value.trim();
+        scopeInput.value = cur ? `${cur}\n${host}` : host;
+        switchSegmentTab("tab-network");
+      }
+    });
+  });
+
+  subSec.style.display = "block";
+}
+
 // ── 1-Click Remediation Fix Generator ─────────────────────────
 function renderRemediation(fixes, snippet) {
   if (!remediationSection || !remediationList) return;
@@ -1570,6 +1771,7 @@ function renderRemediation(fixes, snippet) {
       <span class="fix-card-title">
         <span class="pill pill-info">${escapeHtml(fix.record_type)}</span>
         ${escapeHtml(fix.title)}
+        ${fix.is_draft ? '<span class="pill pill-warning" style="font-size:10px; margin-left:6px; letter-spacing:0.04em;">DRAFT</span>' : ""}
       </span>
       <span style="font-family:'Geist Mono', monospace; font-size:11px; color:var(--text-muted);">TTL ${fix.ttl}s</span>
     `;
@@ -1579,6 +1781,29 @@ function renderRemediation(fixes, snippet) {
     const copyContent = `${fix.value}`;
     const copyBlock = makeCopyBlock(copyContent);
     card.appendChild(copyBlock);
+
+    // Impact Notice Warning
+    if (fix.impact_warning) {
+      const impactEl = document.createElement("div");
+      impactEl.className = "fix-impact-warning";
+      impactEl.style.cssText = "margin-top:8px; padding:8px 12px; background:rgba(235,87,87,0.08); border-left:3px solid var(--danger); border-radius:4px; font-size:12px; color:var(--text-secondary);";
+      impactEl.innerHTML = `<strong style="color:var(--danger); font-weight:600;">⚠️ Operational Notice:</strong> ${escapeHtml(fix.impact_warning)}`;
+      card.appendChild(impactEl);
+    }
+
+    // Prerequisites Checklist
+    if (fix.prerequisites && fix.prerequisites.length > 0) {
+      const prereqEl = document.createElement("div");
+      prereqEl.className = "fix-prerequisites";
+      prereqEl.style.cssText = "margin-top:8px; font-size:12px; color:var(--text-muted);";
+      prereqEl.innerHTML = `
+        <div style="font-weight:600; color:var(--text-secondary); margin-bottom:4px;">Prerequisites & Verification:</div>
+        <ul style="margin:0; padding-left:18px; line-height:1.45;">
+          ${fix.prerequisites.map(p => `<li>${escapeHtml(p)}</li>`).join("")}
+        </ul>
+      `;
+      card.appendChild(prereqEl);
+    }
 
     // Provider guides
     if (fix.provider_guides && Object.keys(fix.provider_guides).length > 0) {
@@ -1903,6 +2128,273 @@ window.addEventListener("offline", () => {
 window.addEventListener("online", () => {
   showToast("Internet connection restored.");
 });
+
+// ── Network Scope & Port Scan Handlers ────────────────────────
+const listScanInput = document.getElementById("list-scan-input");
+const btnRunListScan = document.getElementById("btn-run-list-scan");
+const portScanConfirm = document.getElementById("port-scan-confirm");
+const btnRunPortScan = document.getElementById("btn-run-port-scan");
+const networkResults = document.getElementById("network-results");
+
+if (portScanConfirm && btnRunPortScan) {
+  portScanConfirm.addEventListener("change", () => {
+    btnRunPortScan.disabled = !portScanConfirm.checked;
+  });
+}
+
+if (btnRunListScan && listScanInput && networkResults) {
+  btnRunListScan.addEventListener("click", async () => {
+    const raw = listScanInput.value.trim();
+    if (!raw) {
+      showToast("Please enter at least one target hostname or IP.");
+      return;
+    }
+    const targets = raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    btnRunListScan.disabled = true;
+    btnRunListScan.textContent = "Resolving Scope...";
+
+    try {
+      const resp = await fetch("/api/network/list-scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targets }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "List scan failed.");
+
+      networkResults.style.display = "block";
+      networkResults.innerHTML = `
+        <div class="audit-card">
+          <div class="audit-card-header">
+            <span class="audit-card-title">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <circle cx="8" cy="8" r="6"/>
+                <path d="M2 8h12M8 2a10 10 0 0 1 0 12M8 2a10 10 0 0 0 0 12"/>
+              </svg>
+              Scope Resolution &amp; SSRF Filter Inventory
+            </span>
+            <span class="pill ${data.in_scope_count === data.total_targets ? 'pill-ok' : (data.in_scope_count > 0 ? 'pill-warn' : 'pill-fail')}">
+              ${data.in_scope_count} / ${data.total_targets} Safe In-Scope
+            </span>
+          </div>
+
+          <div class="audit-stats-bar">
+            <div class="audit-stat-chip">
+              <span>Total Targets:</span>
+              <strong>${data.total_targets}</strong>
+            </div>
+            <span class="audit-stat-sep">/</span>
+            <div class="audit-stat-chip">
+              <span>Public Scope:</span>
+              <strong class="color-good">${data.in_scope_count} Safe</strong>
+            </div>
+            <span class="audit-stat-sep">/</span>
+            <div class="audit-stat-chip">
+              <span>Blocked:</span>
+              <strong class="${(data.total_targets - data.in_scope_count) > 0 ? 'color-danger' : ''}">
+                ${data.total_targets - data.in_scope_count} Filtered
+              </strong>
+            </div>
+          </div>
+
+          <div class="records-table-container">
+            <table class="records-table">
+              <thead>
+                <tr>
+                  <th>Target Scope</th>
+                  <th>Resolved IP Address &amp; Routing</th>
+                  <th>Classification</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${data.targets.map(t => `
+                  <tr>
+                    <td>
+                      <span style="font-family:'Geist Mono', monospace; font-weight:600; color:var(--text-primary);">
+                        ${escapeHtml(t.target)}
+                      </span>
+                    </td>
+                    <td>
+                      ${(t.resolved_ips && t.resolved_ips.length > 0)
+                        ? t.resolved_ips.map(ip => `
+                            <div style="font-family:'Geist Mono', monospace; font-size:12px; margin-bottom:2px;">
+                              <span style="color:${ip.safe ? 'var(--text-primary)' : 'var(--danger)'}; font-weight:500;">
+                                ${escapeHtml(ip.ip)}
+                              </span>
+                              <span style="font-size:11px; color:var(--text-muted); margin-left:6px;">(${escapeHtml(ip.reason)})</span>
+                            </div>
+                          `).join("")
+                        : '<span style="color:var(--text-muted); font-size:12px;">Unresolvable</span>'
+                      }
+                    </td>
+                    <td>
+                      ${t.in_scope_safe
+                        ? '<span class="pill pill-ok"><span class="status-indicator-dot dot-green"></span> Approved Public</span>'
+                        : '<span class="pill pill-fail"><span class="status-indicator-dot dot-yellow"></span> Blocked RFC 1918 / Loopback</span>'}
+                    </td>
+                    <td>
+                      ${t.in_scope_safe
+                        ? `<button class="btn btn-secondary btn-quick-probe" data-target="${escapeHtml(t.target)}" style="padding:4px 10px; font-size:11px;" type="button">
+                            Probe Ports
+                           </button>`
+                        : '<span style="font-size:11px; color:var(--text-muted);">Blocked</span>'}
+                    </td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+
+      // Wire up quick probe buttons
+      networkResults.querySelectorAll(".btn-quick-probe").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const tgt = btn.getAttribute("data-target");
+          if (tgt) {
+            listScanInput.value = tgt;
+            if (portScanConfirm) portScanConfirm.checked = true;
+            if (btnRunPortScan) {
+              btnRunPortScan.disabled = false;
+              btnRunPortScan.click();
+            }
+          }
+        });
+      });
+    } catch (err) {
+      showToast(err.message, "danger");
+    } finally {
+      btnRunListScan.disabled = false;
+      btnRunListScan.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <path d="M2 4h12M2 8h12M2 12h8" stroke-linecap="round"/>
+        </svg>
+        <span>Run List Scan (Resolve Scope Only)</span>
+      `;
+    }
+  });
+}
+
+if (btnRunPortScan && listScanInput && networkResults) {
+  btnRunPortScan.addEventListener("click", async () => {
+    const raw = listScanInput.value.trim();
+    const firstTarget = raw.split(/[\n,]+/)[0]?.trim();
+    if (!firstTarget) {
+      showToast("Please provide a target to verify standard ports.");
+      return;
+    }
+    btnRunPortScan.disabled = true;
+    btnRunPortScan.textContent = "Probing Standard Ports...";
+
+    try {
+      const resp = await fetch("/api/network/port-scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: firstTarget, confirmed: true }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "Port scan failed.");
+
+      networkResults.style.display = "block";
+      networkResults.innerHTML = `
+        <div class="audit-card">
+          <div class="audit-card-header">
+            <span class="audit-card-title">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <circle cx="7" cy="7" r="5"/>
+                <path d="M11 11l3.5 3.5" stroke-linecap="round"/>
+              </svg>
+              Port &amp; Service Assessment: <span class="audit-card-target">${escapeHtml(data.target)}</span>
+            </span>
+            <span class="pill ${data.open_ports_count > 0 ? 'pill-ok' : 'pill-info'}">
+              ${data.open_ports_count || 0} Open Services Detected
+            </span>
+          </div>
+
+          <div class="audit-stats-bar">
+            <div class="audit-stat-chip">
+              <span>Target IP:</span>
+              <strong>${escapeHtml(data.target_ip || "Resolved")}</strong>
+            </div>
+            <span class="audit-stat-sep">/</span>
+            <div class="audit-stat-chip">
+              <span>Ports Probed:</span>
+              <strong>${(data.ports || []).length} Ports</strong>
+            </div>
+            <span class="audit-stat-sep">/</span>
+            <div class="audit-stat-chip">
+              <span>Open Services:</span>
+              <strong class="${data.open_ports_count > 0 ? 'color-good' : ''}">${data.open_ports_count || 0} Active</strong>
+            </div>
+            <span class="audit-stat-sep">/</span>
+            <div class="audit-stat-chip">
+              <span>Safety Filter:</span>
+              <strong class="color-good">SSRF Passed</strong>
+            </div>
+          </div>
+
+          <div class="records-table-container">
+            <table class="records-table">
+              <thead>
+                <tr>
+                  <th>Port &amp; Protocol</th>
+                  <th>Standard Service</th>
+                  <th>Port State</th>
+                  <th>Service Banner &amp; Evidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${(data.ports || []).map(p => {
+                  const isOpen = p.state === "open";
+                  const isClosed = p.state === "closed";
+                  const statePill = isOpen
+                    ? '<span class="pill pill-ok"><span class="status-indicator-dot dot-green"></span> OPEN</span>'
+                    : (isClosed
+                        ? '<span class="pill pill-info"><span class="status-indicator-dot dot-muted"></span> CLOSED</span>'
+                        : '<span class="pill pill-warn"><span class="status-indicator-dot dot-yellow"></span> FILTERED</span>');
+                  return `
+                    <tr>
+                      <td>
+                        <div class="port-badge">
+                          <span>${p.port}</span>
+                          <span class="port-proto">TCP</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span style="font-weight:600; color:var(--text-primary);">${escapeHtml(p.service)}</span>
+                      </td>
+                      <td>${statePill}</td>
+                      <td>
+                        <div class="banner-evidence-cell" title="${escapeHtml(p.banner || (isOpen ? 'TCP SYN/ACK Handshake Confirmed' : 'Connection Refused / Filtered'))}">
+                          ${escapeHtml(p.banner || (isOpen ? 'TCP SYN/ACK Handshake Confirmed' : 'Connection Refused / Filtered'))}
+                        </div>
+                      </td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    } catch (err) {
+      showToast(err.message, "danger");
+    } finally {
+      btnRunPortScan.disabled = !portScanConfirm?.checked;
+      btnRunPortScan.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <circle cx="7" cy="7" r="5"/>
+          <path d="M11 11l3.5 3.5" stroke-linecap="round"/>
+        </svg>
+        <span>Verify Standard Ports</span>
+      `;
+    }
+  });
+}
+    }
+  });
+}
 
 // ── Initialize ─────────────────────────────────────────────────
 renderRecentChips();

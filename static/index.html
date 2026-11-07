@@ -170,6 +170,17 @@
           <span>Threat Defense</span>
           <span class="tab-badge" id="tab-badge-threats">--</span>
         </button>
+        <button class="segment-tab" type="button" role="tab" id="tab-tls" data-target="panel-tls" aria-controls="panel-tls" aria-selected="false">
+          <span>TLS &amp; HTTPS</span>
+          <span class="tab-badge" id="tab-badge-tls">--</span>
+        </button>
+        <button class="segment-tab" type="button" role="tab" id="tab-subdomains" data-target="panel-subdomains" aria-controls="panel-subdomains" aria-selected="false">
+          <span>Subdomains</span>
+          <span class="tab-badge" id="tab-badge-subdomains">0</span>
+        </button>
+        <button class="segment-tab" type="button" role="tab" id="tab-network" data-target="panel-network" aria-controls="panel-network" aria-selected="false">
+          <span>Network &amp; Scope</span>
+        </button>
         <button class="segment-tab" type="button" role="tab" id="tab-remediation" data-target="panel-remediation" aria-controls="panel-remediation" aria-selected="false">
           <span>Remediation</span>
           <span class="tab-badge fix-badge" id="tab-badge-fixes">0</span>
@@ -340,6 +351,81 @@
         <div id="security-suite-section" class="security-suite-section" style="display:none;">
           <h2 class="section-title">🛡️ Advanced Security &amp; Threat Defense</h2>
           <div id="security-cards" class="security-cards-grid"></div>
+        </div>
+      </div>
+
+      <!-- Panel 4: TLS & HTTPS Diagnostics -->
+      <div class="results-tab-panel" id="panel-tls" role="tabpanel" aria-labelledby="tab-tls">
+        <div id="tls-section" class="tls-section" style="display:none;">
+          <h2 class="section-title">🔒 TLS Encryption &amp; HTTPS Posture</h2>
+          <div id="tls-cards" class="security-cards-grid"></div>
+        </div>
+      </div>
+
+      <!-- Panel 5: Passive Subdomain Inventory -->
+      <div class="results-tab-panel" id="panel-subdomains" role="tabpanel" aria-labelledby="tab-subdomains">
+        <div id="subdomains-section" class="subdomains-section" style="display:none;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
+            <div>
+              <h2 class="section-title" style="margin-bottom:4px;">🌐 Passive Subdomain Footprint</h2>
+              <p class="remediation-sub">Discovered via public Certificate Transparency (CT) logs. Zero packets transmitted to target hosts.</p>
+            </div>
+            <span class="pill pill-info" id="subdomain-count-pill" style="font-size:12px;">0 Hosts</span>
+          </div>
+          <div id="subdomains-list" class="subdomains-table-container"></div>
+        </div>
+      </div>
+
+      <!-- Panel 6: Network Scope & Port Auditing -->
+      <div class="results-tab-panel" id="panel-network" role="tabpanel" aria-labelledby="tab-network">
+        <div class="network-scope-section">
+          <div class="network-scope-header">
+            <div>
+              <h2 class="section-title">🎯 Scoped Network Inventory &amp; Port Verification</h2>
+              <p class="remediation-sub">Safety-guarded diagnostic tools with strict SSRF controls (loopback and private RFC 1918 subnets blocked).</p>
+            </div>
+            <div class="scope-guard-badge">
+              <span class="pill pill-ok">🛡️ SSRF Guard Enforced</span>
+            </div>
+          </div>
+
+          <div class="scope-box-card">
+            <div class="scope-box-header">
+              <label for="list-scan-input" class="scope-label">
+                <span>Target Scope List (Hostnames or Public IPs):</span>
+                <span class="scope-hint">Enter hostnames or IPs separated by newlines or commas</span>
+              </label>
+            </div>
+            <textarea id="list-scan-input" class="scope-textarea" rows="3" placeholder="example.com&#10;mail.example.com&#10;93.184.216.34"></textarea>
+            
+            <div class="scope-actions-bar">
+              <div class="scope-action-group">
+                <button class="btn btn-primary" id="btn-run-list-scan" type="button">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                    <path d="M2 4h12M2 8h12M2 12h8" stroke-linecap="round"/>
+                  </svg>
+                  <span>Run List Scan (Resolve Scope Only)</span>
+                </button>
+                <span class="scope-action-sub">Resolves targets without sending port probes.</span>
+              </div>
+
+              <div class="scope-auth-group">
+                <label class="scope-confirm-label" for="port-scan-confirm">
+                  <input type="checkbox" id="port-scan-confirm" class="scope-checkbox" />
+                  <span>I confirm I am authorized to probe standard service ports on these approved targets.</span>
+                </label>
+                <button class="btn btn-secondary" id="btn-run-port-scan" type="button" disabled>
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                    <circle cx="7" cy="7" r="5"/>
+                    <path d="M11 11l3.5 3.5" stroke-linecap="round"/>
+                  </svg>
+                  <span>Verify Standard Ports</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div id="network-results" class="network-results-wrapper" style="display:none;"></div>
         </div>
       </div>
 

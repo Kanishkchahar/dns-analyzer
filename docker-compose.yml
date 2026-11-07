@@ -1,0 +1,45 @@
+# ==============================================================================
+# Docker Compose v2 — DNS Analyzer v2 (Security Posture Cockpit)
+# ==============================================================================
+
+services:
+  dns-analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: kanishkchahar/dns-analyzer:v2
+    container_name: dns-analyzer-v2
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - PORT=8000
+      - PYTHONUNBUFFERED=1
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, os; port = os.environ.get('PORT', '8000'); urllib.request.urlopen(f'http://127.0.0.1:{port}/').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # Test Runner Profile: docker compose --profile test run --rm test
+  test:
+    profiles:
+      - test
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: test
+    container_name: dns-analyzer-test-runner
+    command: ["pytest", "-v"]

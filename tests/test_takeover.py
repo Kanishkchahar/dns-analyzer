@@ -72,3 +72,15 @@ class TestSubdomainTakeover:
         assert any(
             f.severity == "error" and "Amazon S3" in f.message for f in findings
         )
+
+    async def test_dangling_custom_cname_is_warning_not_critical(self):
+        records = {"CNAME": {"status": "ok", "records": ["dead-internal-alias.customcorp.net"]}}
+        resolver = MockResolver({})  # target does not resolve
+
+        data, findings = await check_subdomain_takeover("service.example.com", records, resolver)
+        assert data["vulnerable"] is False
+        assert data["status"] == "dangling_alias"
+        assert data["provider"] == "Custom / Unknown"
+        assert any(
+            f.severity == "warning" and "Dangling CNAME alias" in f.message for f in findings
+        )

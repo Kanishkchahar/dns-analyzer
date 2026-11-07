@@ -61,18 +61,76 @@ async def _resolve_host_to_a(resolver: dns.asyncresolver.Resolver, host: str) ->
         return False
 
 
+async def discover_zone_apex(domain: str, resolver: dns.asyncresolver.Resolver) -> str:
+    """
+    Discover the authoritative zone apex for a submitted hostname by ascending domain labels.
+    RFC 1034/1035: Every authoritative zone cut has an SOA record at its apex.
+    e.g. 'api.staging.example.com' -> discovers 'example.com' as authoritative zone apex.
+    """
+    norm = domain.rstrip(".").lower()
+    labels = norm.split(".")
+    # If already a 2-label domain (or single label), return as is
+    if len(labels) <= 2:
+        return norm
+
+    # Ascend labels from current hostname up to domain.tld
+    for i in range(len(labels) - 1):
+        candidate = ".".join(labels[i:])
+        try:
+            ans = await resolver.resolve(candidate, "SOA")
+            if ans and len(ans) > 0:
+                return candidate
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+            continue
+        except Exception:
+            continue
+
+    return norm
+
+
 async def resolve_domain(domain: str) -> dict[str, Any]:
     """
     Query all required record types concurrently and return a structured dict.
+    Discovers authoritative zone apex for subdomains to prevent false missing-NS/SOA alerts.
     Also performs secondary A-record lookups for each NS and MX host.
     """
     resolver = dns.asyncresolver.Resolver()
+    resolver.timeout = 3.0
+    resolver.lifetime = 6.0
     record_types = ["A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA"]
 
-    # Run all primary lookups concurrently
-    tasks = [_safe_query(resolver, domain, rtype) for rtype in record_types]
-    results_list = await asyncio.gather(*tasks)
+    norm_domain = domain.rstrip(".").lower()
+
+    # Discover zone apex concurrently with primary hostname lookups
+    apex_task = discover_zone_apex(norm_domain, resolver)
+    query_tasks = [_safe_query(resolver, norm_domain, rtype) for rtype in record_types]
+
+    zone_apex, *results_list = await asyncio.gather(apex_task, *query_tasks)
     data: dict[str, Any] = dict(zip(record_types, results_list))
+
+    is_subdomain = (zone_apex != norm_domain)
+    data["zone_metadata"] = {
+        "zone_apex": zone_apex,
+        "is_subdomain": is_subdomain,
+        "queried_domain": norm_domain,
+    }
+
+    # If subdomain has no dedicated NS/SOA delegation, inherit from discovered authoritative zone apex
+    if is_subdomain:
+        if data["NS"]["status"] != "ok" or not data["NS"]["records"]:
+            apex_ns = await _safe_query(resolver, zone_apex, "NS")
+            if apex_ns["status"] == "ok" and apex_ns["records"]:
+                data["NS"] = {
+                    **apex_ns,
+                    "inherited_from": zone_apex,
+                }
+        if data["SOA"]["status"] != "ok" or not data["SOA"]["records"]:
+            apex_soa = await _safe_query(resolver, zone_apex, "SOA")
+            if apex_soa["status"] == "ok" and apex_soa["records"]:
+                data["SOA"] = {
+                    **apex_soa,
+                    "inherited_from": zone_apex,
+                }
 
     # Secondary: resolve each NS host
     if data["NS"]["status"] == "ok":

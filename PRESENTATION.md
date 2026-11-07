@@ -3,7 +3,7 @@
 
 > **Project Author:** Kanishk  
 > **Version:** 2.0 — Security Posture Cockpit Edition  
-> **Tech Stack:** Python 3.11+ · FastAPI · dnspython · Vanilla JS · Jinja2 · Uvicorn · Pytest (94 Automated Tests)  
+> **Tech Stack:** Python 3.11+ · FastAPI · dnspython · Vanilla JS · Jinja2 · Uvicorn · Pytest (112 Automated Tests)  
 
 ---
 
@@ -280,6 +280,30 @@ Here is the exhaustive inventory of all scans performed during each analysis:
 
 ---
 
+### Category 4: Web Security, Certificate Transparency & Scoped Network Audits
+
+#### 21. Authoritative Zone Apex Discovery (RFC 1034, 2181)
+* **What It Does**: Recursively traverses domain labels to locate the true authoritative zone cut (`SOA` / `NS`) prior to running zone-level checks.
+* **What It Tells You**: Identifies whether the submitted target is an apex zone or a subdomain delegating to a parent zone, and isolates authoritative zone records accurately.
+* **Why It Is Important**: Prevents false positive security alerts. A hostname like `api.example.com` rarely publishes its own `SOA` or `NS` records at that leaf node; checking the leaf directly causes incorrect failure reports. Authoritative discovery guarantees accurate diagnostics.
+
+#### 22. TLS Encryption & HTTPS Security Posture Audit
+* **What It Does**: Initiates non-blocking TLS handshakes to verify SSL/TLS certificate validity, issuer authority, expiration window, supported protocols (TLS 1.2 / 1.3), cipher suites, HTTP-to-HTTPS 301 enforcement, and security headers (HSTS, CSP, X-Frame-Options).
+* **What It Tells You**: Exposes expired or misconfigured certificates, legacy protocol vulnerabilities (SSLv3, TLS 1.0, 1.1), and missing transport encryption protections.
+* **Why It Is Important**: Modern web applications must enforce end-to-end transport encryption. Missing HSTS allows SSL stripping attacks, and expired certificates trigger browser security warnings that destroy user trust.
+
+#### 23. Passive Subdomain Inventory via Certificate Transparency (RFC 6962)
+* **What It Does**: Queries public Certificate Transparency (CT) logs via `crt.sh` to extract publicly logged subdomains associated with the root apex, then non-intrusively resolves their IP addresses and inspects CNAME pointers.
+* **What It Tells You**: Uncovers forgotten external attack surface assets, dev/staging environments, and potential dangling CNAME takeover candidates.
+* **Why It Is Important**: Passive reconnaissance sends zero probe packets to target infrastructure, making it 100% non-invasive, safe, and invisible to target firewalls while giving defenders complete visibility into their public exposure.
+
+#### 24. Scoped Network Inventory & SSRF-Guarded Port Auditing
+* **What It Does**: Provides Nmap-style target scope resolution (List Scan) and scoped TCP port verification for standard services (HTTP 80, HTTPS 443, SSH 22, SMTP 25/465/587, DNS 53) with built-in SSRF protections.
+* **What It Tells You**: Lists in-scope public targets and detects open listening services with banner grabbing and TCP SYN/ACK verification.
+* **Why It Is Important**: Enforces strict SSRF defense by disallowing probes against loopback (`127.0.0.0/8`), link-local (`169.254.0.0/16`), and RFC 1918 private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), ensuring the tool cannot be weaponized to map internal networks.
+
+---
+
 ## 7. RFC Rules & Security Standards Reference
 
 | Category | RFC Standard | Rule Function / Inspection Scope | Severity |
@@ -302,6 +326,11 @@ Here is the exhaustive inventory of all scans performed during each analysis:
 | **Hijacking** | CVE Standards | `check_subdomain_takeover`: Dangling CNAME cloud provider audit | **ERROR** |
 | **Crypto** | RFC 4033–4035 | `check_dnssec`: Cryptographic chain-of-trust & DS delegation | **INFO/WARN** |
 | **Branding** | RFC 8617 | `check_bimi`: SVG logo publication & DMARC eligibility | **INFO** |
+| **Zone Cut** | RFC 1034/2181 | `discover_zone_apex`: Authoritative zone tree cut discovery | **INFO** |
+| **Web Security** | RFC 5246/8446 | `audit_tls_and_https`: Certificate expiration, TLS 1.3 & HSTS | **WARN/INFO** |
+| **Recon** | RFC 6962 | `discover_passive_subdomains`: CT log discovery & dangling CNAMEs | **INFO/ERROR**|
+| **SSRF Guard** | RFC 1918/6890 | `is_safe_public_ip`: Blocks loopback & private RFC 1918 subnets | **ERROR** |
+| **Network** | RFC 793/1122 | `scan_target_standard_ports`: Non-blocking TCP port auditing | **INFO** |
 
 ---
 
@@ -354,7 +383,17 @@ Here is the exhaustive inventory of all scans performed during each analysis:
 
 ### Category F: Reliability & Code Quality
 * **Q: How do you guarantee stability across Python versions?**  
-  *Answer:* The platform includes an automated test suite of **94 unit and integration tests** running under `pytest`. Tests mock network queries to verify RFC check logic deterministically and test edge cases like dirty URLs, malformed domains, and CNAME loops. Furthermore, `run.sh` features self-healing virtual environment checks that automatically verify Python 3.11+ and rebuild corrupted environments.
+  *Answer:* The platform includes an automated test suite of **112 unit and integration tests** running under `pytest`. Tests mock network queries to verify RFC check logic deterministically and test edge cases like dirty URLs, malformed domains, and CNAME loops. Furthermore, `run.sh` features self-healing virtual environment checks that automatically verify Python 3.11+ and rebuild corrupted environments.
+
+---
+
+### Category G: Active/Passive Reconnaissance, Network Audits & SSRF Defense
+* **Q: Why is SSRF protection critical when building network diagnostic tools?**  
+  *Answer:* Web diagnostic tools that accept user-provided hostnames or IP addresses can be abused by attackers as an open proxy or Server-Side Request Forgery (SSRF) vector to probe internal infrastructure (e.g. AWS metadata `169.254.169.254`, Kubernetes services, Docker networks, or private database ports `10.0.0.0/8`, `192.168.0.0/16`). Our engine uses `ipaddress.ip_network` boundaries to strictly disallow loopback, link-local, multicast, and RFC 1918 private subnets prior to initiating any TCP connections.
+* **Q: How does passive subdomain enumeration differ from active brute-forcing?**  
+  *Answer:* Active tools (like `amass` or `dnsenum` brute-forcing) send thousands of DNS packets directly to nameservers, generating significant network noise, triggering rate limits, and alerting SOC intrusion detection systems. Passive enumeration queries public Certificate Transparency (CT) logs (`crt.sh`) via HTTPS. Zero packets are transmitted to the target domain's nameservers, making the discovery 100% stealthy, legal, and non-disruptive.
+* **Q: Why must authoritative zone discovery happen before checking NS, SOA, and DNSSEC?**  
+  *Answer:* When scanning subdomains like `app.dashboard.company.com`, checking NS or SOA at the leaf node directly will fail because subdomains do not typically possess independent zone apex authority unless delegated. Traversing upward to locate the authoritative SOA cut ensures the diagnostic engine evaluates the true responsible nameservers without issuing false-alarm security warnings.
 
 ---
 
@@ -388,6 +427,9 @@ Here is the exhaustive inventory of all scans performed during each analysis:
 |:---|:---|
 | `bash run.sh` | **Recommended:** Auto-setup environment, verify dependencies, and launch server on `http://127.0.0.1:8000` |
 | `bash run.sh <port>` | Launch server on custom port (e.g. `bash run.sh 9000`) |
-| `bash run.sh --test` | Run the complete automated test suite (94 tests) |
+| `bash run.sh --docker` | **Docker v2:** Build and run containerized multi-stage service via Docker Compose v2 |
+| `bash run.sh --test` | Run the complete automated test suite (112 tests) |
 | `bash run.sh --setup-only` | Pre-install dependencies and prepare `venv/` without launching server |
+| `docker compose up -d` | Launch production container in background with healthchecks & resource limits |
+| `docker compose --profile test run --rm test` | Execute test runner container profile |
 | `bash run.sh --help` | Display command usage and script flags |

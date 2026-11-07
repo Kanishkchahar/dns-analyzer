@@ -28,9 +28,16 @@ def check_domain_resolves(data: dict[str, Any]) -> list[Finding]:
 
 
 def check_ns_exists(data: dict[str, Any]) -> list[Finding]:
-    """Check 2: NS records must exist."""
-    if data.get("NS", {}).get("status") != "ok":
+    """Check 2: NS records must exist (or be delegated to authoritative zone apex)."""
+    ns = data.get("NS", {})
+    if ns.get("status") != "ok":
         return [_finding("error", "NS", "No nameservers found for this domain.")]
+    inherited = ns.get("inherited_from")
+    if inherited:
+        return [_finding(
+            "info", "NS",
+            f"Hostname operates under authoritative zone `{inherited}` (inherits nameserver authority)."
+        )]
     return []
 
 
@@ -82,10 +89,11 @@ def check_mx_resolves(data: dict[str, Any]) -> list[Finding]:
 
 def check_cname_conflict(data: dict[str, Any]) -> list[Finding]:
     """Check 7: CNAME must not coexist with other record types."""
-    if data.get("CNAME", {}).get("status") != "ok":
+    cname_entry = data.get("CNAME", {})
+    if cname_entry.get("status") != "ok" or not cname_entry.get("records"):
         return []
     # Other types that would conflict
-    conflicting = [t for t in ("A", "AAAA", "MX", "TXT", "NS") if data.get(t, {}).get("status") == "ok"]
+    conflicting = [t for t in ("A", "AAAA", "MX", "TXT", "NS") if data.get(t, {}).get("status") == "ok" and data.get(t, {}).get("records")]
     if conflicting:
         return [_finding(
             "error", "CNAME",

@@ -58,3 +58,33 @@ class TestReportBuilder:
         assert "v=spf1 ?all" in html
         assert "quarantine" in html
         assert "93.184.216.34" in html
+
+    def test_build_report_escapes_untrusted_html(self, sample_resolver_data):
+        findings = [
+            Finding(
+                severity="error",
+                record_type="TXT",
+                message='Injection test: <script>alert("xss")</script> and `valid_code`',
+            ),
+        ]
+        sample_resolver_data["TXT"] = {
+            "status": "ok",
+            "records": ['<img src=x onerror=alert(1)>', 'v=spf1 include:_spf.google.com ~all'],
+            "ttl": 300,
+        }
+        summary = Summary(errors=1, warnings=0, info=0)
+
+        html = build_report(
+            domain="<script>bad</script>.com",
+            scan_timestamp="2026-11-07 10:00:00 UTC",
+            records=sample_resolver_data,
+            findings=findings,
+            summary=summary,
+        )
+
+        assert "<script>alert" not in html
+        assert "&lt;script&gt;alert" in html
+        assert "<code>valid_code</code>" in html
+        assert "<img src=x onerror" not in html
+        assert "&lt;img src=x onerror" in html
+        assert "&lt;script&gt;bad&lt;/script&gt;.com" in html

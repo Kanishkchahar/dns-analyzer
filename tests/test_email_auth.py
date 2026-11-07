@@ -7,6 +7,7 @@ from app.email_auth import (
     analyze_dkim,
     analyze_dmarc,
     check_dkim_selectors,
+    compute_domain_score,
     compute_email_score,
     fetch_dmarc,
 )
@@ -106,10 +107,11 @@ class TestDKIM:
         assert res["selectors_found"][0]["has_key"] is True
 
     def test_analyze_dkim_found_vs_missing(self):
-        # Missing DKIM
+        # Missing / unchecked DKIM labeled as info (not found among checked selectors)
         f_missing = analyze_dkim({"has_dkim": False, "selectors_found": []})
         assert len(f_missing) == 1
-        assert f_missing[0].severity == "warning"
+        assert f_missing[0].severity == "info"
+        assert "no dkim records detected" in f_missing[0].message.lower()
 
         # Found DKIM
         sel = {
@@ -155,3 +157,39 @@ class TestEmailScore:
         score = compute_email_score(spf_findings, dmarc_findings, dkim_findings)
         assert score["score"] < 50
         assert score["grade"] in ("D", "F")
+
+    def test_compute_domain_score_comprehensive(self):
+        records = {
+            "A": {"status": "ok", "records": ["93.184.216.34"]},
+            "AAAA": {"status": "ok", "records": ["2606:2800:220:1:248:1893:25c8:1946"]},
+            "NS": {"status": "ok", "records": ["ns1.example.com", "ns2.example.com"]},
+            "SOA": {"status": "ok", "records": ["ns1.example.com admin.example.com 1 7200 3600 1209600 3600"]},
+        }
+        dns_findings = [Finding(severity="info", record_type="A", message="IPv4 resolves")]
+        email_score = {"score": 100, "grade": "A+", "label": "Excellent"}
+        dnssec_data = {"status": "secured", "enabled": True}
+        takeover_data = {"vulnerable": False, "status": "safe"}
+
+        domain_score = compute_domain_score(records, dns_findings, email_score, dnssec_data, takeover_data)
+        assert domain_score["score"] == 100
+        assert domain_score["grade"] == "A+"
+        assert "infrastructure" in domain_score["factors"]
+        assert "email_auth" in domain_score["factors"]
+        assert "dnssec" in domain_score["factors"]
+        assert "threats" in domain_score["factors"]
+        assert domain_score["factors"]["infrastructure"]["score"] == 25
+        assert domain_score["factors"]["email_auth"]["score"] == 35
+        assert domain_score["factors"]["dnssec"]["score"] == 20
+        assert domain_score["factors"]["threats"]["score"] == 20
+
+    def test_compute_domain_score_threat_deduction(self):
+        records = {"A": {"status": "ok", "records": ["93.184.216.34"]}}
+        dns_findings = []
+        email_score = {"score": 80, "grade": "B", "label": "Fair"}
+        dnssec_data = {"status": "unsigned", "enabled": False}
+        takeover_data = {"vulnerable": True, "status": "critical_vulnerability", "provider": "GitHub Pages"}
+
+        domain_score = compute_domain_score(records, dns_findings, email_score, dnssec_data, takeover_data)
+        assert domain_score["factors"]["threats"]["score"] == 0
+        assert domain_score["factors"]["threats"]["status"] == "critical"
+        assert domain_score["score"] < 60

@@ -1,9 +1,12 @@
 """Generate a self-contained downloadable HTML report from scan data."""
 
+import html
+import re
 from datetime import datetime
 from typing import Any
 
 from jinja2 import Environment, BaseLoader
+from markupsafe import Markup
 
 _TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -308,7 +311,7 @@ _TEMPLATE = """<!DOCTYPE html>
         <span class="severity-tag">{{ f.severity }}</span>
         <div class="finding-rtype">{{ f.record_type }}</div>
       </div>
-      <div class="finding-msg">{{ f.message | replace('`', '<code>') | replace('`', '</code>') }}</div>
+      <div class="finding-msg">{{ f.message | format_msg }}</div>
     </div>
     {% endfor %}
   {% else %}
@@ -366,7 +369,16 @@ _TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>"""
 
-_env = Environment(loader=BaseLoader(), autoescape=False)
+
+def format_finding_msg(msg: str) -> Markup:
+    """Safely format backtick code spans without allowing untrusted HTML injection."""
+    escaped = html.escape(str(msg))
+    formatted = re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
+    return Markup(formatted)
+
+
+_env = Environment(loader=BaseLoader(), autoescape=True)
+_env.filters["format_msg"] = format_finding_msg
 _tmpl = _env.from_string(_TEMPLATE)
 
 

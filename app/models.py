@@ -81,6 +81,25 @@ class RemediationFix(BaseModel):
     value: str
     ttl: int = 3600
     provider_guides: dict[str, str] = {}
+    is_draft: bool = True
+    impact_warning: str | None = None
+    prerequisites: list[str] = []
+
+
+class DomainFactorScore(BaseModel):
+    category: str
+    weight: int
+    score: int
+    max_score: int
+    status: str
+    summary: str
+
+
+class DomainScore(BaseModel):
+    score: int
+    grade: str
+    label: str
+    factors: dict[str, DomainFactorScore]
 
 
 class AnalyzeResponse(BaseModel):
@@ -89,7 +108,21 @@ class AnalyzeResponse(BaseModel):
     records: dict[str, Any]
     findings: list[Finding]
     summary: Summary
+    zone_metadata: dict[str, Any] | None = None
+    domain_score: DomainScore | None = None
     email_auth: EmailAuth | None = None
     security: SecurityAudit | None = None
+    tls: dict[str, Any] | None = None
+    subdomains: dict[str, Any] | None = None
     remediation: list[RemediationFix] | None = None
     bind_zone_snippet: str | None = None
+
+
+class ListScanRequest(BaseModel):
+    targets: list[str]
+
+
+class PortScanRequest(BaseModel):
+    target: str
+    ports: list[int] | None = None
+    confirmed: bool = False

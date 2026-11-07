@@ -28,8 +28,13 @@ DNSSEC_ALGORITHMS: dict[int, str] = {
 async def check_dnssec(
     domain: str,
     resolver: dns.asyncresolver.Resolver,
+    apex: str | None = None,
 ) -> tuple[dict[str, Any], list[Finding]]:
-    """Query DNSKEY and DS records to audit DNSSEC deployment and validity."""
+    """Query DNSKEY and DS records to audit DNSSEC deployment and validity.
+
+    If *domain* is a subdomain without its own zone cut, checks whether the
+    authoritative zone apex (*apex*) is DNSSEC-secured.
+    """
     findings: list[Finding] = []
     has_dnskey = False
     has_ds = False
@@ -66,16 +71,51 @@ async def check_dnssec(
     except Exception:
         has_ds = False
 
+    # If unsigned, check if parent zone apex has DNSSEC
+    inherited_from: str | None = None
+    if not has_dnskey and not has_ds and apex and apex.lower().rstrip(".") != domain.lower().rstrip("."):
+        try:
+            ans_apex_key = await resolver.resolve(apex, "DNSKEY")
+            ans_apex_ds = await resolver.resolve(apex, "DS")
+            if ans_apex_key and ans_apex_ds:
+                has_dnskey = True
+                has_ds = True
+                inherited_from = apex.lower().rstrip(".")
+                for rr in ans_apex_key:
+                    dnskey_records.append({
+                        "flags": rr.flags,
+                        "protocol": rr.protocol,
+                        "algorithm": DNSSEC_ALGORITHMS.get(rr.algorithm, f"Unknown ({rr.algorithm})"),
+                        "algorithm_id": rr.algorithm,
+                        "key_type": "KSK (Parent Zone)" if (rr.flags & 1) else "ZSK (Parent Zone)",
+                    })
+                for rr in ans_apex_ds:
+                    ds_records.append({
+                        "key_tag": rr.key_tag,
+                        "algorithm": DNSSEC_ALGORITHMS.get(rr.algorithm, str(rr.algorithm)),
+                        "digest_type": rr.digest_type,
+                    })
+        except Exception:
+            pass
+
     # Analyze status
     if has_dnskey and has_ds:
         status = "secured"
         algo = dnskey_records[0]["algorithm"] if dnskey_records else "Standard"
-        findings.append(Finding(
-            severity="info",
-            record_type="DNSSEC",
-            message=f"DNSSEC is fully enabled and authenticated with valid DNSKEY and DS records ({algo}). "
-                    f"Zone is cryptographically protected against DNS cache poisoning and MitM spoofing."
-        ))
+        if inherited_from:
+            findings.append(Finding(
+                severity="info",
+                record_type="DNSSEC",
+                message=f"Zone apex '{inherited_from}' is DNSSEC-secured with published DNSKEY ({algo}) and parent DS records. "
+                        f"Hostname '{domain}' is cryptographically signed and protected under parent zone apex authority."
+            ))
+        else:
+            findings.append(Finding(
+                severity="info",
+                record_type="DNSSEC",
+                message=f"DNSSEC is fully enabled with published DNSKEY ({algo}) and parent DS records. "
+                        f"Cryptographic chain is established; recursive resolvers enforce signature validation on zone queries."
+            ))
     elif has_dnskey and not has_ds:
         status = "incomplete_chain"
         findings.append(Finding(

@@ -15,6 +15,7 @@ def mock_dns_system():
     aaaa_rr = MockRR(address="2606:2800:220:1:248:1893:25c8:1946")
     mx_rr = MockRR(preference=10, exchange="mail.example.com.")
     ns_rr = MockRR(target="ns1.example.com.")
+    ns2_rr = MockRR(target="ns2.example.com.")
     txt_spf = MockRR(strings=[b"v=spf1 -all"])
     dmarc_rr = MockRR(strings=[b"v=DMARC1; p=reject; pct=100; rua=mailto:rep@example.com"])
     bimi_rr = MockRR(strings=[b"v=BIMI1; l=https://example.com/logo.svg; a="])
@@ -35,9 +36,8 @@ def mock_dns_system():
         ("example.com", "A"): MockAnswer([a_rr]),
         ("example.com", "AAAA"): MockAnswer([aaaa_rr]),
         ("example.com", "MX"): MockAnswer([mx_rr]),
-        ("example.com", "NS"): MockAnswer([ns_rr]),
+        ("example.com", "NS"): MockAnswer([ns_rr, ns2_rr]),
         ("example.com", "TXT"): MockAnswer([txt_spf]),
-        ("example.com", "CNAME"): MockAnswer([]),
         ("example.com", "SOA"): MockAnswer([soa_rr]),
         ("example.com", "DNSKEY"): MockAnswer([dnskey_rr]),
         ("example.com", "DS"): MockAnswer([ds_rr]),
@@ -45,9 +45,20 @@ def mock_dns_system():
         ("default._bimi.example.com", "TXT"): MockAnswer([bimi_rr]),
         ("google._domainkey.example.com", "TXT"): MockAnswer([dkim_rr]),
         ("ns1.example.com", "A"): MockAnswer([a_rr]),
+        ("ns2.example.com", "A"): MockAnswer([a_rr]),
         ("mail.example.com", "A"): MockAnswer([a_rr]),
     }
     return MockResolver(responses)
+
+
+@pytest.fixture(autouse=True)
+def mock_external_network_calls():
+    """Mock external passive CT logs and TLS probes so unit tests execute deterministically in milliseconds."""
+    mock_tls = ({"scanned": True, "tls_version": "TLSv1.3", "certificate": {"is_expired": False, "days_remaining": 90}}, [])
+    mock_sub = ({"discovered_count": 0, "subdomains": []}, [])
+    with patch("app.main.audit_tls_and_https", return_value=mock_tls), \
+         patch("app.main.discover_passive_subdomains", return_value=mock_sub):
+        yield
 
 
 @pytest.mark.asyncio
@@ -76,8 +87,22 @@ class TestAPIEndpoints:
         assert "security" in data
         assert "remediation" in data
         assert "bind_zone_snippet" in data
+        assert "domain_score" in data
+        assert data["domain_score"]["grade"] in ("A+", "A")
+        assert "infrastructure" in data["domain_score"]["factors"]
         assert data["email_auth"]["score"]["grade"] in ("A+", "A")
         assert data["security"]["dnssec"]["status"] == "secured"
+
+    async def test_post_analyze_sanitized_error_handling(self):
+        with patch("app.main.run_full_scan", side_effect=RuntimeError("Secret database connection failed")):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post("/api/analyze", json={"domain": "example.com"})
+
+        assert resp.status_code == 500
+        data = resp.json()
+        assert "Secret database connection failed" not in data["detail"]
+        assert "An error occurred during DNS analysis" in data["detail"]
 
     async def test_post_analyze_url_auto_extract(self, mock_dns_system):
         with patch("dns.asyncresolver.Resolver", return_value=mock_dns_system):
@@ -117,3 +142,22 @@ class TestAPIEndpoints:
             resp = await client.get("/api/report/invalid..domain")
 
         assert resp.status_code == 400
+
+    async def test_post_network_list_scan_api(self):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/api/network/list-scan", json={"targets": ["93.184.216.34", "127.0.0.1"]})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_targets"] == 2
+        assert data["in_scope_count"] == 1
+
+    async def test_post_network_port_scan_confirmation_required(self):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/api/network/port-scan", json={"target": "93.184.216.34", "confirmed": False})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "confirmation_required"

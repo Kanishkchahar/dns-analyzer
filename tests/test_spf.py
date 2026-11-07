@@ -149,3 +149,39 @@ class TestSPFAsyncOperations:
         assert "10.0.0.1" in res["ip4_ranges"]
         assert "10.0.0.2" in res["ip4_ranges"]
         assert res["flattened_lookups"] == 0
+
+    async def test_count_spf_lookups_shared_includes_evaluated(self):
+        # Branch 1 and Branch 2 both include shared.com
+        root_txt = MockRR(strings=[b"v=spf1 include:branch1.com include:branch2.com -all"])
+        b1_txt = MockRR(strings=[b"v=spf1 include:shared.com -all"])
+        b2_txt = MockRR(strings=[b"v=spf1 include:shared.com -all"])
+        shared_txt = MockRR(strings=[b"v=spf1 a -all"])
+
+        responses = {
+            ("example.com", "TXT"): MockAnswer([root_txt]),
+            ("branch1.com", "TXT"): MockAnswer([b1_txt]),
+            ("branch2.com", "TXT"): MockAnswer([b2_txt]),
+            ("shared.com", "TXT"): MockAnswer([shared_txt]),
+        }
+        resolver = MockResolver(responses)
+
+        res = await count_spf_lookups("example.com", resolver)
+        # Root includes: branch1 (1) + shared (1) + 'a' in shared (1) = 3 lookups on branch 1
+        # branch2 (1) + shared (1) + 'a' in shared (1) = 3 lookups on branch 2
+        # Total = 6 lookups
+        assert res["total_lookups"] == 6
+
+    async def test_count_spf_lookups_cycle_terminates(self):
+        # A includes B, B includes A
+        a_txt = MockRR(strings=[b"v=spf1 include:b.com -all"])
+        b_txt = MockRR(strings=[b"v=spf1 include:a.com -all"])
+
+        responses = {
+            ("a.com", "TXT"): MockAnswer([a_txt]),
+            ("b.com", "TXT"): MockAnswer([b_txt]),
+        }
+        resolver = MockResolver(responses)
+
+        res = await count_spf_lookups("a.com", resolver)
+        # Should not hang in infinite recursion; terminates gracefully
+        assert res["total_lookups"] == 2

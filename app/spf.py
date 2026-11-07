@@ -151,8 +151,7 @@ async def count_spf_lookups(domain: str, resolver: dns.asyncresolver.Resolver) -
         ``total_lookups`` (int), ``limit`` (10), ``over_limit`` (bool),
         and ``lookup_tree`` showing the recursive chain.
     """
-    visited: set[str] = set()
-    tree = await _count_lookups_recursive(domain, resolver, visited, depth=0)
+    tree = await _count_lookups_recursive(domain, resolver, current_path=frozenset(), depth=0)
     total = _sum_tree_lookups(tree)
     return {
         "total_lookups": total,
@@ -165,13 +164,14 @@ async def count_spf_lookups(domain: str, resolver: dns.asyncresolver.Resolver) -
 async def _count_lookups_recursive(
     domain: str,
     resolver: dns.asyncresolver.Resolver,
-    visited: set[str],
+    current_path: frozenset[str],
     depth: int,
 ) -> list[dict[str, Any]]:
     """Build a lookup-tree list for *domain* up to ``_MAX_DEPTH``."""
-    if depth >= _MAX_DEPTH or domain in visited:
+    norm_domain = domain.lower().rstrip(".")
+    if depth >= _MAX_DEPTH or norm_domain in current_path:
         return []
-    visited.add(domain)
+    new_path = current_path | {norm_domain}
 
     # Fetch TXT records for this domain
     try:
@@ -197,7 +197,7 @@ async def _count_lookups_recursive(
 
         # Recurse into includes and redirects
         if mtype in ("include", "redirect"):
-            children = await _count_lookups_recursive(value, resolver, visited, depth + 1)
+            children = await _count_lookups_recursive(value, resolver, new_path, depth + 1)
 
         child_lookups = _sum_tree_lookups(children)
         tree.append({
