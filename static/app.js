@@ -656,8 +656,6 @@ function updateTabBadges(data) {
 
   // 2. Threats badge & snapshot
   const threatsBadge = document.getElementById("tab-badge-threats");
-  const threatsPill = document.getElementById("overview-threats-pill");
-  const threatsDesc = document.getElementById("overview-threats-desc");
   const isTakeoverVuln = Boolean(data.security?.takeover?.vulnerable);
   const isDnssecDelegationVerified = data.security?.dnssec?.status === "delegation_match_verified";
 
@@ -667,20 +665,11 @@ function updateTabBadges(data) {
       threatsBadge.textContent = "Alert";
       threatsBadge.classList.add("badge-red");
     } else if (isDnssecDelegationVerified) {
-      threatsBadge.textContent = "Verified";
-      threatsBadge.classList.add("badge-green");
+      threatsBadge.textContent = "DS Match";
+      threatsBadge.classList.add("badge-amber");
     } else {
       threatsBadge.textContent = "Audit";
     }
-  }
-  if (threatsPill) {
-    threatsPill.textContent = isTakeoverVuln ? "Critical Alert" : (isDnssecSecured ? "Cryptographically Secured" : "Unsigned");
-    threatsPill.className = "snapshot-pill " + (isTakeoverVuln ? "danger" : isDnssecSecured ? "good" : "warn");
-  }
-  if (threatsDesc) {
-    threatsDesc.textContent = isTakeoverVuln
-      ? "CRITICAL: Dangling CNAME detected pointing to unclaimed cloud endpoint!"
-      : (isDnssecSecured ? "DNSSEC validation active with parent DS delegation. Subdomain takeover safe." : "DNSSEC is not enabled for this zone. No dangling takeover vulnerabilities.");
   }
 
   // 3. Fixes badge & snapshot
@@ -1594,6 +1583,12 @@ function renderTLS(tls) {
       tlsBadge.textContent = "N/A";
       tlsBadge.className = "tab-badge";
     }
+    tlsCards.innerHTML = `
+      <div class="tls-unavailable" role="status">
+        TLS and HTTPS checks were not run for this scan, so certificate, redirect, and security-header results are unavailable.
+      </div>
+    `;
+    tlsSec.style.display = "block";
     return;
   }
 

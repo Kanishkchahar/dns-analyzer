@@ -912,6 +912,15 @@ main {
   align-items: center;
   gap: 8px;
 }
+.tls-unavailable {
+  padding: 16px 18px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px dashed var(--hairline);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.55;
+}
 
 /* ── Records Grid ── */
 .records-section { margin-bottom: 48px; }
@@ -1119,13 +1128,15 @@ main {
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   overflow-x: auto;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-muted) var(--surface);
   border-bottom: 1px solid var(--hairline);
   scroll-behavior: smooth;
-  mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
 }
-.segment-nav::-webkit-scrollbar { display: none; }
+.segment-nav::-webkit-scrollbar { height: 6px; }
+.segment-nav::-webkit-scrollbar-track { background: var(--surface); border-radius: 999px; }
+.segment-nav::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 999px; }
+.segment-nav::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 
 .segment-tab {
   color: var(--text-muted);
@@ -2241,6 +2252,41 @@ dialog.modal::backdrop {
   height: 15px;
   accent-color: var(--accent);
   cursor: pointer;
+}
+.port-scan-auth-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.port-scan-auth-input {
+  width: clamp(210px, 24vw, 340px);
+  max-width: 100%;
+  height: 38px;
+  padding: 8px 12px;
+  color: var(--text-primary);
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: 12px;
+  color-scheme: dark;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.port-scan-auth-input::placeholder { color: var(--text-muted); opacity: 1; }
+.port-scan-auth-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(101, 185, 232, 0.15);
+}
+@media (max-width: 640px) {
+  .scope-auth-group { align-items: stretch; }
+  .scope-confirm-label { width: 100%; }
+  .port-scan-auth-row { width: 100%; }
+  .port-scan-auth-input { flex: 1 1 150px; width: auto; min-width: 0; }
+  .port-scan-auth-row .btn { flex: 1 1 100%; justify-content: center; }
 }
 
 /* ── Records & Audit Tables (Modern Cockpit Data Grid) ── */

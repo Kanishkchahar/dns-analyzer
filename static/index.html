@@ -417,13 +417,13 @@
                   <input type="checkbox" id="port-scan-confirm" class="scope-checkbox" />
                   <span>I confirm I am authorized to probe standard service ports on these approved targets.</span>
                 </label>
-                <div class="port-scan-auth-row" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+                <div class="port-scan-auth-row">
                   <input
                     type="password"
                     id="port-scan-auth-token"
-                    class="search-input"
-                    style="font-size:12px; padding:6px 10px; width:280px; height:34px;"
+                    class="port-scan-auth-input"
                     placeholder="API Key (if required by server policy)"
+                    aria-label="Port scan API key, if required by server policy"
                     autocomplete="off"
                   />
                   <button class="btn btn-secondary" id="btn-run-port-scan" type="button" disabled>
