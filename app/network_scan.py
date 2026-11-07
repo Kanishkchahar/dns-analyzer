@@ -6,6 +6,7 @@ and opt-in Port & Service checks against explicitly approved public targets.
 
 import asyncio
 import os
+import re
 import socket
 from typing import Any
 import dns.asyncresolver
@@ -28,11 +29,12 @@ STANDARD_PORTS: dict[int, str] = {
 # Server-side controls: active scanning requires server-side policy authorization
 MAX_PORTS_PER_SCAN = 10
 GLOBAL_PORT_SCAN_SEMAPHORE = asyncio.Semaphore(4)
+TARGET_SYNTAX_REGEX = re.compile(r"^[a-zA-Z0-9.\-_:\[\]]+$")
 
 
 def is_active_scan_allowed() -> bool:
-    """Check if server configuration permits active port scanning."""
-    val = os.environ.get("ENABLE_ACTIVE_PORT_SCAN", "true").strip().lower()
+    """Check if server configuration permits active port scanning (disabled by default)."""
+    val = os.environ.get("ENABLE_ACTIVE_PORT_SCAN", "false").strip().lower()
     return val in ("true", "1", "yes", "enabled")
 
 
@@ -40,11 +42,9 @@ async def run_list_scan(
     targets: list[str],
     resolver: dns.asyncresolver.Resolver | None = None,
 ) -> dict[str, Any]:
-    """Resolve user-approved target scope without probing ports (Nmap List Scan equivalent)."""
-    res = resolver or dns.asyncresolver.Resolver()
-    results: list[dict[str, Any]] = []
-
+    """Resolve user-approved target scope without probing ports (bounded concurrency & input validation)."""
     clean_targets = [t.strip() for t in targets if t.strip()]
+    list_semaphore = asyncio.Semaphore(10)
 
     async def _resolve_target(target: str) -> dict[str, Any]:
         target_info: dict[str, Any] = {
@@ -53,6 +53,11 @@ async def run_list_scan(
             "in_scope_safe": False,
             "reasons": [],
         }
+
+        # Validate input length and basic characters
+        if len(target) > 253 or not TARGET_SYNTAX_REGEX.match(target):
+            target_info["reasons"].append("Invalid target syntax or length exceeds 253 characters.")
+            return target_info
 
         # Check if target is already an IP
         is_ip_direct, reason = is_safe_ip(target)
@@ -66,22 +71,28 @@ async def run_list_scan(
             target_info["reasons"].append(reason)
             return target_info
 
-        # Resolve A and AAAA records
-        loop = asyncio.get_running_loop()
-        try:
-            addr_info = await loop.getaddrinfo(target, None, type=socket.SOCK_STREAM)
-            all_ips = list(dict.fromkeys(info[4][0] for info in addr_info))
-            safe_count = 0
-            for ip in all_ips:
-                safe, r = is_safe_ip(ip)
-                target_info["resolved_ips"].append({"ip": ip, "safe": safe, "reason": r})
-                if safe:
-                    safe_count += 1
-                else:
-                    target_info["reasons"].append(r)
-            target_info["in_scope_safe"] = safe_count > 0 and len(target_info["reasons"]) == 0
-        except Exception as exc:
-            target_info["reasons"].append(f"Resolution failed: {exc}")
+        # Resolve A and AAAA records with bounded concurrency and timeout
+        async with list_semaphore:
+            loop = asyncio.get_running_loop()
+            try:
+                addr_info = await asyncio.wait_for(
+                    loop.getaddrinfo(target, None, type=socket.SOCK_STREAM),
+                    timeout=2.5,
+                )
+                all_ips = list(dict.fromkeys(info[4][0] for info in addr_info))
+                safe_count = 0
+                for ip in all_ips:
+                    safe, r = is_safe_ip(ip)
+                    target_info["resolved_ips"].append({"ip": ip, "safe": safe, "reason": r})
+                    if safe:
+                        safe_count += 1
+                    else:
+                        target_info["reasons"].append(r)
+                target_info["in_scope_safe"] = safe_count > 0 and len(target_info["reasons"]) == 0
+            except asyncio.TimeoutError:
+                target_info["reasons"].append("Resolution timed out after 2.5 seconds.")
+            except Exception as exc:
+                target_info["reasons"].append(f"Resolution failed: {exc}")
 
         return target_info
 
@@ -189,8 +200,8 @@ async def run_port_scan(
                         "confidence": "confirmed",
                     }
 
-    tasks = [_probe_port(p) for p in target_ports]
-    port_results = await asyncio.gather(*tasks)
+        tasks = [_probe_port(p) for p in target_ports]
+        port_results = await asyncio.gather(*tasks)
 
     open_ports = [p for p in port_results if p["state"] == "open"]
 

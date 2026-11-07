@@ -120,7 +120,7 @@ fi
 
 if [ "$RUN_TESTS" = true ]; then
   echo ""
-  echo -e "  ${CYAN}➜ Running automated test suite (117 tests)...${NC}"
+  echo -e "  ${CYAN}➜ Running automated test suite (122 tests)...${NC}"
   "$PYTHON" -m pytest -v
   exit $?
 fi

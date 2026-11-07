@@ -30,7 +30,7 @@ bash run.sh 9000
 bash run.sh --setup-only
 ```
 
-#### Automated Test Suite (117 Automated Tests)
+#### Automated Test Suite (122 Automated Tests)
 
 ```bash
 bash run.sh --test
@@ -252,7 +252,7 @@ Returns a self-contained `.html` file with embedded CSS, fully viewable offline.
 
 ## 🧪 Testing
 
-The platform features an automated test suite with **117 unit and integration tests**:
+The platform features an automated test suite with **122 unit and integration tests**:
 
 ```bash
 # Run via all-in-one runner:

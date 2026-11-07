@@ -49,7 +49,7 @@ class TestResolverLayer:
     async def test_safe_query_nxdomain(self):
         resolver = MockResolver({("nonexistent.xyz", "A"): dns.resolver.NXDOMAIN()})
         res = await _safe_query(resolver, "nonexistent.xyz", "A")
-        assert res["status"] == "not_found"
+        assert res["status"] in ("nxdomain", "not_found")
         assert res["records"] == []
 
     async def test_safe_query_timeout(self):

@@ -14,9 +14,42 @@ import socket
 import ssl
 from typing import Any
 from urllib.parse import urlparse
+import httpcore
 import httpx
 
 from app.models import Finding
+
+
+class PinnedIPBackend(httpcore.AnyIOBackend):
+    """Network backend that pins TCP connections directly to a validated safe IP, eliminating DNS rebinding."""
+
+    def __init__(self, target_ip: str):
+        self.target_ip = target_ip
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Any = None,
+    ) -> httpcore.AsyncNetworkStream:
+        return await super().connect_tcp(
+            self.target_ip,
+            port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+
+class PinnedIPTransport(httpx.AsyncHTTPTransport):
+    """Transport that routes TCP traffic strictly to target_ip while preserving SNI and Host header."""
+
+    def __init__(self, target_ip: str, *args: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self._pool._network_backend = PinnedIPBackend(target_ip)
+
 
 
 def is_safe_ip(ip_str: str) -> tuple[bool, str]:
@@ -231,16 +264,17 @@ async def audit_tls_and_https(
                 message=f"Legacy or deprecated TLS protocol negotiated: {tls_version}. Upgrade to TLS 1.2 or TLS 1.3.",
             ))
 
-    # 4. Check HTTP (Port 80) -> HTTPS (Port 443) Redirection with strict redirect validation
+    # 4. Check HTTP (Port 80) -> HTTPS (Port 443) Redirection with strict redirect validation & pinned IP
     redirect_ok = False
     try:
-        async with httpx.AsyncClient(timeout=3.0, follow_redirects=False, verify=True) as client:
+        http_transport = PinnedIPTransport(target_ip)
+        async with httpx.AsyncClient(transport=http_transport, timeout=3.0, follow_redirects=False) as client:
             resp_http = await client.get(f"http://{norm_domain}/")
             if resp_http.status_code in (301, 302, 307, 308):
                 loc = resp_http.headers.get("location", "")
                 parsed_loc = urlparse(loc)
                 redirect_host = parsed_loc.hostname or norm_domain
-                redir_safe, _, redir_reason = await resolve_and_verify_all_ips(redirect_host, parsed_loc.port or 443)
+                redir_safe, redir_ips, redir_reason = await resolve_and_verify_all_ips(redirect_host, parsed_loc.port or 443)
                 if not redir_safe:
                     findings.append(Finding(
                         severity="error",
@@ -273,11 +307,13 @@ async def audit_tls_and_https(
     except Exception:
         result["https_redirect"] = {"enforced": False, "status_code": None, "location": None}
 
-    # 5. Check HTTPS Web Security Headers (Strict TLS verification, no arbitrary redirects, capped read size)
+    # 5. Check HTTPS Web Security Headers (Strict TLS verification, pinned IP, no arbitrary redirects)
     try:
-        async with httpx.AsyncClient(timeout=3.0, verify=True, follow_redirects=False) as client:
+        https_transport = PinnedIPTransport(target_ip, verify=True)
+        async with httpx.AsyncClient(transport=https_transport, timeout=3.0, follow_redirects=False) as client:
             resp_https = await client.get(f"https://{norm_domain}/")
             h = resp_https.headers
+
 
             hsts = h.get("strict-transport-security")
             csp = h.get("content-security-policy")

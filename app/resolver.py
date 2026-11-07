@@ -44,12 +44,17 @@ async def _safe_query(resolver: dns.asyncresolver.Resolver, domain: str, rtype: 
 
         return {"status": "ok", "records": records, "ttl": ttl}
 
-    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
-        return {"status": "not_found", "records": [], "ttl": 0}
+    except dns.resolver.NXDOMAIN:
+        return {"status": "nxdomain", "records": [], "ttl": 0, "reason": "Non-existent domain (NXDOMAIN)"}
+    except dns.resolver.NoAnswer:
+        return {"status": "no_answer", "records": [], "ttl": 0, "reason": "No record of requested type (NoAnswer)"}
+    except dns.resolver.NoNameservers:
+        return {"status": "no_nameservers", "records": [], "ttl": 0, "reason": "All nameservers failed or refused query (NoNameservers)"}
     except dns.exception.Timeout:
-        return {"status": "timeout", "records": [], "ttl": 0}
+        return {"status": "timeout", "records": [], "ttl": 0, "reason": "Query timed out"}
     except Exception as exc:
         return {"status": "error", "records": [], "ttl": 0, "error": str(exc)}
+
 
 
 async def _resolve_host_to_a(resolver: dns.asyncresolver.Resolver, host: str) -> bool:
@@ -113,6 +118,7 @@ async def resolve_domain(domain: str) -> dict[str, Any]:
         "zone_apex": zone_apex,
         "is_subdomain": is_subdomain,
         "queried_domain": norm_domain,
+        "heuristic_notice": "Discovered candidate zone apex via SOA label traversal. This is heuristic metadata and does not guarantee authoritative ownership scope for complex delegated topologies.",
     }
 
     # If subdomain has no dedicated NS/SOA delegation, inherit from discovered authoritative zone apex

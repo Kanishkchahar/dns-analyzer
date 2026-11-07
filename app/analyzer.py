@@ -182,4 +182,5 @@ def summarize(findings: list[Finding]) -> dict[str, int]:
         "errors": sum(1 for f in findings if f.severity == "error"),
         "warnings": sum(1 for f in findings if f.severity == "warning"),
         "info": sum(1 for f in findings if f.severity == "info"),
+        "inconclusive": sum(1 for f in findings if f.severity in ("inconclusive", "unverified")),
     }

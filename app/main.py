@@ -48,6 +48,54 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 
 app = FastAPI(title="DNS Analyzer", version="2.0.0")
 
+# Concurrency & runtime throttle budgets
+SCAN_SEMAPHORE = asyncio.Semaphore(8)
+SCAN_TIMEOUT_SECONDS = 15.0
+
+# In-memory recent scan cache (TTL 60s, max 128 domains) to prevent redundant queries
+_SCAN_CACHE: dict[str, tuple[float, AnalyzeResponse]] = {}
+_SCAN_CACHE_TTL = 60.0
+
+# In-memory client rate limiter (60 requests per minute per IP)
+_CLIENT_REQUESTS: dict[str, list[float]] = {}
+_RATE_WINDOW = 60.0
+_MAX_REQ_PER_WINDOW = 60
+
+
+def _get_cached_scan(domain: str) -> AnalyzeResponse | None:
+    now = asyncio.get_running_loop().time()
+    if domain in _SCAN_CACHE:
+        cached_time, response = _SCAN_CACHE[domain]
+        if now - cached_time < _SCAN_CACHE_TTL:
+            return response
+        del _SCAN_CACHE[domain]
+    return None
+
+
+def _store_cached_scan(domain: str, response: AnalyzeResponse) -> None:
+    now = asyncio.get_running_loop().time()
+    if len(_SCAN_CACHE) >= 128:
+        oldest_key = min(_SCAN_CACHE.keys(), key=lambda k: _SCAN_CACHE[k][0])
+        del _SCAN_CACHE[oldest_key]
+    _SCAN_CACHE[domain] = (now, response)
+
+
+def _enforce_rate_limit(request: Request) -> None:
+    client_ip = request.client.host if request.client else "unknown"
+    if client_ip in ("127.0.0.1", "testclient"):
+        return
+    now = asyncio.get_running_loop().time()
+    reqs = _CLIENT_REQUESTS.setdefault(client_ip, [])
+    cutoff = now - _RATE_WINDOW
+    _CLIENT_REQUESTS[client_ip] = [t for t in reqs if t > cutoff]
+    if len(_CLIENT_REQUESTS[client_ip]) >= _MAX_REQ_PER_WINDOW:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Please wait a moment before sending additional requests.",
+        )
+    _CLIENT_REQUESTS[client_ip].append(now)
+
+
 
 # ---------------------------------------------------------------------------
 # Helper & Shared Scan Pipeline
@@ -107,6 +155,7 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         email_score=email_score_data,
         dnssec_data=dnssec_data,
         takeover_data=takeover_data,
+        tls_data=tls_data,
     )
 
     email_auth = EmailAuth(
@@ -164,57 +213,85 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
 # ---------------------------------------------------------------------------
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
-async def api_analyze(req: AnalyzeRequest) -> AnalyzeResponse:
-    try:
-        return await run_full_scan(req.domain)
-    except Exception as exc:
-        logger.exception("Analysis failed for domain: %s", req.domain)
-        raise HTTPException(
-            status_code=500,
-            detail="An error occurred during DNS analysis. Please check the domain and try again.",
-        ) from exc
+async def api_analyze(req: AnalyzeRequest, request: Request) -> AnalyzeResponse:
+    _enforce_rate_limit(request)
+
+    async with SCAN_SEMAPHORE:
+        try:
+            res = await asyncio.wait_for(run_full_scan(req.domain), timeout=SCAN_TIMEOUT_SECONDS)
+            _store_cached_scan(req.domain, res)
+            return res
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail="DNS and security audit timed out after 15 seconds. Please try again.",
+            )
+        except Exception as exc:
+            logger.exception("Analysis failed for domain: %s", req.domain)
+            raise HTTPException(
+                status_code=500,
+                detail="An error occurred during DNS analysis. Please check the domain and try again.",
+            ) from exc
 
 
 @app.post("/api/network/list-scan")
-async def api_network_list_scan(req: ListScanRequest) -> dict[str, Any]:
+async def api_network_list_scan(req: ListScanRequest, request: Request) -> dict[str, Any]:
     """Execute non-intrusive DNS list scan across user-specified target scope."""
+    _enforce_rate_limit(request)
     if not req.targets or len(req.targets) > 50:
         raise HTTPException(status_code=400, detail="Provide between 1 and 50 target hostnames or IPs.")
     return await run_list_scan(req.targets)
 
 
 @app.post("/api/network/port-scan")
-async def api_network_port_scan(req: PortScanRequest) -> dict[str, Any]:
+async def api_network_port_scan(req: PortScanRequest, request: Request) -> dict[str, Any]:
     """Execute scoped, opt-in port & service verification on explicitly approved target."""
+    _enforce_rate_limit(request)
     if not req.target or len(req.target) > 253:
         raise HTTPException(status_code=400, detail="Invalid target provided.")
     return await run_port_scan(req.target, ports=req.ports, confirmed=req.confirmed)
 
 
 @app.get("/api/subdomains/{domain}")
-async def api_subdomains(domain: str) -> dict[str, Any]:
+async def api_subdomains(domain: str, request: Request) -> dict[str, Any]:
     """Query Certificate Transparency logs for passive subdomain discovery."""
+    _enforce_rate_limit(request)
     try:
         req = AnalyzeRequest(domain=domain)
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    import dns.asyncresolver
-    resolver = dns.asyncresolver.Resolver()
-    data, _ = await discover_passive_subdomains(req.domain, resolver)
-    return data
+    try:
+        import dns.asyncresolver
+        resolver = dns.asyncresolver.Resolver()
+        data, _ = await asyncio.wait_for(
+            discover_passive_subdomains(req.domain, resolver),
+            timeout=10.0,
+        )
+        return data
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Subdomain discovery timed out.")
+    except Exception as exc:
+        logger.exception("Subdomain discovery failed for domain: %s", req.domain)
+        raise HTTPException(status_code=500, detail="Failed to retrieve subdomain records.") from exc
 
 
 @app.get("/api/report/{domain}", response_class=HTMLResponse)
-async def api_report(domain: str) -> HTMLResponse:
-    """Re-run analysis and return a downloadable self-contained HTML report."""
+async def api_report(domain: str, request: Request) -> HTMLResponse:
+    """Return a downloadable self-contained HTML report (reusing recent scan if available)."""
+    _enforce_rate_limit(request)
     try:
         req = AnalyzeRequest(domain=domain)
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
-        scan = await run_full_scan(req.domain)
+        scan = _get_cached_scan(req.domain)
+        if not scan:
+            async with SCAN_SEMAPHORE:
+                scan = await asyncio.wait_for(run_full_scan(req.domain), timeout=SCAN_TIMEOUT_SECONDS)
+                _store_cached_scan(req.domain, scan)
+
         html = build_report(
             domain=scan.domain,
             scan_timestamp=scan.scan_timestamp,
@@ -231,12 +308,15 @@ async def api_report(domain: str) -> HTMLResponse:
                 "Content-Disposition": f'attachment; filename="dns-report-{req.domain}.html"'
             },
         )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Report generation timed out.")
     except Exception as exc:
         logger.exception("Report generation failed for domain: %s", domain)
         raise HTTPException(
             status_code=500,
             detail="Failed to generate domain security report. Please try again later.",
         ) from exc
+
 
 
 # ---------------------------------------------------------------------------

@@ -372,15 +372,19 @@ def compute_domain_score(
     email_score: dict[str, Any],
     dnssec_data: dict[str, Any] | None,
     takeover_data: dict[str, Any] | None,
+    tls_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compute a holistic domain health & security posture score.
 
-    Combines 4 documented operational pillars:
+    Combines documented operational pillars:
       1. DNS Infrastructure & Redundancy (25% weight)
       2. Email Authentication Defense (35% weight)
       3. DNSSEC & Cryptographic Integrity (20% weight)
       4. Subdomain Takeover & Threat Defense (20% weight)
+    Explicitly tracks inconclusive checks to avoid false reassurance.
     """
+    inconclusive_checks: list[str] = []
+
     # 1. DNS Infrastructure (25 pts max)
     infra_pts = 0
     a_rec = records.get("A", {})
@@ -444,10 +448,18 @@ def compute_domain_score(
         threat_score = 10
         threat_status = "warning"
         threat_summary = "Dangling CNAME alias pointing to unresolvable destination"
+    elif takeover_stat_str == "could_not_verify":
+        threat_score = 15
+        threat_status = "inconclusive"
+        threat_summary = "Takeover resolution inconclusive due to resolver error or timeout"
+        inconclusive_checks.append("Subdomain Takeover")
     else:
         threat_score = 20
         threat_status = "safe"
         threat_summary = "No dangling CNAME records or takeover vectors detected"
+
+    if tls_data is not None and not tls_data.get("scanned", False):
+        inconclusive_checks.append("TLS & HTTPS Audit")
 
     total_score = max(0, min(100, infra_score + email_factor_score + dnssec_score + threat_score))
 
@@ -459,10 +471,15 @@ def compute_domain_score(
             label = lbl
             break
 
+    if inconclusive_checks and total_score >= 85:
+        label = f"{label} (With Inconclusive Checks)"
+
     return {
         "score": total_score,
         "grade": grade,
         "label": label,
+        "inconclusive_count": len(inconclusive_checks),
+        "inconclusive_checks": inconclusive_checks,
         "factors": {
             "infrastructure": {
                 "category": "DNS Infrastructure",

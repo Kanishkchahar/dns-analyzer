@@ -621,7 +621,7 @@ main {
 }
 .bento-card-icon { font-size: 16px; line-height: 1; }
 .bento-card-title {
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.07em;
@@ -704,7 +704,7 @@ main {
 .bento-status-dot.warn { background: var(--warning); box-shadow: 0 0 6px rgba(224, 164, 88, 0.5); }
 .bento-status-dot.danger { background: var(--danger); box-shadow: 0 0 6px rgba(227, 109, 109, 0.5); }
 .bento-status-text {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-muted);
   font-family: 'Geist Mono', monospace;
@@ -714,7 +714,7 @@ main {
   background: transparent;
   border: 1px solid transparent;
   color: var(--accent);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
   display: inline-flex;
@@ -1121,6 +1121,9 @@ main {
   overflow-x: auto;
   scrollbar-width: none;
   border-bottom: 1px solid var(--hairline);
+  scroll-behavior: smooth;
+  mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
 }
 .segment-nav::-webkit-scrollbar { display: none; }
 
@@ -1163,7 +1166,7 @@ main {
 
 .tab-badge {
   font-family: 'Geist Mono', monospace;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
   padding: 1px 6px;
   border-radius: 100px;

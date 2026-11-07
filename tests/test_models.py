@@ -30,6 +30,8 @@ class TestAnalyzeRequest:
             ("https://github.com/org/repo?tab=stars#readme", "github.com"),
             ("http://example.com:8080/test", "example.com"),
             ("example.com.", "example.com"),
+            ("münchen.de", "xn--mnchen-3ya.de"),
+            ("https://MÜNCHEN.de", "xn--mnchen-3ya.de"),
         ],
     )
     def test_valid_domain_inputs(self, raw_input: str, expected_domain: str):

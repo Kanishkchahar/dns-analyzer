@@ -3,7 +3,7 @@
 import re
 from typing import Any
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 DOMAIN_RE = re.compile(
@@ -33,12 +33,20 @@ class AnalyzeRequest(BaseModel):
 
         if not v:
             raise ValueError("Domain must not be empty.")
-        if not DOMAIN_RE.match(v):
+
+        # Normalize Internationalized Domain Names (IDN) to punycode ASCII
+        try:
+            v_ascii = v.encode("idna").decode("ascii")
+        except UnicodeError:
+            raise ValueError(f"'{v}' contains invalid internationalized domain characters.")
+
+        if not DOMAIN_RE.match(v_ascii):
             raise ValueError(
                 f"'{v}' does not look like a valid domain name. "
                 "Expected format: example.com"
             )
-        return v
+        return v_ascii
+
 
 
 class Finding(BaseModel):
@@ -51,6 +59,7 @@ class Summary(BaseModel):
     errors: int
     warnings: int
     info: int
+    inconclusive: int = 0
 
 
 class EmailScore(BaseModel):
@@ -80,10 +89,11 @@ class RemediationFix(BaseModel):
     host: str
     value: str
     ttl: int = 3600
-    provider_guides: dict[str, str] = {}
+    provider_guides: dict[str, str] = Field(default_factory=dict)
     is_draft: bool = True
     impact_warning: str | None = None
-    prerequisites: list[str] = []
+    prerequisites: list[str] = Field(default_factory=list)
+
 
 
 class DomainFactorScore(BaseModel):

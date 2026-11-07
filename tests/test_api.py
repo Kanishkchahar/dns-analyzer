@@ -153,7 +153,17 @@ class TestAPIEndpoints:
         assert data["total_targets"] == 2
         assert data["in_scope_count"] == 1
 
-    async def test_post_network_port_scan_confirmation_required(self):
+    async def test_post_network_port_scan_disabled_by_default(self, monkeypatch):
+        monkeypatch.delenv("ENABLE_ACTIVE_PORT_SCAN", raising=False)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/api/network/port-scan", json={"target": "93.184.216.34", "confirmed": False})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "disabled"
+
+    async def test_post_network_port_scan_confirmation_required(self, monkeypatch):
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post("/api/network/port-scan", json={"target": "93.184.216.34", "confirmed": False})
@@ -161,3 +171,25 @@ class TestAPIEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "confirmation_required"
+
+    async def test_get_report_reuses_cached_scan(self, mock_dns_system):
+        from app.main import _store_cached_scan, run_full_scan
+        with patch("dns.asyncresolver.Resolver", return_value=mock_dns_system):
+            scan_obj = await run_full_scan("example.com")
+            _store_cached_scan("example.com", scan_obj)
+
+        with patch("app.main.run_full_scan") as mock_full_scan:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get("/api/report/example.com")
+            assert resp.status_code == 200
+            assert mock_full_scan.call_count == 0  # Reused cache!
+
+    async def test_api_subdomains_endpoint(self):
+        with patch("app.main.discover_passive_subdomains", return_value=({"domain": "example.com", "subdomains": []}, [])):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get("/api/subdomains/example.com")
+            assert resp.status_code == 200
+            assert resp.json()["domain"] == "example.com"
+

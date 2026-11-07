@@ -269,7 +269,9 @@ if (clearRecentBtn) {
 
 // Global keyboard accessibility shortcuts
 window.addEventListener("keydown", (e) => {
-  const isInputFocused = document.activeElement === domainInput;
+  const activeEl = document.activeElement;
+  const activeTag = activeEl ? activeEl.tagName.toLowerCase() : "";
+  const isInputFocused = activeTag === "input" || activeTag === "textarea" || activeTag === "select" || (activeEl && activeEl.isContentEditable);
 
   // Shortcuts modal toggle with ?
   if (e.key === "?" && !isInputFocused) {
@@ -476,6 +478,10 @@ async function runAnalysis() {
   try {
     renderResults(data);
     saveRecentSearch(domain);
+    const announcer = document.getElementById("scan-status-announcer");
+    if (announcer) {
+      announcer.textContent = `Analysis complete for ${domain}. Score: ${data.domain_score?.score || 0} out of 100, Grade: ${data.domain_score?.grade || "N/A"}.`;
+    }
   } catch (renderErr) {
     showError(`Error displaying results: ${renderErr.message}`);
     console.error("Render error:", renderErr);
@@ -515,6 +521,10 @@ function showError(msg) {
   errorMsg.textContent = msg;
   errorBanner.classList.add("visible");
   errorBanner.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  const announcer = document.getElementById("scan-status-announcer");
+  if (announcer) {
+    announcer.textContent = `Error: ${msg}`;
+  }
 }
 
 function hideError() {
@@ -749,6 +759,7 @@ function renderBentoCockpit(data) {
   if (heroSubtitle) {
     const errs = data.summary?.errors || 0;
     const warns = data.summary?.warnings || 0;
+    const inconcl = (data.domain_score?.inconclusive_count || 0) + (data.summary?.inconclusive || 0);
     const labelPrefix = data.domain_score?.label ? `${data.domain_score.label} · ` : "";
     if (errs > 0) {
       heroSubtitle.textContent = `${labelPrefix}${errs} Critical Issue${errs === 1 ? "" : "s"} Detected`;
@@ -756,8 +767,11 @@ function renderBentoCockpit(data) {
     } else if (warns > 0) {
       heroSubtitle.textContent = `${labelPrefix}${warns} Warning${warns === 1 ? "" : "s"} — Review Advised`;
       heroSubtitle.style.color = "var(--warning)";
+    } else if (inconcl > 0) {
+      heroSubtitle.textContent = `${labelPrefix}Base Checks Passed (${inconcl} Check${inconcl === 1 ? "" : "s"} Inconclusive/Unverified)`;
+      heroSubtitle.style.color = "var(--accent)";
     } else {
-      heroSubtitle.textContent = `${labelPrefix}All Systems Authenticated & Safe`;
+      heroSubtitle.textContent = `${labelPrefix}All Audited Systems Authenticated & Safe`;
       heroSubtitle.style.color = "var(--success)";
     }
   }
@@ -1706,10 +1720,12 @@ function renderSubdomains(subData) {
           ? `<span class="pill pill-ok"><span class="status-indicator-dot dot-green"></span> Active</span>`
           : `<span class="pill pill-warn"><span class="status-indicator-dot dot-yellow"></span> Inactive</span>`);
 
+    const escapedIps = (s.ips || []).map(ip => escapeHtml(ip)).join(", ");
+
     tableHtml += `
       <tr>
         <td style="font-family:'Geist Mono', monospace; font-weight:600; color:var(--text-primary);">${escapeHtml(s.subdomain)}</td>
-        <td style="font-family:'Geist Mono', monospace; font-size:12px;">${(s.ips || []).join(", ") || '<span style="color:var(--text-muted)">None</span>'}</td>
+        <td style="font-family:'Geist Mono', monospace; font-size:12px;">${escapedIps || '<span style="color:var(--text-muted)">None</span>'}</td>
         <td style="font-family:'Geist Mono', monospace; font-size:12px; color:var(--text-muted);">${escapeHtml(s.cname || "—")}</td>
         <td>${statusPill}</td>
         <td>
@@ -1838,8 +1854,8 @@ function escapeHtml(str) {
 // ── Segmented Tab Controller ──────────────────────────────────
 let activeSegmentTabId = "tab-overview";
 
-function switchSegmentTab(targetTabId) {
-  const tabs = document.querySelectorAll(".segment-tab");
+function switchSegmentTab(targetTabId, shouldFocus = false) {
+  const tabs = Array.from(document.querySelectorAll(".segment-tab"));
   const panels = document.querySelectorAll(".results-tab-panel");
   const resultsEl = document.getElementById("results");
   if (!tabs.length || !panels.length) return;
@@ -1853,15 +1869,21 @@ function switchSegmentTab(targetTabId) {
   tabs.forEach((t) => {
     t.classList.remove("active");
     t.setAttribute("aria-selected", "false");
+    t.setAttribute("tabindex", "-1");
   });
   targetTab.classList.add("active");
   targetTab.setAttribute("aria-selected", "true");
+  targetTab.setAttribute("tabindex", "0");
+  if (shouldFocus) {
+    targetTab.focus();
+  }
 
   if (targetPanelId === "all") {
     resultsEl?.classList.add("all-mode");
     panels.forEach((p) => {
       p.classList.add("active");
       p.style.display = "block";
+      p.removeAttribute("hidden");
     });
   } else {
     resultsEl?.classList.remove("all-mode");
@@ -1869,9 +1891,11 @@ function switchSegmentTab(targetTabId) {
       if (p.id === targetPanelId) {
         p.classList.add("active");
         p.style.display = "block";
+        p.removeAttribute("hidden");
       } else {
         p.classList.remove("active");
         p.style.display = "none";
+        p.setAttribute("hidden", "");
       }
     });
   }
@@ -1890,11 +1914,39 @@ function initSegmentedTabs() {
   const nav = document.getElementById("segment-nav");
   if (!nav) return;
 
-  const tabs = nav.querySelectorAll(".segment-tab");
+  const tabs = Array.from(nav.querySelectorAll(".segment-tab"));
   tabs.forEach((tab) => {
     tab.addEventListener("click", () => {
       switchSegmentTab(tab.id);
     });
+  });
+
+  // WAI-ARIA tablist arrow-key navigation
+  nav.addEventListener("keydown", (e) => {
+    const currentTab = document.activeElement;
+    if (!currentTab || !currentTab.classList.contains("segment-tab")) return;
+
+    const currentIndex = tabs.indexOf(currentTab);
+    if (currentIndex === -1) return;
+
+    let targetIndex = -1;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+      e.preventDefault();
+      targetIndex = (currentIndex + 1) % tabs.length;
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+      e.preventDefault();
+      targetIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      targetIndex = 0;
+    } else if (e.key === "End") {
+      e.preventDefault();
+      targetIndex = tabs.length - 1;
+    }
+
+    if (targetIndex !== -1 && tabs[targetIndex]) {
+      switchSegmentTab(tabs[targetIndex].id, true);
+    }
   });
 
   // Snapshot card links (data-switch="tab-email", etc.)

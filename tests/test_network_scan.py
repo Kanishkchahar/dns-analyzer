@@ -20,23 +20,26 @@ class TestNetworkScan:
         assert t_loop["in_scope_safe"] is False
         assert any("Loopback" in r for r in t_loop["reasons"])
 
-    async def test_port_scan_requires_explicit_confirmation(self):
-        res = await run_port_scan("93.184.216.34", ports=[80, 443], confirmed=False)
-        assert res["status"] == "confirmation_required"
-        assert "Explicit confirmation required" in res["message"]
-
-    async def test_port_scan_ssrf_blocks_private_target(self):
-        res = await run_port_scan("127.0.0.1", ports=[80], confirmed=True)
-        assert res["status"] == "blocked"
-        assert "SSRF Guard" in res["message"]
-
-    async def test_port_scan_disabled_by_policy(self, monkeypatch):
-        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "false")
+    async def test_port_scan_disabled_by_default(self, monkeypatch):
+        monkeypatch.delenv("ENABLE_ACTIVE_PORT_SCAN", raising=False)
         res = await run_port_scan("93.184.216.34", ports=[80], confirmed=True)
         assert res["status"] == "disabled"
         assert "disabled by server deployment policy" in res["message"]
 
-    async def test_port_scan_port_limit_and_validation(self):
+    async def test_port_scan_requires_explicit_confirmation(self, monkeypatch):
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        res = await run_port_scan("93.184.216.34", ports=[80, 443], confirmed=False)
+        assert res["status"] == "confirmation_required"
+        assert "Explicit confirmation required" in res["message"]
+
+    async def test_port_scan_ssrf_blocks_private_target(self, monkeypatch):
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        res = await run_port_scan("127.0.0.1", ports=[80], confirmed=True)
+        assert res["status"] == "blocked"
+        assert "SSRF Guard" in res["message"]
+
+    async def test_port_scan_port_limit_and_validation(self, monkeypatch):
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
         # Exceeds max 10 ports
         many_ports = list(range(1, 15))
         res = await run_port_scan("93.184.216.34", ports=many_ports, confirmed=True)
