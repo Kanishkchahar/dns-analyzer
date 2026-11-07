@@ -47,17 +47,17 @@ bash run.sh
 | **1** | `cloudflare.com` (or click Quick Chip) | **Posture Overview:** Inspect the live score and available DNS, mail, TLS, DNSSEC delegation, and nameserver checks. Results depend on current DNS and service responses; do not assume a fixed grade. |
 | **2** | `google.com` | **Email Scale:** Strict DMARC enforcement, strong SPF, multiple verified DKIM selector keys, and redundant authoritative nameservers. |
 | **3** | `https://www.boot.dev/dashboard` | **Automatic URL Sanitization:** Paste a full dirty URL with protocol, path, and query parameters. The platform instantly extracts `boot.dev` automatically with zero user effort. |
-| **4** | `example.com` | **Actionable Remediation Wizard:** Reveals missing SPF/DMARC records. Click **1-Click Fixes →** to show auto-generated Cloudflare, Route 53, and GoDaddy records, plus the instant **Export BIND Zone File** feature. |
+| **4** | `example.com` | **Remediation Drafts:** Reveals missing SPF/DMARC records and copy-paste draft suggestions with provider guidance. Suggestions are not applied automatically. |
 | **5** | `invalid!!!domain` | **Resilience & Validation:** Pydantic validation rejects malformed input with a clean HTTP 400 error banner — no server exceptions or unhandled tracebacks. |
 
 ### Key Features to Highlight During the Demo:
 1. ⚡ **Asynchronous Concurrency**: *"Independent DNS and security checks run concurrently with bounded timeouts. Results can vary with DNS, CT, and target response times."*
-2. 🍱 **Bento Grid Security Cockpit**: *"The left hero card features an animated circular score ring anchoring the overall posture (A+ to F), accompanied by a 2×2 grid of rich, un-truncated diagnostic telemetry."*
-3. 🛡️ **Subdomain Takeover Defense**: *"Scans CNAME pointers against known cloud fingerprints (AWS S3, GitHub Pages, Heroku, Shopify) to catch dangling CNAMEs before malicious actors seize them."*
+2. 🍱 **Bento Grid Dashboard**: *"The score ring summarizes DNS and email posture; TLS, MTA-STS, TLS-RPT, and BIMI results are reported separately and do not affect this score."*
+3. 🛡️ **Takeover Fingerprint Checks**: *"Checks known CNAME service patterns. An exact bounded page-fingerprint match is confirmed; DNS-only evidence remains a candidate. Catalog patterns are heuristic and require manual confirmation."*
 4. 🔐 **DNSSEC Delegation Check**: *"Inspects published DNSKEY and DS records and checks for a matching delegation. Full RRSIG cryptographic validation and root trust-chain verification are not implemented yet."*
 5. 📈 **SPF 10-Lookup Recursion Meter & Flattener**: *"Visual bar tracking lookups against the strict RFC 7208 limit of 10, with an automatic CIDR flattener that optimizes over-limit records to 0 lookups."*
 6. ✨ **BIMI Brand Inbox Validation**: *"Audits whether the domain publishes a verified SVG logo and satisfies strict DMARC criteria for official avatar display in Gmail and Apple Mail."*
-7. 🔧 **1-Click Copyable Fixes & BIND Export**: *"Not just a problem spotter — an automated solution. Generates exact zone fixes tailored for Cloudflare, AWS Route 53, and GoDaddy, plus downloadable standard BIND zone files."*
+7. 🔧 **Copy-Paste Fix Drafts & BIND Export**: *"Generates draft record values, provider-specific guidance, and a BIND snippet. You review and apply suggested changes yourself."*
 8. ⌨️ **Radical Keyboard Ergonomics**: *"Operate the entire dashboard without a mouse: `/` focuses search, `?` opens help, `1`–`4` test samples, `f` filters findings, `v` toggles CLI dig view, `c` copies shareable links, `m` copies Markdown summaries, `j` exports JSON, `d` downloads offline reports, and `z` exports BIND zone files."*
 9. 🧭 **Scan Coverage & Change History**: *"See which checks completed, were partial, were blocked, or are optional. Compare DNS, CT inventory, TLS certificate, and optional path results with earlier scans saved in this browser."*
 10. 🌐 **Bounded Web Path Review**: *"Run a separate fixed-path check that can read same-origin robots.txt and sitemap references. It is bounded and does not recursively crawl directories."*
@@ -73,8 +73,8 @@ The dashboard overview is structured as a **Two-Tier Security Posture Cockpit** 
 │  🌐 cloudflare.com  ·  Scanned Nov 7, 2026 12:00 UTC        [ Share Link ] [ Copy MD ] [ Export JSON ]│
 ├─────────────────────────────────────┬──────────────────────────────────┬───────────────────────────────┤
 │                                     │ 🌐 DNS INFRASTRUCTURE            │ ✉️ EMAIL AUTHENTICATION       │
-│      OVERALL SECURITY POSTURE       │                                  │                               │
-│                                     │  Dual-Stack Reachable            │  Phishing Immune              │
+│       DNS & EMAIL POSTURE SCORE     │                                  │                               │
+│                                     │  A/AAAA Records Resolved         │  Email Authentication          │
 │         ╭───────────────╮           │  • IPv4: 2 Addresses Resolved    │  • SPF: Valid (-all policy)   │
 │        ╱                 ╲          │  • IPv6: 2 Addresses Resolved    │  • DMARC: Strict (p=reject)   │
 │       │     Grade A+      │         │  • NS: 5 Redundant Servers       │  • DKIM: Verified Selectors   │
@@ -82,18 +82,20 @@ The dashboard overview is structured as a **Two-Tier Security Posture Cockpit** 
 │        ╲                 ╱          │  [ Status: Healthy ● ]           │  [ Status: Enforced ● ]       │
 │         ╰───────────────╯           │  [ DNS Records → ]               │  [ Email Auth → ]             │
 │                                     ├──────────────────────────────────┼───────────────────────────────┤
-│   All Systems Authenticated & Safe  │ 🔐 CRYPTOGRAPHY & TAKEOVER       │ 🔧 1-CLICK REMEDIATION        │
+│   DNS and email posture overview    │ 🔐 CRYPTOGRAPHY & TAKEOVER       │ 🔧 REMEDIATION DRAFTS         │
 │                                     │                                  │                               │
-│   ┌────────┐ ┌────────┐ ┌────────┐  │  Hardened Against Hijacking      │  Actionable Zone Fixes        │
-│   │ 0 ERR  │ │ 0 WARN │ │ 7 INFO │  │  • DNSSEC: Cryptographically OK  │  • 0 Critical Fixes Needed    │
-│   └────────┘ └────────┘ └────────┘  │  • DS Delegation: Valid (parent) │  • Posture: Fully Hardened    │
-│                                     │  • Takeover Risk: Zero Dangling  │                               │
-│  [ Click badge to filter findings ] │  [ Status: Secured ● ]           │  [ Status: Optimal ● ]        │
-│                                     │  [ Threat Defense → ]            │  [ 1-Click Fixes → ]          │
+│   ┌────────┐ ┌────────┐ ┌────────┐  │  Partial DNSSEC inspection       │  Copy-paste suggestions      │
+│   │ errors │ │ warnings│ │  info  │  │  • DS/DNSKEY match (if observed)  │  • Review before publishing  │
+│   └────────┘ └────────┘ └────────┘  │  • Takeover candidates listed     │                               │
+│                                     │  [ Review findings ]             │  [ Remediation drafts ]      │
+│  [ Filter findings ]                │  [ Threat Defense → ]            │  [ BIND export ]              │
 └─────────────────────────────────────┴──────────────────────────────────┴───────────────────────────────┘
 ```
 
-### Why This Design Beats Traditional Layouts:
+*The wireframe above is illustrative. Scores, counts, and statuses depend on the domain scanned and are not a promised result. The displayed score covers DNS and email posture; TLS, MTA-STS, TLS-RPT, and BIMI findings do not affect it.*
+*A confirmed AXFR caps the score at 39 (grade F). An inconclusive DNSSEC result is shown separately and receives no DNSSEC points.*
+
+### Design Notes:
 1. **Dominant Visual Centerpiece**: The animated SVG health ring sits on the left, anchoring the dashboard. Executives and non-technical stakeholders instantly comprehend domain health in 3 seconds.
 2. **Zero Text Truncation**: Squeezing 4 metrics into a single row forces ellipsis truncation (`IPv4 (2...`, `Cryptograph...`). The 2×2 layout gives each quadrant ample breathing room for complete sentences, bullet points, and live status dots.
 3. **Seamless Progressive Disclosure**: High-level status is presented in the Bento overview, while deep protocol details (RFC parameters, hex public keys, raw records) reside in dedicated segmented tabs accessible with one click.
@@ -105,7 +107,7 @@ The dashboard overview is structured as a **Two-Tier Security Posture Cockpit** 
 ### The Problem:
 * **72% of organizations** suffer DNS outages, with an average downtime cost exceeding $900,000 per incident (EfficientIP Global DNS Threat Report).
 * **91% of targeted cyberattacks** initiate via spear-phishing or domain spoofing (FBI Internet Crime Report).
-* **Thousands of subdomains** sit vulnerable to Dangling CNAME takeovers across abandoned AWS, GitHub, and Shopify resources (CVE-level threat).
+* **Stale CNAMEs** can point to third-party resources that may be claimable. This project uses provider fingerprints; it does not perform CVE lookups or prove provider-side claimability.
 * Traditional utilities (`dig`, `nslookup`) are single-query, CLI-only, and provide no contextual policy analysis or remediation.
 
 ### The Solution:
@@ -140,11 +142,11 @@ DNS Analyzer v2 combines DNS and email configuration checks, partial DNSSEC dele
                                   ▼
                ┌─────────────────────────────────────────────────────────┐
                │           Comprehensive RFC Rule Analysis Engine        │
-               │ • 9 Infrastructure Checks (analyzer.py)                 │
+               │ • 10 DNS Infrastructure Checks (analyzer.py)            │
                │ • SPF Recursion Tree & Flattening (spf.py)              │
                │ • DMARC Policy & Weighted Score Calculation (0-100)     │
-               │ • DNSSEC Chain Validation & Subdomain Takeover Hunting  │
-               │ • 1-Click Remediation & BIND Zone Builder (remediation) │
+               │ • Partial DNSSEC Check & Takeover Fingerprints          │
+               │ • Copy-Paste Drafts & BIND Zone Export (remediation)    │
                └────────────────────────────┬────────────────────────────┘
                                             │
                             ┌───────────────┴───────────────┐
@@ -185,7 +187,7 @@ The main analysis runs the checks below. Common web path checks and active port 
 * **What It Tells You**: Confirms whether the domain has distributed DNS resilience or a Single Point of Failure (SPOF).
 * **Why It Is Important**: If a domain has only 1 nameserver and that server goes down, crashes, or is DDoS'd, all services across the organization (website, email, API, VPN) instantly go offline. RFC 1035 mandates at least 2 independent nameservers.
 
-#### 5. Nameserver Host IP Reachability Scan
+#### 5. Nameserver Host Address Resolution Check
 * **What It Does**: Resolves each authoritative nameserver hostname to an underlying IP address.
 * **What It Tells You**: Verifies that nameserver hostnames are active and can be reached by recursive resolvers.
 * **Why It Is Important**: A registered nameserver hostname that fails to resolve is a "lame delegation". Resolvers attempting to query a dead nameserver suffer 3–5 second timeouts before failing over, causing painful page-load latency or random resolution failures.
@@ -275,10 +277,10 @@ The main analysis runs the checks below. Common web path checks and active port 
 
 ### Category 3: Cryptography & Threat Defense Scans
 
-#### 18. Subdomain Takeover & Dangling CNAME Threat Scanner
-* **What It Does**: Analyzes CNAME pointers against known cloud provider fingerprints (AWS S3, GitHub Pages, Heroku, Shopify, Zendesk, Surge, Ghost, Azure, Vercel) and verifies whether the target endpoint resolves or is unclaimed.
-* **What It Tells You**: Discovers "dangling" CNAME records pointing to decommissioned or deleted cloud instances.
-* **Why It Is Important**: **Critical CVE Vulnerability**. If a company deletes an AWS S3 bucket (`old-assets.s3.amazonaws.com`) but forgets to delete the DNS CNAME (`assets.company.com`), any attacker can register that bucket name on AWS for $0 and take over `assets.company.com`. They can then host phishing login pages, steal session cookies via cross-domain access, and distribute malware under the company's trusted domain.
+#### 18. Subdomain Takeover Fingerprints
+* **What It Does**: Checks CNAME targets against a local catalog of 10 provider patterns. For HTTP patterns, the scanner makes a pinned HTTPS request with redirects disabled, a short timeout, a 16 KiB response cap, and a shared per-scan request budget.
+* **What It Tells You**: An exact stored page fingerprint is reported as confirmed; DNS-only failure is reported as a candidate, never proof of provider-side claimability.
+* **Limit**: The catalog is heuristic and its entries have not all been independently checked against live provider accounts. A match still needs owner/provider confirmation. This is not a CVE lookup service.
 
 #### 19. DNSSEC Delegation Inspection (RFC 4033, 4034, 4035)
 * **What It Does**: Queries DNSKEY and DS records, reports key algorithms, and checks whether a parent DS digest matches a published DNSKEY.
@@ -288,7 +290,7 @@ The main analysis runs the checks below. Common web path checks and active port 
 #### 20. BIMI (Brand Indicators for Message Identification) Check (RFC 8617)
 * **What It Does**: Queries `default._bimi.{domain}` for verified SVG brand logos and checks whether the domain's DMARC policy meets the strict eligibility criteria (`p=quarantine` or `p=reject` with `pct=100`).
 * **What It Tells You**: Confirms whether the company's verified brand avatar will display next to emails in Gmail, Apple Mail, and Yahoo Mail.
-* **Why It Is Important**: BIMI increases email open rates by up to 21%, dramatically boosts consumer brand trust, and visually proves to non-technical users that an email is 100% authentic.
+* **Why It Is Important**: BIMI may display a brand mark in supported mail clients. It is a visual indicator, not proof that a message is authentic.
 
 #### 21. Remediation Suggestions & BIND Zone File Export
 * **What It Does**: Creates draft DNS records and provider guidance for Cloudflare, Route 53, Namecheap, Hostinger, BigRock, Google Cloud DNS, and Azure DNS, plus a BIND zone snippet.
@@ -302,7 +304,7 @@ The main analysis runs the checks below. Common web path checks and active port 
 #### 22. Authoritative Zone Apex Discovery (RFC 1034, 2181)
 * **What It Does**: Recursively traverses domain labels to locate the true authoritative zone cut (`SOA` / `NS`) prior to running zone-level checks.
 * **What It Tells You**: Identifies whether the submitted target is an apex zone or a subdomain delegating to a parent zone, and isolates authoritative zone records accurately.
-* **Why It Is Important**: Prevents false positive security alerts. A hostname like `api.example.com` rarely publishes its own `SOA` or `NS` records at that leaf node; checking the leaf directly causes incorrect failure reports. Authoritative discovery guarantees accurate diagnostics.
+* **Why It Is Important**: Reduces false alarms for hostnames that inherit authority from a parent zone. Apex discovery is heuristic and does not replace checking delegation with the domain operator.
 
 #### 23. TLS Encryption & HTTPS Security Posture Audit
 * **What It Does**: Checks certificate validity, negotiated TLS details, HTTP-to-HTTPS behavior, and observed response headers. Header review includes HSTS, CSP risk notes, Permissions-Policy, COOP/CORP, and cookie flags. A safe `OPTIONS` request reports methods advertised in the `Allow` header.
@@ -350,7 +352,7 @@ The main analysis runs the checks below. Common web path checks and active port 
 | **Anti-Spoof**| RFC 7208 §5.5 | `check_spf_deprecated_ptr`: Flags deprecated and slow `ptr` mechanism| **WARNING** |
 | **Phishing** | RFC 7489 | `check_dmarc_policy`: Audits `none` → `quarantine` → `reject` & `rua` | **ERROR/WARN**|
 | **Signatures**| RFC 6376 | `check_dkim_selectors`: Audits 15 selectors & public key extraction | **INFO/WARN** |
-| **Hijacking** | CVE Standards | `check_subdomain_takeover`: Dangling CNAME cloud provider audit | **ERROR** |
+| **Takeover** | Service fingerprints | `check_subdomain_takeover`: Exact HTTP match is confirmed; DNS-only evidence is a candidate | **WARN/ERROR** |
 | **Crypto** | RFC 4033–4035 | `check_dnssec`: DNSKEY inspection and DS-to-DNSKEY delegation match; no full RRSIG chain validation | **INFO/WARN** |
 | **Branding** | RFC 8617 | `check_bimi`: SVG logo publication & DMARC eligibility | **INFO** |
 | **Zone Cut** | RFC 1034/2181 | `discover_zone_apex`: Authoritative zone tree cut discovery | **INFO** |
@@ -387,16 +389,16 @@ The main analysis runs the checks below. Common web path checks and active port 
   - `p=none`: Audit mode. Unauthorized emails are delivered normally to recipient inboxes; only XML telemetry reports are generated. Does not stop phishing.
   - `p=quarantine`: Moderate enforcement. Unauthorized emails are routed to the recipient's Spam/Junk folder.
   - `p=reject`: Requests receivers to reject messages that fail DMARC policy evaluation. Receiver behavior can vary, and this does not prevent every form of phishing or spoofing.
-* **Q: How is the overall Email Health Score computed?**  
-  *Answer:* The algorithm starts at 100 points, deducting 15 points per ERROR (e.g. missing SPF/DMARC, duplicate records) and 8 points per WARNING (e.g. weak `p=none` policy, SPF lookups approaching 10). The score is clamped between 0 and 100 and mapped to letter grades: A+ (95–100), A (85–94), B (70–84), C (55–69), D (40–54), and F (<40).
+* **Q: How is the DNS and email posture score computed?**
+  *Answer:* The score combines DNS infrastructure (25 points), email authentication (35), DNSSEC (20), and takeover posture (20), then clamps the result to 0–100. Confirmed AXFR exposure caps the score at 39. TLS, MTA-STS, TLS-RPT, and BIMI are shown separately and do not affect it. Inconclusive DNSSEC receives no DNSSEC points and is listed as inconclusive. Grades are A+ (95–100), A (85–94), B (70–84), C (55–69), D (40–54), and F (<40).
 
 ---
 
 ### Category D: Threat Hunting & Cryptography
-* **Q: What is a Subdomain Takeover and how does your scanner detect it?**  
-  *Answer:* A subdomain takeover occurs when a DNS CNAME points to an external cloud service (e.g. `sub.example.com` → `mybucket.s3.amazonaws.com`), but the cloud resource is deleted or unclaimed. Attackers can register that exact resource name on AWS and take full control of `sub.example.com`. Our scanner evaluates CNAME targets against known provider fingerprints (AWS S3, GitHub Pages, Heroku, Shopify, etc.) and tests target resolution to identify dangling endpoints before attackers discover them.
-* **Q: How does DNSSEC protect against DNS Cache Poisoning (Kaminsky attacks)?**  
-  *Answer:* Standard DNS queries travel over unencrypted UDP without authentication, allowing attackers on the network to spoof responses. DNSSEC adds cryptographic signatures (`RRSIG`) generated by a private key. Resolvers verify the signature using the zone's public key (`DNSKEY`), which is anchored by a cryptographic hash (`DS` record) in the parent TLD. If an attacker alters the IP address, the signature validation fails and the poisoned response is rejected.
+* **Q: What is a subdomain takeover and what does this scanner establish?**
+  *Answer:* A risk can arise when a CNAME points to a third-party resource that is no longer controlled by the domain owner and can be claimed by another account. The scanner checks a small heuristic catalog: a matching bounded HTTP fingerprint is marked confirmed by that rule, while DNS-only evidence is a candidate. Neither result proves provider-side claimability; verify with the service owner.
+* **Q: What does the current DNSSEC check validate?**
+  *Answer:* It inspects DNSKEY and DS records and checks whether a DS digest matches a child key. It does not yet validate RRSIGs or walk the complete root-to-domain trust chain, so it is not a full DNSSEC validator.
 
 ---
 
@@ -409,8 +411,8 @@ The main analysis runs the checks below. Common web path checks and active port 
 ---
 
 ### Category F: Reliability & Code Quality
-* **Q: How do you guarantee stability across Python versions?**  
-  *Answer:* The repository includes unit and integration tests runnable under `pytest`; many network-facing code paths use mocks for deterministic checks. `run.sh` can prepare the virtual environment and launch the application.
+* **Q: What supports runtime reliability?**
+  *Answer:* The repository includes unit and integration tests runnable under `pytest`; many network-facing code paths use mocks for deterministic checks. `run.sh` prepares the virtual environment and launches the application. Compatibility still depends on the Python versions and dependency ranges documented by the project.
 
 ---
 

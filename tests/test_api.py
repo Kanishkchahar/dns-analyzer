@@ -1,6 +1,12 @@
 """Integration tests for FastAPI endpoints (app/main.py)."""
 
 from unittest.mock import patch
+import base64
+import dns.dnssec
+import dns.name
+import dns.rdata
+import dns.rdataclass
+import dns.rdatatype
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -20,8 +26,12 @@ def mock_dns_system():
     dmarc_rr = MockRR(strings=[b"v=DMARC1; p=reject; pct=100; rua=mailto:rep@example.com"])
     bimi_rr = MockRR(strings=[b"v=BIMI1; l=https://example.com/logo.svg; a="])
     dkim_rr = MockRR(strings=[b"v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQ"])
-    dnskey_rr = MockRR(flags=257, protocol=3, algorithm=13)
-    ds_rr = MockRR(key_tag=12345, algorithm=13, digest_type=2)
+    dnskey_rr = dns.rdata.from_text(
+        dns.rdataclass.IN,
+        dns.rdatatype.DNSKEY,
+        f"257 3 13 {base64.b64encode(bytes(range(64))).decode()}",
+    )
+    ds_rr = dns.dnssec.make_ds(dns.name.from_text("example.com"), dnskey_rr, "SHA256")
     soa_rr = MockRR(
         mname="ns1.example.com.",
         rname="admin.example.com.",
@@ -110,7 +120,7 @@ class TestAPIEndpoints:
             response = await client.get("/api/badge/example.com")
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("image/svg+xml")
-        assert response.headers["cache-control"] == "public, max-age=3600"
+        assert response.headers["cache-control"] == "public, max-age=60"
         assert "example.com" in response.text
 
     async def test_post_analyze_valid_domain(self, mock_dns_system):
@@ -130,7 +140,8 @@ class TestAPIEndpoints:
         assert "remediation" in data
         assert "bind_zone_snippet" in data
         assert "domain_score" in data
-        assert data["domain_score"]["grade"] in ("A+", "A")
+        assert data["domain_score"]["grade"] in ("A+", "A", "B")
+        assert data["domain_score"]["scope"].startswith("DNS and email posture")
         assert "infrastructure" in data["domain_score"]["factors"]
         assert data["email_auth"]["score"]["grade"] in ("A+", "A")
         assert data["security"]["dnssec"]["status"] in ("secured", "delegation_match_verified")
@@ -217,7 +228,7 @@ class TestAPIEndpoints:
         data = resp.json()
         assert data["status"] == "confirmation_required"
 
-    async def test_post_network_port_scan_wires_auth_token_and_header(self, monkeypatch):
+    async def test_post_network_port_scan_accepts_token_only_in_authorization_header(self, monkeypatch):
         monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
         monkeypatch.setenv("PORT_SCAN_API_KEY", "super-secret-token")
         transport = ASGITransport(app=app)
@@ -227,10 +238,10 @@ class TestAPIEndpoints:
             resp = await client.post("/api/network/port-scan", json={"target": "93.184.216.34", "confirmed": False})
         assert resp.json()["status"] == "unauthorized"
 
-        # 2. With auth_token in json body -> authorized
+        # A token in JSON is ignored and does not authorize active scanning.
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post("/api/network/port-scan", json={"target": "93.184.216.34", "confirmed": False, "auth_token": "super-secret-token"})
-        assert resp.json()["status"] == "confirmation_required"
+        assert resp.json()["status"] == "unauthorized"
 
         # 3. With Authorization: Bearer <token> header -> authorized
         async with AsyncClient(transport=transport, base_url="http://test") as client:

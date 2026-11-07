@@ -16,6 +16,7 @@ import dns.rdatatype
 import dns.resolver
 
 from app.models import Finding
+from app.work_budget import ScanWorkBudget
 
 
 def _public_addresses(values: list[str]) -> list[str]:
@@ -71,9 +72,11 @@ async def check_zone_transfers(
     nameservers: list[str],
     resolver: dns.asyncresolver.Resolver,
     timeout: float = 3.0,
+    work_budget: ScanWorkBudget | None = None,
 ) -> tuple[dict[str, Any], list[Finding]]:
     """Check each listed authority for an unrestricted AXFR; expose counts only."""
     findings: list[Finding] = []
+    budget = work_budget or ScanWorkBudget()
     results: list[dict[str, Any]] = []
     seen_hosts: set[str] = set()
     for raw_host in nameservers:
@@ -88,6 +91,9 @@ async def check_zone_transfers(
         server_result = {"nameserver": host, "status": "refused_or_unavailable", "records_exposed": 0}
         for address in addresses:
             try:
+                if not await budget.reserve_dns():
+                    server_result["status"] = "budget_exhausted"
+                    break
                 count = await _attempt_transfer_record_count(address, zone, timeout)
                 if count > 0:
                     server_result = {"nameserver": host, "status": "transfer_allowed", "records_exposed": count}
@@ -174,8 +180,11 @@ async def _direct_authority_observation(
     address: str,
     zone: str,
     timeout: float,
+    budget: ScanWorkBudget,
 ) -> dict[str, Any]:
     async def query_type(rdtype: str) -> tuple[str, list[Any] | None, str | None]:
+        if not await budget.reserve_dns():
+            return rdtype, None, "budget_exhausted"
         try:
             response = await asyncio.wait_for(
                 asyncio.to_thread(_query_direct, address, zone, rdtype, timeout),
@@ -207,9 +216,11 @@ async def check_nameserver_consistency(
     nameservers: list[str],
     resolver: dns.asyncresolver.Resolver,
     timeout: float = 2.5,
+    work_budget: ScanWorkBudget | None = None,
 ) -> tuple[dict[str, Any], list[Finding]]:
     """Query each authoritative nameserver directly for SOA serial and NS set."""
     findings: list[Finding] = []
+    budget = work_budget or ScanWorkBudget()
     observations: list[dict[str, Any]] = []
     for host in dict.fromkeys(str(item).strip().lower().rstrip(".") for item in nameservers):
         if not host:
@@ -219,7 +230,7 @@ async def check_nameserver_consistency(
             observations.append({"nameserver": host, "status": "unresolved_or_non_public", "errors": {"address": "no_public_address"}})
             continue
         host_observations = await asyncio.gather(*(
-            _direct_authority_observation(host, address, zone, timeout)
+            _direct_authority_observation(host, address, zone, timeout, budget)
             for address in addresses[:2]
         ))
         observations.extend(host_observations)

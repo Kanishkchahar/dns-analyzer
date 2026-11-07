@@ -48,6 +48,7 @@ from app.spf import analyze_spf, count_spf_lookups, flatten_spf, parse_spf
 from app.subdomains import discover_passive_subdomains
 from app.takeover import check_subdomain_takeover
 from app.tls_check import audit_tls_and_https
+from app.work_budget import BudgetedResolver, ScanWorkBudget
 
 logger = logging.getLogger("dns_analyzer")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -66,7 +67,7 @@ _SCAN_CACHE: dict[str, tuple[float, AnalyzeResponse]] = {}
 _SCAN_CACHE_TTL = 60.0
 _PATH_SCAN_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _PATH_SCAN_CACHE_TTL = 900.0
-_CUSTOM_DKIM_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_CUSTOM_DKIM_CACHE: dict[tuple[str, tuple[str, ...]], tuple[float, dict[str, Any]]] = {}
 _BADGE_CACHE: dict[str, tuple[float, bytes]] = {}
 
 # In-memory client rate limiter (60 requests per minute per IP, bounded to 2048 client records)
@@ -119,22 +120,31 @@ def _get_cached_path_scan(domain: str) -> dict[str, Any] | None:
     return result
 
 
-def _store_custom_dkim(domain: str, result: dict[str, Any]) -> None:
-    if len(_CUSTOM_DKIM_CACHE) >= 128 and domain not in _CUSTOM_DKIM_CACHE:
+def _store_custom_dkim(domain: str, selectors: list[str], result: dict[str, Any]) -> None:
+    key = (domain, tuple(sorted(set(selectors))))
+    if len(_CUSTOM_DKIM_CACHE) >= 128 and key not in _CUSTOM_DKIM_CACHE:
         oldest = min(_CUSTOM_DKIM_CACHE, key=lambda key: _CUSTOM_DKIM_CACHE[key][0])
         del _CUSTOM_DKIM_CACHE[oldest]
-    _CUSTOM_DKIM_CACHE[domain] = (asyncio.get_running_loop().time(), result)
+    _CUSTOM_DKIM_CACHE[key] = (asyncio.get_running_loop().time(), result)
 
 
 def _get_cached_custom_dkim(domain: str) -> dict[str, Any] | None:
-    cached = _CUSTOM_DKIM_CACHE.get(domain)
-    if not cached:
-        return None
-    cached_time, result = cached
-    if asyncio.get_running_loop().time() - cached_time >= _PATH_SCAN_CACHE_TTL:
-        del _CUSTOM_DKIM_CACHE[domain]
-        return None
-    return result
+    now = asyncio.get_running_loop().time()
+    merged: dict[str, Any] | None = None
+    found: dict[str, dict[str, Any]] = {}
+    for key, (cached_time, result) in list(_CUSTOM_DKIM_CACHE.items()):
+        if now - cached_time >= _PATH_SCAN_CACHE_TTL:
+            del _CUSTOM_DKIM_CACHE[key]
+            continue
+        if key[0] != domain:
+            continue
+        merged = result if merged is None else {**merged, **result}
+        for item in result.get("selectors_found", []):
+            found[item.get("selector", "")] = item
+    if merged is not None:
+        merged["selectors_found"] = list(found.values())
+        merged["has_dkim"] = bool(found)
+    return merged
 
 
 def _extract_client_ip(request: Request) -> str:
@@ -162,13 +172,16 @@ def _enforce_rate_limit(request: Request) -> None:
     cutoff = now - _RATE_WINDOW
 
     # Bounded cache cleanup: purge stale IP records if table exceeds limit
-    if len(_CLIENT_REQUESTS) > _MAX_TRACKED_IPS:
+    if len(_CLIENT_REQUESTS) >= _MAX_TRACKED_IPS and client_ip not in _CLIENT_REQUESTS:
         stale_keys = [ip for ip, timestamps in _CLIENT_REQUESTS.items() if not timestamps or timestamps[-1] <= cutoff]
         for ip in stale_keys:
             del _CLIENT_REQUESTS[ip]
         if len(_CLIENT_REQUESTS) > _MAX_TRACKED_IPS:
-            for ip in list(_CLIENT_REQUESTS.keys())[:512]:
-                del _CLIENT_REQUESTS[ip]
+            oldest_ip = min(_CLIENT_REQUESTS, key=lambda ip: _CLIENT_REQUESTS[ip][-1] if _CLIENT_REQUESTS[ip] else 0)
+            del _CLIENT_REQUESTS[oldest_ip]
+        if len(_CLIENT_REQUESTS) >= _MAX_TRACKED_IPS:
+            oldest_ip = min(_CLIENT_REQUESTS, key=lambda ip: _CLIENT_REQUESTS[ip][-1] if _CLIENT_REQUESTS[ip] else 0)
+            del _CLIENT_REQUESTS[oldest_ip]
 
     reqs = _CLIENT_REQUESTS.setdefault(client_ip, [])
     _CLIENT_REQUESTS[client_ip] = [t for t in reqs if t > cutoff]
@@ -280,14 +293,14 @@ async def _isolated_pair_check(name: str, awaitable: Any, fallback_data: Any) ->
 
 async def run_full_scan(domain: str) -> AnalyzeResponse:
     """Execute end-to-end DNS, security, and email authentication audit for a domain."""
-    records = await resolve_domain(domain)
+    import dns.asyncresolver
+    work_budget = ScanWorkBudget(dns_queries=500, http_requests=25)
+    resolver = BudgetedResolver(dns.asyncresolver.Resolver(), work_budget)
+    records = await resolve_domain(domain, resolver=resolver)
     findings = analyze(domain, records)
 
     zone_meta = records.get("zone_metadata", {})
     zone_apex = zone_meta.get("zone_apex", domain)
-
-    import dns.asyncresolver
-    resolver = dns.asyncresolver.Resolver()
     ns_records = records.get("NS", {}).get("records", [])
     ns_hosts = [item.get("host") if isinstance(item, dict) else str(item) for item in ns_records]
 
@@ -339,13 +352,13 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         _isolated_data_check("DMARC", fetch_dmarc(domain, resolver, apex=zone_apex), {"status": "inconclusive", "policy": None, "reason": "DMARC lookup failed."}),
         _isolated_data_check("DKIM", check_dkim_selectors(domain, resolver), {"status": "inconclusive", "selectors_found": [], "selectors_checked": [], "has_dkim": False}),
         _isolated_pair_check("DNSSEC", check_dnssec(domain, resolver, apex=zone_apex), {"status": "inconclusive", "enabled": False, "delegation_verified": False, "reason": "DNSSEC queries failed."}),
-        _isolated_pair_check("TAKEOVER", check_subdomain_takeover(domain, records, resolver), {"scanned": False, "vulnerable": False, "status": "could_not_verify", "details": "Takeover check did not complete."}),
-        _isolated_pair_check("TLS", audit_tls_and_https(domain), {"scanned": False, "status": "error", "reason": "TLS audit did not complete."}),
-        _isolated_pair_check("SUBDOMAINS", discover_passive_subdomains(zone_apex, resolver), {"domain": zone_apex, "source": "Certificate Transparency (crt.sh)", "status": "unavailable", "reason": "Subdomain inventory did not complete.", "discovered_count": 0, "subdomains": []}),
-        _isolated_pair_check("MAIL TRANSPORT", check_mail_transport(domain, resolver), {"mta_sts": {"status": "inconclusive", "reason": "Check did not complete."}, "tls_rpt": {"status": "inconclusive", "reason": "Check did not complete."}}),
-        _isolated_pair_check("AXFR", check_zone_transfers(zone_apex, ns_hosts, resolver), {"zone": zone_apex, "status": "inconclusive", "nameservers_checked": 0, "servers": []}),
+        _isolated_pair_check("TAKEOVER", check_subdomain_takeover(domain, records, resolver, budget=work_budget), {"scanned": False, "vulnerable": False, "status": "could_not_verify", "details": "Takeover check did not complete."}),
+        _isolated_pair_check("TLS", audit_tls_and_https(domain, resolver=resolver, work_budget=work_budget), {"scanned": False, "status": "error", "reason": "TLS audit did not complete."}),
+        _isolated_pair_check("SUBDOMAINS", discover_passive_subdomains(zone_apex, resolver, work_budget=work_budget), {"domain": zone_apex, "source": "Certificate Transparency (crt.sh)", "status": "unavailable", "reason": "Subdomain inventory did not complete.", "discovered_count": 0, "subdomains": []}),
+        _isolated_pair_check("MAIL TRANSPORT", check_mail_transport(domain, resolver, work_budget=work_budget), {"mta_sts": {"status": "inconclusive", "reason": "Check did not complete."}, "tls_rpt": {"status": "inconclusive", "reason": "Check did not complete."}}),
+        _isolated_pair_check("AXFR", check_zone_transfers(zone_apex, ns_hosts, resolver, work_budget=work_budget), {"zone": zone_apex, "status": "inconclusive", "nameservers_checked": 0, "servers": []}),
         _isolated_pair_check("WILDCARD DNS", check_wildcard_dns(zone_apex, resolver), {"status": "inconclusive", "addresses": [], "records": {"A": [], "AAAA": []}}),
-        _isolated_pair_check("NS CONSISTENCY", check_nameserver_consistency(zone_apex, ns_hosts, resolver), {"status": "inconclusive", "observations": [], "serials_match": None, "ns_sets_match": None}),
+        _isolated_pair_check("NS CONSISTENCY", check_nameserver_consistency(zone_apex, ns_hosts, resolver, work_budget=work_budget), {"status": "inconclusive", "observations": [], "serials_match": None, "ns_sets_match": None}),
     )
     wildcard_ips = set(wildcard_data.get("addresses", []))
     if wildcard_data.get("status") == "detected" and sub_data.get("subdomains"):
@@ -380,6 +393,7 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         dnssec_data=dnssec_data,
         takeover_data=takeover_data,
         tls_data=tls_data,
+        dns_posture_data={"axfr": axfr_data},
     )
 
     email_auth = EmailAuth(
@@ -525,7 +539,7 @@ async def api_dkim_selector_check(req: DkimSelectorRequest, request: Request) ->
             check_dkim_selectors(req.domain, resolver, custom_selectors=req.selectors),
             timeout=12.0,
         )
-        _store_custom_dkim(req.domain, result)
+        _store_custom_dkim(req.domain, req.selectors, result)
         return result
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=504, detail="DKIM selector checks timed out.") from exc
@@ -542,7 +556,6 @@ async def api_network_port_scan(req: PortScanRequest, request: Request) -> dict[
         req.target,
         ports=req.ports,
         confirmed=req.confirmed,
-        auth_token=req.auth_token,
         auth_header=auth_header,
     )
 
@@ -580,12 +593,13 @@ async def api_grade_badge(domain: str, request: Request) -> Response:
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     now = asyncio.get_running_loop().time()
-    cached_badge = _BADGE_CACHE.get(req.domain)
-    if cached_badge and now - cached_badge[0] < 3600:
-        return Response(cached_badge[1], media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=3600"})
     scan = _get_cached_scan(req.domain)
     if not scan or not scan.domain_score:
+        _BADGE_CACHE.pop(req.domain, None)
         raise HTTPException(status_code=404, detail="No recent scan is available for this domain. Run an analysis first.")
+    cached_badge = _BADGE_CACHE.get(req.domain)
+    if cached_badge and now - cached_badge[0] < _SCAN_CACHE_TTL:
+        return Response(cached_badge[1], media_type="image/svg+xml", headers={"Cache-Control": f"public, max-age={int(_SCAN_CACHE_TTL)}"})
     grade = scan.domain_score.grade
     color = "#63b995" if grade.startswith("A") else "#e0a458" if grade in ("B", "C") else "#e36d6d"
     label = f"{req.domain} · {grade} · {scan.domain_score.score}/100"
@@ -603,7 +617,7 @@ async def api_grade_badge(domain: str, request: Request) -> Response:
     if len(_BADGE_CACHE) >= 256 and req.domain not in _BADGE_CACHE:
         del _BADGE_CACHE[min(_BADGE_CACHE, key=lambda key: _BADGE_CACHE[key][0])]
     _BADGE_CACHE[req.domain] = (now, svg)
-    return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=3600"})
+    return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": f"public, max-age={int(_SCAN_CACHE_TTL)}"})
 
 
 @app.get("/api/report/{domain}", response_class=HTMLResponse)

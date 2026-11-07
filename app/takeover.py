@@ -1,239 +1,221 @@
-"""Subdomain Takeover & Dangling CNAME Vulnerability Scanner.
+"""Bounded CNAME takeover fingerprint checks with explicit evidence levels."""
 
-Detects dangling CNAME and MX records pointing to decommissioned or unclaimed
-cloud service endpoints (e.g., GitHub Pages, AWS S3, Heroku, Shopify, Zendesk,
-Surge, Ghost, Azure, Vercel).
-"""
+from __future__ import annotations
 
+import asyncio
+import ipaddress
+import json
+import logging
+from pathlib import Path
 from typing import Any
+
 import dns.asyncresolver
 import dns.exception
-from app.models import Finding
+import dns.resolver
+import httpx
 
-# Signatures of cloud services known to be susceptible to takeover when dangling
-TAKEOVER_SIGNATURES: list[dict[str, str]] = [
-    {
-        "provider": "GitHub Pages",
-        "cname_pattern": "github.io",
-        "fingerprint": "There isn't a GitHub Pages site here",
-        "remediation": "Claim the repository on GitHub Pages or remove the dangling CNAME."
-    },
-    {
-        "provider": "Amazon S3",
-        "cname_pattern": "s3.amazonaws.com",
-        "fingerprint": "The specified bucket does not exist",
-        "remediation": "Create the corresponding S3 bucket or remove the dangling CNAME."
-    },
-    {
-        "provider": "Amazon S3 Website",
-        "cname_pattern": "s3-website",
-        "fingerprint": "404 Not Found",
-        "remediation": "Recreate the S3 website endpoint or delete the CNAME record."
-    },
-    {
-        "provider": "Heroku",
-        "cname_pattern": "herokuapp.com",
-        "fingerprint": "No such app",
-        "remediation": "Claim the Heroku app name or remove the CNAME record."
-    },
-    {
-        "provider": "Shopify",
-        "cname_pattern": "myshopify.com",
-        "fingerprint": "Sorry, this shop is currently unavailable",
-        "remediation": "Claim the custom domain inside Shopify Admin or remove the CNAME."
-    },
-    {
-        "provider": "Zendesk",
-        "cname_pattern": "zendesk.com",
-        "fingerprint": "Help Center Closed",
-        "remediation": "Claim the Zendesk host or remove the CNAME alias."
-    },
-    {
-        "provider": "Ghost",
-        "cname_pattern": "ghost.io",
-        "fingerprint": "The thing you were looking for is no longer here",
-        "remediation": "Re-associate with Ghost(Pro) or remove the CNAME."
-    },
-    {
-        "provider": "Surge.sh",
-        "cname_pattern": "surge.sh",
-        "fingerprint": "project not found",
-        "remediation": "Deploy an authorized project to Surge or remove the CNAME."
-    },
-    {
-        "provider": "Vercel",
-        "cname_pattern": "vercel-dns.com",
-        "fingerprint": "404: NOT_FOUND",
-        "remediation": "Verify project ownership in Vercel or point CNAME to an active app."
-    },
-    {
-        "provider": "Microsoft Azure",
-        "cname_pattern": "azurewebsites.net",
-        "fingerprint": "404 Web Site not found",
-        "remediation": "Claim the App Service name on Azure or remove the CNAME record."
-    },
-]
+from app.models import Finding
+from app.tls_check import PinnedIPTransport
+from app.work_budget import ScanWorkBudget
+
+logger = logging.getLogger(__name__)
+MAX_FINGERPRINT_BODY = 16 * 1024
+TAKEOVER_DATA_PATH = Path(__file__).resolve().parent / "data" / "takeover_fingerprints.json"
+with TAKEOVER_DATA_PATH.open(encoding="utf-8") as stream:
+    _TAKEOVER_DATA = json.load(stream)
+TAKEOVER_SIGNATURES: list[dict[str, Any]] = _TAKEOVER_DATA["services"]
+
+
+def _match_provider(cname_target: str) -> dict[str, Any] | None:
+    target = cname_target.lower().rstrip(".")
+    for service in TAKEOVER_SIGNATURES:
+        suffix_match = any(target == suffix or target.endswith("." + suffix) for suffix in service.get("cname_suffixes", []))
+        contains_match = any(pattern in target for pattern in service.get("cname_contains", []))
+        if suffix_match or contains_match:
+            return service
+    return None
+
+
+async def _resolve_target_addresses(
+    target: str,
+    resolver: dns.asyncresolver.Resolver,
+) -> tuple[list[str], str]:
+    addresses: list[str] = []
+    states: list[str] = []
+    for rdtype in ("A", "AAAA"):
+        try:
+            answer = await resolver.resolve(target, rdtype)
+            addresses.extend(str(record.address) for record in answer if hasattr(record, "address"))
+            states.append("resolving")
+        except dns.resolver.NXDOMAIN:
+            states.append("nxdomain")
+        except dns.resolver.NoAnswer:
+            states.append("no_answer")
+        except dns.exception.Timeout:
+            states.append("timeout")
+        except dns.resolver.NoNameservers:
+            states.append("resolver_error")
+        except Exception:
+            states.append("resolver_error")
+    unique = list(dict.fromkeys(addresses))
+    if not unique:
+        if "timeout" in states:
+            return [], "timeout"
+        if "resolver_error" in states:
+            return [], "resolver_error"
+        if "nxdomain" in states:
+            return [], "nxdomain"
+        return [], "no_answer"
+    for address in unique:
+        try:
+            if not ipaddress.ip_address(address).is_global:
+                return [], "unsafe_address"
+        except ValueError:
+            return [], "unsafe_address"
+    return unique, "resolving"
+
+
+async def _read_fingerprint_page(
+    host: str,
+    addresses: list[str],
+    expected: str,
+    budget: ScanWorkBudget,
+) -> tuple[bool, str]:
+    """Read a tiny HTTPS response over a validated, pinned public IP; never follow redirects."""
+    for address in addresses[:2]:
+        if not await budget.reserve_http():
+            return False, "budget_exhausted"
+        try:
+            transport = PinnedIPTransport(address, verify=True)
+            async with httpx.AsyncClient(transport=transport, timeout=2.0, follow_redirects=False) as client:
+                async with client.stream("GET", f"https://{host}/") as response:
+                    body = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        body.extend(chunk[: max(0, MAX_FINGERPRINT_BODY - len(body))])
+                        if len(body) >= MAX_FINGERPRINT_BODY:
+                            break
+                    page = bytes(body).decode("utf-8", errors="replace")
+                    return expected.casefold() in page.casefold(), "page_checked"
+        except Exception as exc:
+            logger.info("Takeover fingerprint fetch failed for provider host (%s)", type(exc).__name__)
+    return False, "fetch_failed"
+
+
+def _candidate_result(
+    domain: str,
+    target: str,
+    provider: dict[str, Any] | None,
+    evidence: str,
+    reason: str,
+) -> tuple[dict[str, Any], list[Finding]]:
+    service_name = provider["provider"] if provider else "Custom / Unknown"
+    remediation = provider["remediation"] if provider else "Remove the obsolete CNAME or point it to an active, owned endpoint."
+    message = (
+        f"Potential dangling CNAME on `{domain}` points to `{target}` ({service_name}); "
+        f"available evidence: {evidence}. Confirm resource ownership with the provider. {remediation}"
+    )
+    finding = Finding(severity="warning", record_type="TAKEOVER", message=message)
+    return {
+        "scanned": True,
+        "has_cname": True,
+        "cname_target": target,
+        "provider": service_name,
+        "vulnerable": False,
+        "status": "candidate",
+        "evidence_state": evidence,
+        "details": reason,
+        "remediation": remediation,
+        "last_verified": provider.get("last_verified") if provider else None,
+    }, [finding]
 
 
 async def check_subdomain_takeover(
     domain: str,
     records: dict[str, Any],
     resolver: dns.asyncresolver.Resolver,
+    budget: ScanWorkBudget | None = None,
 ) -> tuple[dict[str, Any], list[Finding]]:
-    """Scan the domain's CNAME record for dangling pointers and takeover vulnerabilities."""
-    findings: list[Finding] = []
+    """Confirm only an exact service fingerprint; DNS-only evidence remains a candidate."""
     cname_entry = records.get("CNAME", {})
-    cname_target = None
+    raw_records = cname_entry.get("records", []) if cname_entry.get("status") == "ok" else []
+    target = str(raw_records[0]).rstrip(".") if isinstance(raw_records, list) and raw_records else str(raw_records).rstrip(".") if isinstance(raw_records, str) else ""
+    if not target:
+        return {"scanned": True, "has_cname": False, "vulnerable": False, "status": "safe", "details": "No CNAME record at this hostname."}, []
 
-    if cname_entry.get("status") == "ok":
-        rec = cname_entry.get("records")
-        if isinstance(rec, list) and rec:
-            cname_target = str(rec[0]).rstrip(".")
-        elif isinstance(rec, str):
-            cname_target = rec.rstrip(".")
-
-    if not cname_target:
-        return {
-            "scanned": True,
-            "has_cname": False,
-            "vulnerable": False,
-            "status": "safe",
-            "message": "No CNAME record present at this node. Not directly susceptible to CNAME takeover.",
-        }, findings
-
-    # Check if target matches any known cloud provider
-    matched_provider = None
-    for sig in TAKEOVER_SIGNATURES:
-        if sig["cname_pattern"] in cname_target.lower():
-            matched_provider = sig
-            break
-
-    # Resolve target's A records with explicit state disambiguation (Item 8 & 9)
-    # Require verified NXDOMAIN evidence before flagging as dangling/vulnerable
-    evidence_state = "unknown"
-    target_resolves = False
-    resolution_error_detail = None
-
-    try:
-        ans = await resolver.resolve(cname_target, "A")
-        if len(ans) > 0:
-            target_resolves = True
-            evidence_state = "resolving"
-    except dns.resolver.NXDOMAIN:
-        target_resolves = False
-        evidence_state = "nxdomain"
-    except dns.resolver.NoAnswer:
-        target_resolves = False
-        evidence_state = "no_answer"
-    except dns.exception.Timeout as exc:
-        target_resolves = False
-        evidence_state = "timeout"
-        resolution_error_detail = f"Query timed out resolving CNAME target '{cname_target}': {exc}"
-    except dns.resolver.NoNameservers as exc:
-        target_resolves = False
-        evidence_state = "resolver_error"
-        resolution_error_detail = f"No nameservers reached for CNAME target '{cname_target}': {exc}"
-    except Exception as exc:
-        target_resolves = False
-        evidence_state = "resolver_error"
-        resolution_error_detail = f"Resolver error: {exc}"
-
-    scanner_disclaimer = (
-        "Takeover scanner audits 10 standard cloud provider signatures (AWS S3, GitHub Pages, Heroku, etc.). "
-        "Private endpoints and unmapped third-party providers are not covered by automated signature matching."
-    )
-
-    # If resolver timed out or suffered an error, do NOT report as vulnerable (Item 9)
-    if evidence_state in ("timeout", "resolver_error"):
-        findings.append(Finding(
-            severity="info",
-            record_type="TAKEOVER",
-            message=f"Could not verify takeover status for CNAME '{cname_target}': {resolution_error_detail}. Status left as unverified.",
-        ))
-        return {
-            "scanned": True,
-            "has_cname": True,
-            "cname_target": cname_target,
-            "provider": matched_provider["provider"] if matched_provider else "Custom",
-            "vulnerable": False,
-            "status": "could_not_verify",
-            "evidence_state": evidence_state,
-            "details": f"Target resolution inconclusive ({evidence_state}). Takeover check could not be conclusively verified.",
-            "disclaimer": scanner_disclaimer,
-        }, findings
-
-    # If unresolvable with verified NXDOMAIN or NoAnswer
-    if not target_resolves:
-        if matched_provider:
-            prov_name = matched_provider["provider"]
-            remedy = matched_provider["remediation"]
-            findings.append(Finding(
-                severity="error",
-                record_type="TAKEOVER",
-                message=f"CRITICAL: Dangling CNAME alias pointing to unresolvable host '{cname_target}' ({prov_name}) [Evidence: {evidence_state.upper()}]. "
-                        f"Attackers can claim the destination endpoint and hijack your subdomain! {remedy}"
-            ))
+    work_budget = budget or ScanWorkBudget()
+    provider = _match_provider(target)
+    addresses, evidence_state = await _resolve_target_addresses(target, resolver)
+    if not addresses:
+        if evidence_state in ("timeout", "resolver_error", "unsafe_address"):
+            logger.info("Takeover DNS lookup inconclusive for %s (%s)", target, evidence_state)
             return {
                 "scanned": True,
                 "has_cname": True,
-                "cname_target": cname_target,
-                "provider": prov_name,
-                "vulnerable": True,
-                "status": "critical_vulnerability",
-                "evidence_state": evidence_state,
-                "details": f"CNAME points to '{cname_target}' on {prov_name}, which confirmed {evidence_state.upper()}. Vulnerable to takeover.",
-                "remediation": remedy,
-                "disclaimer": scanner_disclaimer,
-            }, findings
-        else:
-            remedy = "Delete this obsolete CNAME record or point it to an active destination host."
-            findings.append(Finding(
-                severity="warning",
-                record_type="TAKEOVER",
-                message=f"Dangling CNAME alias: points to '{cname_target}', which returned {evidence_state.upper()}. "
-                        f"This broken alias causes resolution failures; remove or point it to an active host."
-            ))
-            return {
-                "scanned": True,
-                "has_cname": True,
-                "cname_target": cname_target,
-                "provider": "Custom / Unknown",
+                "cname_target": target,
+                "provider": provider["provider"] if provider else "Custom / Unknown",
                 "vulnerable": False,
-                "status": "dangling_alias",
+                "status": "could_not_verify",
                 "evidence_state": evidence_state,
-                "details": f"CNAME points to '{cname_target}', which returned {evidence_state.upper()} (suspicious dangling alias).",
-                "remediation": remedy,
-                "disclaimer": scanner_disclaimer,
-            }, findings
+                "details": "The target could not be safely resolved for this check.",
+                "last_verified": provider.get("last_verified") if provider else None,
+            }, [Finding(severity="info", record_type="TAKEOVER", message=f"Takeover status for `{domain}` could not be verified; DNS lookup was inconclusive.")]
+        return _candidate_result(domain, target, provider, evidence_state.upper(), "The target hostname did not resolve; DNS failure alone does not prove claimability.")
 
-    # If it resolves but points to a known cloud provider
-    if matched_provider:
-        findings.append(Finding(
-            severity="info",
-            record_type="TAKEOVER",
-            message=f"CNAME alias points to active cloud provider '{matched_provider['provider']}' ({cname_target}). "
-                    f"Ensure this cloud resource is actively registered in your organization's account."
-        ))
+    if provider and provider.get("method") == "http_fingerprint" and provider.get("fingerprint"):
+        matched, page_state = await _read_fingerprint_page(target, addresses, provider["fingerprint"], work_budget)
+        if matched:
+            message = (
+                f"Confirmed takeover fingerprint for `{domain}` on {provider['provider']}: "
+                f"the bounded HTTPS response matched the stored service fingerprint. {provider['remediation']}"
+            )
+            return {
+                "scanned": True,
+                "has_cname": True,
+                "cname_target": target,
+                "provider": provider["provider"],
+                "vulnerable": True,
+                "status": "confirmed_vulnerability",
+                "evidence_state": "http_fingerprint",
+                "fingerprint_matched": True,
+                "last_verified": provider.get("last_verified"),
+                "remediation": provider["remediation"],
+            }, [Finding(severity="error", record_type="TAKEOVER", message=message)]
+        if page_state == "budget_exhausted":
+            return _candidate_result(domain, target, provider, "HTTP_CHECK_BUDGET_EXHAUSTED", "The target resolves, but the scan's outbound-request budget was exhausted.")
         return {
             "scanned": True,
             "has_cname": True,
-            "cname_target": cname_target,
-            "provider": matched_provider["provider"],
+            "cname_target": target,
+            "provider": provider["provider"],
             "vulnerable": False,
             "status": "cloud_hosted",
-            "evidence_state": evidence_state,
-            "details": f"Points to active {matched_provider['provider']} endpoint.",
-            "disclaimer": scanner_disclaimer,
-        }, findings
+            "evidence_state": page_state,
+            "fingerprint_matched": False,
+            "last_verified": provider.get("last_verified"),
+            "details": "No stored unclaimed-service fingerprint was observed in the bounded HTTPS response.",
+        }, []
+
+    if provider and provider.get("method") == "dns_nxdomain":
+        return {
+            "scanned": True,
+            "has_cname": True,
+            "cname_target": target,
+            "provider": provider["provider"],
+            "vulnerable": False,
+            "status": "cloud_hosted",
+            "evidence_state": "resolving",
+            "last_verified": provider.get("last_verified"),
+            "details": "The provider target resolves; no dangling DNS evidence was observed.",
+        }, []
 
     return {
         "scanned": True,
         "has_cname": True,
-        "cname_target": cname_target,
-        "provider": "Custom",
+        "cname_target": target,
+        "provider": provider["provider"] if provider else "Custom",
         "vulnerable": False,
-        "status": "safe",
-        "evidence_state": evidence_state,
-        "details": f"Points to active host '{cname_target}'.",
-        "disclaimer": scanner_disclaimer,
-    }, findings
+        "status": "cloud_hosted" if provider else "safe",
+        "evidence_state": "resolving",
+        "last_verified": provider.get("last_verified") if provider else None,
+        "details": "The CNAME target resolves; no matching takeover fingerprint was confirmed.",
+    }, []

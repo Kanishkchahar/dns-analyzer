@@ -58,6 +58,12 @@ class TestResolverLayer:
         assert res["status"] == "timeout"
         assert res["records"] == []
 
+    async def test_safe_query_hides_resolver_exception_details(self):
+        resolver = MockResolver({("example.com", "A"): RuntimeError("nameserver 10.0.0.7 refused")})
+        res = await _safe_query(resolver, "example.com", "A")
+        assert res["reason"] == "DNS lookup failed"
+        assert "10.0.0.7" not in str(res)
+
     async def test_resolve_host_to_a(self):
         answer = MockAnswer([MockRR(address="1.1.1.1")])
         resolver = MockResolver({("ns1.example.com", "A"): answer})

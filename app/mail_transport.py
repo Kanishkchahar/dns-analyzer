@@ -10,6 +10,7 @@ import httpx
 
 from app.models import Finding
 from app.tls_check import PinnedIPTransport, resolve_and_verify_all_ips
+from app.work_budget import ScanWorkBudget
 
 
 async def _query_txt(resolver: dns.asyncresolver.Resolver, name: str) -> tuple[list[str], str | None]:
@@ -45,9 +46,11 @@ async def check_mail_transport(
     domain: str,
     resolver: dns.asyncresolver.Resolver,
     timeout: float = 3.0,
+    work_budget: ScanWorkBudget | None = None,
 ) -> tuple[dict[str, Any], list[Finding]]:
     """Check MTA-STS DNS/policy and TLS-RPT DNS records, without sending email."""
     findings: list[Finding] = []
+    budget = work_budget or ScanWorkBudget()
     sts_name = f"_mta-sts.{domain}"
     rpt_name = f"_smtp._tls.{domain}"
     (sts_records, sts_error), (rpt_records, rpt_error) = await asyncio.gather(
@@ -63,15 +66,18 @@ async def check_mail_transport(
             if separator:
                 tags[key.strip().lower()] = value.strip()
         sts_data.update({"status": "configured", "id": tags.get("id"), "version": tags.get("v")})
-        safe_all, ips, reason = await resolve_and_verify_all_ips(f"mta-sts.{domain}", port=443)
+        safe_all, ips, reason = await resolve_and_verify_all_ips(f"mta-sts.{domain}", port=443, resolver=resolver)
         if not safe_all or not ips:
-            sts_data.update({"policy_status": "blocked", "policy_reason": reason})
+            sts_data.update({"policy_status": "blocked", "policy_reason": "Policy host could not be safely resolved."})
         else:
             policy_errors: list[str] = []
             policy_body = None
             policy_status_code = None
             for address in ips:
                 try:
+                    if not await budget.reserve_http():
+                        policy_errors.append("request_budget_exhausted")
+                        break
                     transport = PinnedIPTransport(address, verify=True)
                     async with httpx.AsyncClient(transport=transport, timeout=timeout, follow_redirects=False) as client:
                         async with client.stream("GET", f"https://mta-sts.{domain}/.well-known/mta-sts.txt") as response:
@@ -91,7 +97,7 @@ async def check_mail_transport(
                 valid = parsed.get("version") == "STSv1" and parsed.get("mode") in ("testing", "enforce", "none") and isinstance(parsed.get("max_age"), int) and parsed["max_age"] >= 0
                 sts_data.update({"policy_status": "valid" if valid else "invalid", "policy_http_status": policy_status_code, "policy": parsed, "policy_reason": None if valid else "Policy file is missing required or valid fields."})
             else:
-                sts_data.update({"policy_status": "unavailable", "policy_http_status": policy_status_code, "policy_reason": f"Policy file could not be retrieved ({', '.join(policy_errors) or f'HTTP {policy_status_code}'})."})
+                sts_data.update({"policy_status": "unavailable", "policy_http_status": policy_status_code, "policy_reason": "Policy file could not be retrieved within the request budget or timed out."})
 
     rpt_txt = next((item for item in rpt_records if item.strip().lower().startswith("v=tlsrptv1")), None)
     rpt_data: dict[str, Any] = {"status": "inconclusive" if rpt_error else "not_configured", "dns_name": rpt_name, "record": rpt_txt, "reporting_uris": [], "reason": f"DNS lookup failed ({rpt_error})." if rpt_error else None}

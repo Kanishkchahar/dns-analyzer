@@ -11,7 +11,8 @@ import re
 import socket
 from typing import Any
 from urllib.parse import urljoin, urlparse
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
+from defusedxml.common import DefusedXmlException
 import dns.asyncresolver
 import httpx
 
@@ -101,7 +102,7 @@ def _parse_robots(body: bytes, target_host: str) -> list[dict[str, str]]:
 def _parse_sitemap(body: bytes, target_host: str) -> list[dict[str, str]]:
     try:
         root = ET.fromstring(body)
-    except (ET.ParseError, ValueError):
+    except (ET.ParseError, ValueError, DefusedXmlException):
         return []
     found: dict[str, str] = {}
     for element in root.iter():
@@ -131,7 +132,6 @@ def is_active_scan_allowed() -> bool:
 
 
 def verify_port_scan_authorization(
-    auth_token: str | None = None,
     auth_header: str | None = None,
     target: str = "",
 ) -> tuple[bool, str]:
@@ -149,8 +149,8 @@ def verify_port_scan_authorization(
         )
 
     if expected_key:
-        provided = (auth_token or "").strip()
-        if not provided and auth_header:
+        provided = ""
+        if auth_header:
             if auth_header.lower().startswith("bearer "):
                 provided = auth_header[7:].strip()
             else:
@@ -388,7 +388,6 @@ async def run_port_scan(
     ports: list[int] | None = None,
     confirmed: bool = False,
     timeout: float = 1.5,
-    auth_token: str | None = None,
     auth_header: str | None = None,
 ) -> dict[str, Any]:
     """Execute scoped, opt-in port and service verification on approved target."""
@@ -398,7 +397,7 @@ async def run_port_scan(
             "message": "Active port scanning is disabled by server deployment policy. Enable server-side authorization via ENABLE_ACTIVE_PORT_SCAN=true.",
         }
 
-    auth_ok, auth_msg = verify_port_scan_authorization(auth_token, auth_header, target)
+    auth_ok, auth_msg = verify_port_scan_authorization(auth_header, target)
     if not auth_ok:
         return {"status": "unauthorized", "message": auth_msg}
 

@@ -1,10 +1,21 @@
 """Tests for Native TLS & HTTPS Security Auditor (app/tls_check.py)."""
 
 import pytest
-from app.tls_check import is_safe_ip, match_san_hostname, audit_tls_and_https, resolve_and_verify_all_ips
+from app.tls_check import PinnedIPBackend, PinnedIPTransport, is_safe_ip, match_san_hostname, audit_tls_and_https, resolve_and_verify_all_ips
 
 
 class TestTLSUtilities:
+    def test_http_transport_versions_and_pinned_backend_are_explicit(self):
+        import httpcore
+        import httpx
+
+        assert httpx.__version__ == "0.28.1"
+        assert httpcore.__version__ == "1.0.9"
+        transport = PinnedIPTransport("1.1.1.1", verify=True)
+        backend = transport._pool._network_backend
+        assert isinstance(backend, PinnedIPBackend)
+        assert backend.target_ip == "1.1.1.1"
+
     async def test_resolve_and_verify_all_ips_blocks_loopback(self):
         safe, ips, reason = await resolve_and_verify_all_ips("127.0.0.1", 80)
         assert safe is False

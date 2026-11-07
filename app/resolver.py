@@ -1,11 +1,14 @@
 """Async DNS resolution layer using dnspython."""
 
 import asyncio
+import logging
 from typing import Any
 
 import dns.asyncresolver
 import dns.exception
 import dns.rdatatype
+
+logger = logging.getLogger(__name__)
 
 
 async def _safe_query(resolver: dns.asyncresolver.Resolver, domain: str, rtype: str) -> dict[str, Any]:
@@ -62,7 +65,8 @@ async def _safe_query(resolver: dns.asyncresolver.Resolver, domain: str, rtype: 
     except dns.exception.Timeout:
         return {"status": "timeout", "records": [], "ttl": 0, "reason": "Query timed out"}
     except Exception as exc:
-        return {"status": "error", "records": [], "ttl": 0, "error": str(exc)}
+        logger.warning("DNS %s query failed for requested name (%s)", rtype, type(exc).__name__)
+        return {"status": "error", "records": [], "ttl": 0, "reason": "DNS lookup failed"}
 
 
 
@@ -102,13 +106,13 @@ async def discover_zone_apex(domain: str, resolver: dns.asyncresolver.Resolver) 
     return norm
 
 
-async def resolve_domain(domain: str) -> dict[str, Any]:
+async def resolve_domain(domain: str, resolver: dns.asyncresolver.Resolver | None = None) -> dict[str, Any]:
     """
     Query all required record types concurrently and return a structured dict.
     Discovers authoritative zone apex for subdomains to prevent false missing-NS/SOA alerts.
     Also performs secondary A-record lookups for each NS and MX host.
     """
-    resolver = dns.asyncresolver.Resolver()
+    resolver = resolver or dns.asyncresolver.Resolver()
     resolver.timeout = 3.0
     resolver.lifetime = 6.0
     record_types = ["A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA", "CAA"]

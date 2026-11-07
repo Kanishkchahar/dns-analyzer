@@ -1423,7 +1423,7 @@ function renderEmailAuth(emailAuth, domain) {
     scoreGrade.textContent = sc.grade;
     scoreNum.textContent = `${sc.score}/100`;
     scoreLabel.textContent = `Email Health: ${sc.label}`;
-    scoreDesc.textContent = `Based on SPF, DMARC, and DKIM analysis for ${domain}`;
+    scoreDesc.textContent = `DNS and email posture score for ${domain}. TLS, mail transport, and BIMI are reported separately.`;
 
     emailScoreSection.style.display = "flex";
 

@@ -34,13 +34,33 @@ _CATALOG: dict[str, dict[str, str]] = {
     "INVENTORY": {"code": "RECON-CT-001", "title": "Certificate Transparency inventory", "why": "Public certificates can reveal hostnames outside the main website.", "attacker": "Forgotten development or staging hosts may expose weaker services.", "fix": "Review each hostname, remove stale records, and protect environments that should not be public.", "technical": "CT data is historical and does not prove a hostname is currently active.", "reference": "RFC 6962"},
     "SUBDOMAINS": {"code": "RECON-SUB-001", "title": "Subdomain inventory", "why": "Exposed or stale subdomains can expand the public attack surface.", "attacker": "A forgotten hostname may point to an abandoned service.", "fix": "Review, secure, or remove each stale hostname.", "technical": "Inventory is assembled from CT data and current DNS observations.", "reference": "RFC 6962"},
     "BIMI": {"code": "MAIL-007", "title": "BIMI brand indicator", "why": "BIMI can display a domain's brand mark in supported mail clients.", "attacker": "Incorrect policy or logo records can undermine brand presentation.", "fix": "Publish a valid BIMI record and meet the mail provider's DMARC and logo requirements.", "technical": "Client support and VMC requirements vary by provider.", "reference": "RFC 8617"},
-    "DS": {"code": "DNSSEC-002", "title": "Delegation signer record", "why": "The parent DS connects the child zone's DNSKEY to the DNSSEC chain.", "attacker": "A mismatch can cause validating resolvers to return SERVFAIL.", "fix": "Update the registrar DS to match the active child-zone DNSKEY.", "technical": "Compare key tag, algorithm, digest type, and digest.", "reference": "RFC 4034"},
 }
 
 
-def get_finding_guidance(record_type: str) -> dict[str, str]:
+_DMARC_RULES: tuple[tuple[str, str, str, str, str], ...] = (
+    ("no DMARC policy", "MAIL-DMARC-001", "DMARC record missing", "Publish a DMARC TXT record at _dmarc and start with a monitored policy.", "RFC 7489"),
+    ("policy is set to 'none'", "MAIL-DMARC-002", "DMARC policy is monitor-only", "Review reports, then move to quarantine or reject when legitimate mail aligns.", "RFC 7489"),
+    ("no aggregate report address (rua)", "MAIL-DMARC-003", "DMARC aggregate reporting is disabled", "Add a monitored rua=mailto: address to receive aggregate reports.", "RFC 7489"),
+    ("policy applies to only", "MAIL-DMARC-004", "DMARC policy is partially applied", "Set pct=100 after validating mail flows and report results.", "RFC 7489"),
+)
+
+
+def get_finding_guidance(record_type: str, message: str = "") -> dict[str, str]:
     """Return a copy so callers cannot mutate the shared catalog."""
     key = str(record_type or "").strip().upper()
+    normalized_message = str(message or "").lower()
+    if key == "DMARC":
+        for marker, code, title, fix, reference in _DMARC_RULES:
+            if marker in normalized_message:
+                return {
+                    "code": code,
+                    "title": title,
+                    "why": "DMARC helps receiving mail systems identify messages that fail domain alignment.",
+                    "attacker": "Weak or absent enforcement can leave more room for messages impersonating your domain.",
+                    "fix": fix,
+                    "technical": "Verify the authoritative _dmarc TXT answer and confirm changes after DNS caches expire.",
+                    "reference": reference,
+                }
     if key in _CATALOG:
         return dict(_CATALOG[key])
     return {

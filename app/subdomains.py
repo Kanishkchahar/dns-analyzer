@@ -8,6 +8,7 @@ and checks for dangling CNAME exposure.
 import asyncio
 from datetime import datetime, timezone
 import json
+import logging
 from typing import Any
 import httpx
 import dns.asyncresolver
@@ -15,6 +16,9 @@ import dns.asyncresolver
 from app.models import Finding
 from app.resolver import _safe_query
 from app.takeover import check_subdomain_takeover
+from app.work_budget import ScanWorkBudget
+
+logger = logging.getLogger(__name__)
 
 
 async def discover_passive_subdomains(
@@ -22,6 +26,7 @@ async def discover_passive_subdomains(
     resolver: dns.asyncresolver.Resolver,
     max_hosts: int = 40,
     timeout: float = 4.5,
+    work_budget: ScanWorkBudget | None = None,
 ) -> tuple[dict[str, Any], list[Finding]]:
     """Query Certificate Transparency logs for *domain* and passively resolve records."""
     findings: list[Finding] = []
@@ -37,8 +42,11 @@ async def discover_passive_subdomains(
     }
 
     discovered_names: dict[str, str | None] = {}
+    budget = work_budget or ScanWorkBudget()
 
     try:
+        if not await budget.reserve_http():
+            raise RuntimeError("outbound request budget exhausted")
         url = f"https://crt.sh/?q=%25.{norm_domain}&output=json"
         headers = {"User-Agent": "Mozilla/5.0 (compatible; DNSAnalyzer/2.0)"}
         async with httpx.AsyncClient(timeout=timeout, verify=True) as client:
@@ -114,7 +122,8 @@ async def discover_passive_subdomains(
                     ))
     except Exception as exc:
         result["status"] = "unavailable"
-        result["reason"] = f"{type(exc).__name__}: {str(exc) or 'Certificate Transparency request failed'}"
+        logger.warning("Certificate Transparency lookup failed (%s)", type(exc).__name__)
+        result["reason"] = "Certificate Transparency lookup failed"
         findings.append(Finding(
             severity="info",
             record_type="Inventory",
@@ -163,6 +172,7 @@ async def discover_passive_subdomains(
                     sub,
                     {"CNAME": {"status": "ok", "records": [cname_target]}},
                     resolver,
+                    budget=budget,
                 )
             return {
                 "subdomain": sub,

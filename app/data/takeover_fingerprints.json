@@ -1,0 +1,20 @@
+{
+  "source": {
+    "name": "Can I take over XYZ?",
+    "url": "https://github.com/EdOverflow/can-i-take-over-xyz",
+    "license": "CC-BY-4.0",
+    "notice": "Fingerprint patterns are heuristic and have not been independently tested against live provider accounts by this project."
+  },
+  "services": [
+    {"provider":"GitHub Pages","cname_suffixes":["github.io"],"method":"http_fingerprint","fingerprint":"There isn't a GitHub Pages site here","remediation":"Restore the intended GitHub Pages site or remove the CNAME.","last_verified":null},
+    {"provider":"Amazon S3","cname_suffixes":["s3.amazonaws.com"],"method":"http_fingerprint","fingerprint":"The specified bucket does not exist","remediation":"Restore the intended S3 bucket or remove the CNAME.","last_verified":null},
+    {"provider":"Amazon S3 Website","cname_suffixes":[],"cname_contains":["s3-website"],"method":"http_fingerprint","fingerprint":"The specified bucket does not exist","remediation":"Restore the intended S3 website bucket or remove the CNAME.","last_verified":null},
+    {"provider":"Heroku","cname_suffixes":["herokuapp.com"],"method":"http_fingerprint","fingerprint":"No such app","remediation":"Restore the intended Heroku app or remove the CNAME.","last_verified":null},
+    {"provider":"Shopify","cname_suffixes":["myshopify.com"],"method":"http_fingerprint","fingerprint":"Sorry, this shop is currently unavailable","remediation":"Restore the Shopify storefront or remove the CNAME.","last_verified":null},
+    {"provider":"Zendesk","cname_suffixes":["zendesk.com"],"method":"http_fingerprint","fingerprint":"Help Center Closed","remediation":"Restore the Zendesk help center or remove the CNAME.","last_verified":null},
+    {"provider":"Ghost","cname_suffixes":["ghost.io"],"method":"http_fingerprint","fingerprint":"The thing you were looking for is no longer here","remediation":"Restore the Ghost publication or remove the CNAME.","last_verified":null},
+    {"provider":"Surge.sh","cname_suffixes":["surge.sh"],"method":"http_fingerprint","fingerprint":"project not found","remediation":"Restore the intended Surge project or remove the CNAME.","last_verified":null},
+    {"provider":"Vercel","cname_suffixes":["vercel-dns.com"],"method":"http_fingerprint","fingerprint":"404: NOT_FOUND","remediation":"Restore the intended Vercel project or remove the CNAME.","last_verified":null},
+    {"provider":"Microsoft Azure App Service","cname_suffixes":["azurewebsites.net"],"method":"dns_nxdomain","fingerprint":null,"remediation":"Restore the intended Azure App Service or remove the CNAME.","last_verified":null}
+  ]
+}

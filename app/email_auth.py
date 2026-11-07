@@ -410,8 +410,9 @@ def compute_domain_score(
     dnssec_data: dict[str, Any] | None,
     takeover_data: dict[str, Any] | None,
     tls_data: dict[str, Any] | None = None,
+    dns_posture_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Compute a holistic domain health & security posture score.
+    """Compute the DNS and email posture score (TLS and mail transport excluded).
 
     Combines documented operational pillars:
       1. DNS Infrastructure & Redundancy (25% weight)
@@ -456,7 +457,7 @@ def compute_domain_score(
     email_summary = f"SPF, DMARC, DKIM ({raw_email_score}/100)"
 
     # 3. DNSSEC (20 pts max)
-    dnssec_status = dnssec_data.get("status", "unsigned") if dnssec_data else "unsigned"
+    dnssec_status = dnssec_data.get("status", "inconclusive") if dnssec_data else "inconclusive"
     if dnssec_status == "delegation_match_verified":
         dnssec_score = 16
         dnssec_stat = "delegation_match_verified"
@@ -470,6 +471,11 @@ def compute_domain_score(
         dnssec_score = 0
         dnssec_stat = "error"
         dnssec_summary = "Parent DS record without matching zone DNSKEY (causes SERVFAIL)"
+    elif dnssec_status == "inconclusive":
+        dnssec_score = 0
+        dnssec_stat = "inconclusive"
+        dnssec_summary = "DNSSEC status could not be determined; no DNSSEC points awarded"
+        inconclusive_checks.append("DNSSEC")
     else:
         dnssec_score = 10
         dnssec_stat = "unsigned"
@@ -491,6 +497,10 @@ def compute_domain_score(
         threat_status = "inconclusive"
         threat_summary = "Takeover resolution inconclusive due to resolver error or timeout"
         inconclusive_checks.append("Subdomain Takeover")
+    elif takeover_stat_str == "candidate":
+        threat_score = 16
+        threat_status = "candidate"
+        threat_summary = "Potential dangling service alias; ownership was not confirmed"
     else:
         threat_score = 20
         threat_status = "safe"
@@ -500,6 +510,11 @@ def compute_domain_score(
         inconclusive_checks.append("TLS & HTTPS Audit")
 
     total_score = max(0, min(100, infra_score + email_factor_score + dnssec_score + threat_score))
+    axfr_servers = (dns_posture_data or {}).get("axfr", {}).get("servers", [])
+    axfr_confirmed = any(server.get("status") == "transfer_allowed" and server.get("records_exposed", 0) > 0 for server in axfr_servers)
+    if axfr_confirmed:
+        total_score = min(total_score, 39)
+        inconclusive_checks.append("AXFR exposes zone records")
 
     grade = "F"
     label = "High Risk"
@@ -516,6 +531,7 @@ def compute_domain_score(
         "score": total_score,
         "grade": grade,
         "label": label,
+        "scope": "DNS and email posture (TLS, MTA-STS, TLS-RPT, and BIMI are reported separately)",
         "inconclusive_count": len(inconclusive_checks),
         "inconclusive_checks": inconclusive_checks,
         "factors": {

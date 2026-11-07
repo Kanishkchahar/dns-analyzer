@@ -204,3 +204,20 @@ class TestEmailScore:
         assert domain_score["factors"]["dnssec"]["score"] == 16
         assert domain_score["factors"]["dnssec"]["status"] == "delegation_match_verified"
         assert "DNSSEC Root Anchor & RRSIG Validation" in domain_score["inconclusive_checks"]
+
+    def test_compute_domain_score_inconclusive_dnssec_gets_no_dnssec_points(self):
+        result = compute_domain_score(
+            {}, [], {"score": 100}, {"status": "inconclusive"}, {"status": "safe"}
+        )
+        assert result["factors"]["dnssec"]["score"] == 0
+        assert result["factors"]["dnssec"]["status"] == "inconclusive"
+        assert "DNSSEC" in result["inconclusive_checks"]
+
+    def test_compute_domain_score_axfr_caps_grade(self):
+        result = compute_domain_score(
+            {"A": {"status": "ok", "records": ["8.8.8.8"]}}, [], {"score": 100},
+            {"status": "unsigned"}, {"status": "safe"},
+            dns_posture_data={"axfr": {"servers": [{"status": "transfer_allowed", "records_exposed": 4}]}},
+        )
+        assert result["score"] == 39
+        assert result["grade"] == "F"

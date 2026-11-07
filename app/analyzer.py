@@ -18,12 +18,13 @@ def _finding(severity: str, record_type: str, message: str) -> Finding:
 # Individual check functions
 # ---------------------------------------------------------------------------
 
-def check_domain_resolves(data: dict[str, Any]) -> list[Finding]:
+def check_domain_resolves(data: dict[str, Any], domain: str | None = None) -> list[Finding]:
     """Check 1: Domain must resolve to at least one IP address."""
     a_ok = data.get("A", {}).get("status") == "ok"
     aaaa_ok = data.get("AAAA", {}).get("status") == "ok"
     if not a_ok and not aaaa_ok:
-        return [_finding("error", "GENERAL", "Domain does not resolve to any IP address.")]
+        subject = f" `{domain}`" if domain else ""
+        return [_finding("error", "GENERAL", f"Domain{subject} does not resolve to any IP address.")]
     return []
 
 
@@ -200,7 +201,10 @@ def analyze(domain: str, resolver_data: dict[str, Any]) -> list[Finding]:
     """Run all checks and return combined findings list."""
     findings: list[Finding] = []
     for check in _CHECKS:
-        findings.extend(check(resolver_data))
+        if check is check_domain_resolves:
+            findings.extend(check(resolver_data, domain))
+        else:
+            findings.extend(check(resolver_data))
     return findings
 
 

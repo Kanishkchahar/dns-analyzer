@@ -5,7 +5,8 @@
 # ------------------------------------------------------------------------------
 # Stage 1: Dependency Builder
 # ------------------------------------------------------------------------------
-FROM python:3.11-slim AS builder
+ARG PYTHON_VERSION=3.14
+FROM python:${PYTHON_VERSION}-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -29,7 +30,7 @@ RUN python -m venv /opt/venv \
 # ------------------------------------------------------------------------------
 # Stage 2: Test Runner (Verification Stage)
 # ------------------------------------------------------------------------------
-FROM python:3.11-slim AS test
+FROM python:${PYTHON_VERSION}-slim AS test
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -49,7 +50,7 @@ RUN pytest -v
 # ------------------------------------------------------------------------------
 # Stage 3: Production Runtime (v2)
 # ------------------------------------------------------------------------------
-FROM python:3.11-slim AS runtime
+FROM python:${PYTHON_VERSION}-slim AS runtime
 
 LABEL maintainer="DNS Analyzer Team" \
       version="2.1.0" \

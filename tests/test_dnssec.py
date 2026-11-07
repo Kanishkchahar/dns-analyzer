@@ -1,6 +1,12 @@
 """Tests for DNSSEC Cryptographic Chain Validator (app/dnssec.py)."""
 
 import pytest
+import base64
+import dns.dnssec
+import dns.name
+import dns.rdata
+import dns.rdataclass
+import dns.rdatatype
 
 from app.dnssec import check_dnssec
 from tests.conftest import MockAnswer, MockResolver, MockRR
@@ -9,9 +15,12 @@ from tests.conftest import MockAnswer, MockResolver, MockRR
 @pytest.mark.asyncio
 class TestDNSSEC:
     async def test_dnssec_delegation_match_status(self):
-        # KSK flag = 257 (bit 15 set: 257 & 1 == 1)
-        dnskey_rr = MockRR(flags=257, protocol=3, algorithm=13)
-        ds_rr = MockRR(key_tag=12345, algorithm=13, digest_type=2)
+        dnskey_rr = dns.rdata.from_text(
+            dns.rdataclass.IN,
+            dns.rdatatype.DNSKEY,
+            f"257 3 13 {base64.b64encode(bytes(range(64))).decode()}",
+        )
+        ds_rr = dns.dnssec.make_ds(dns.name.from_text("example.com"), dnskey_rr, "SHA256")
 
         resolver = MockResolver({
             ("example.com", "DNSKEY"): MockAnswer([dnskey_rr]),
@@ -69,18 +78,30 @@ class TestDNSSEC:
         from app.dnssec import _safe_key_tag, verify_ds_matches_dnskey
         import dns.name
 
-        mock_key = MockRR(key_tag=54321)
-        assert _safe_key_tag(mock_key) == 54321
-
         domain_name = dns.name.from_text("example.com")
-        ds_match = MockRR(key_tag=54321)
-        ds_mismatch = MockRR(key_tag=11111)
+        key = dns.rdata.from_text(
+            dns.rdataclass.IN,
+            dns.rdatatype.DNSKEY,
+            f"257 3 13 {base64.b64encode(bytes(range(64))).decode()}",
+        )
+        ds_match = dns.dnssec.make_ds(domain_name, key, "SHA256")
+        other_key = dns.rdata.from_text(
+            dns.rdataclass.IN,
+            dns.rdatatype.DNSKEY,
+            f"257 3 13 {base64.b64encode(bytes(reversed(range(64)))).decode()}",
+        )
+        ds_mismatch = dns.dnssec.make_ds(domain_name, other_key, "SHA256")
 
-        matched, tag = verify_ds_matches_dnskey(domain_name, [mock_key], [ds_match])
+        assert _safe_key_tag(key) == dns.dnssec.key_id(key)
+        matched, tag = verify_ds_matches_dnskey(domain_name, [key], [ds_match])
         assert matched is True
-        assert tag == 54321
+        assert tag == dns.dnssec.key_id(key)
 
-        unmatched, tag2 = verify_ds_matches_dnskey(domain_name, [mock_key], [ds_mismatch])
+        unmatched, tag2 = verify_ds_matches_dnskey(domain_name, [key], [ds_mismatch])
         assert unmatched is False
         assert tag2 == 0
+
+        fake_key = MockRR(flags=257, protocol=3, algorithm=13, key_tag=12345)
+        fake_ds = MockRR(key_tag=12345, algorithm=13, digest_type=2)
+        assert verify_ds_matches_dnskey(domain_name, [fake_key], [fake_ds]) == (False, 0)
 

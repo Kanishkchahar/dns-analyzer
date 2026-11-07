@@ -53,11 +53,8 @@ def verify_ds_matches_dnskey(
                             calc_ds = dns.dnssec.make_ds(domain_name, key_rr, ds_rr.digest_type)
                             if calc_ds.digest == ds_rr.digest:
                                 return True, tag
-                        else:
-                            return True, tag
-                elif not hasattr(key_rr, "to_wire") and not hasattr(ds_rr, "digest"):
-                    # Unit test mocks without wire representation
-                    return True, ds_tag or 12345
+                            else:
+                                continue
             except Exception:
                 continue
     return False, 0

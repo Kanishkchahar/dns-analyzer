@@ -14,6 +14,10 @@ from app.network_scan import (
 
 @pytest.mark.asyncio
 class TestNetworkScan:
+    def test_sitemap_parser_rejects_entity_expansion_payloads(self):
+        payload = b'<!DOCTYPE foo [<!ENTITY x "expanded">]><urlset><url><loc>https://example.com/&x;</loc></url></urlset>'
+        assert _parse_sitemap(payload, "example.com") == []
+
     def test_robots_and_sitemap_extract_same_host_paths_only(self):
         robots = b"Disallow: /private/\nSitemap: https://example.com/custom-map.xml\nSitemap: https://other.example/map.xml"
         sitemap = b"<urlset><url><loc>https://example.com/docs/start</loc></url><url><loc>https://other.example/private</loc></url></urlset>"
@@ -110,11 +114,11 @@ class TestNetworkScan:
         assert "API_KEY" in res["message"]
 
         # Invalid token
-        res_bad_tok = await run_port_scan("example.com", ports=[80], confirmed=True, auth_token="wrong-token")
+        res_bad_tok = await run_port_scan("example.com", ports=[80], confirmed=True, auth_header="Bearer wrong-token")
         assert res_bad_tok["status"] == "unauthorized"
 
         # Disallowed target scope even with valid token
-        res_bad_scope = await run_port_scan("malicious.com", ports=[80], confirmed=True, auth_token="secret-token-123")
+        res_bad_scope = await run_port_scan("malicious.com", ports=[80], confirmed=True, auth_header="Bearer secret-token-123")
         assert res_bad_scope["status"] == "unauthorized"
         assert "not in approved server scan scope" in res_bad_scope["message"]
 

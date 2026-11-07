@@ -18,6 +18,7 @@ import httpcore
 import httpx
 
 from app.models import Finding
+from app.work_budget import ScanWorkBudget
 
 
 class PinnedIPBackend(httpcore.AsyncNetworkBackend):
@@ -97,7 +98,7 @@ def is_safe_ip(ip_str: str) -> tuple[bool, str]:
     return True, "Public IP"
 
 
-async def resolve_and_verify_all_ips(hostname: str, port: int = 443) -> tuple[bool, list[str], str]:
+async def resolve_and_verify_all_ips(hostname: str, port: int = 443, resolver: Any = None) -> tuple[bool, list[str], str]:
     """Resolve hostname once and verify that all resolved IPs are public and safe (reject mixed answers)."""
     try:
         literal_ip = ipaddress.ip_address(hostname.strip().strip("[]"))
@@ -111,14 +112,26 @@ async def resolve_and_verify_all_ips(hostname: str, port: int = 443) -> tuple[bo
     if normalized_host == "localhost" or normalized_host.endswith(".localhost"):
         return False, [], "Unsafe hostname: localhost names are blocked"
 
-    loop = asyncio.get_running_loop()
-    try:
-        addr_info = await loop.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
-        if not addr_info:
-            return False, [], "Hostname did not resolve to any addresses"
-        all_ips = list(dict.fromkeys(info[4][0] for info in addr_info))
-    except Exception as exc:
-        return False, [], f"Resolution error: {exc}"
+    if resolver is not None:
+        async def get_addresses(rdtype: str) -> list[str]:
+            try:
+                answer = await resolver.resolve(hostname, rdtype)
+                return [str(item.address) for item in answer if hasattr(item, "address")]
+            except Exception:
+                return []
+        answers = await asyncio.gather(get_addresses("A"), get_addresses("AAAA"))
+        all_ips = list(dict.fromkeys(answers[0] + answers[1]))
+        if not all_ips:
+            return False, [], "Hostname did not resolve or query budget was unavailable"
+    else:
+        loop = asyncio.get_running_loop()
+        try:
+            addr_info = await loop.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+            if not addr_info:
+                return False, [], "Hostname did not resolve to any addresses"
+            all_ips = list(dict.fromkeys(info[4][0] for info in addr_info))
+        except Exception as exc:
+            return False, [], f"Resolution error: {type(exc).__name__}"
 
     for ip in all_ips:
         safe, reason = is_safe_ip(ip)
@@ -198,9 +211,12 @@ async def audit_tls_and_https(
     domain: str,
     port: int = 443,
     timeout: float = 3.5,
+    resolver: Any = None,
+    work_budget: ScanWorkBudget | None = None,
 ) -> tuple[dict[str, Any], list[Finding]]:
     """Execute end-to-end TLS certificate and HTTPS posture verification with strict SSRF controls."""
     findings: list[Finding] = []
+    budget = work_budget or ScanWorkBudget()
     norm_domain = domain.strip().lower().rstrip(".")
 
     result: dict[str, Any] = {
@@ -216,7 +232,7 @@ async def audit_tls_and_https(
     }
 
     # 1. DNS pre-resolution and strict SSRF guard (resolve once, reject non-public IPs)
-    safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(norm_domain, port)
+    safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(norm_domain, port, resolver=resolver)
     if not safe_all:
         result["status"] = "blocked"
         result["reason"] = reason
@@ -395,6 +411,8 @@ async def audit_tls_and_https(
     # 4. Check HTTP (Port 80) -> HTTPS (Port 443) Redirection with strict redirect validation & pinned IP
     redirect_ok = False
     try:
+        if not await budget.reserve_http():
+            raise RuntimeError("per-scan outbound request budget exhausted")
         http_transport = PinnedIPTransport(target_ip)
         async with httpx.AsyncClient(transport=http_transport, timeout=3.0, follow_redirects=False) as client:
             async with client.stream("GET", f"http://{norm_domain}/") as resp_http:
@@ -403,7 +421,7 @@ async def audit_tls_and_https(
                 if status_code in (301, 302, 307, 308):
                     parsed_loc = urlparse(loc)
                     redirect_host = parsed_loc.hostname or norm_domain
-                    redir_safe, redir_ips, redir_reason = await resolve_and_verify_all_ips(redirect_host, parsed_loc.port or 443)
+                    redir_safe, redir_ips, redir_reason = await resolve_and_verify_all_ips(redirect_host, parsed_loc.port or 443, resolver=resolver)
                     if not redir_safe:
                         findings.append(Finding(
                             severity="error",
@@ -443,6 +461,8 @@ async def audit_tls_and_https(
 
     # 5. Check HTTPS Web Security Headers (Strict TLS verification, pinned IP, stream headers without body download)
     try:
+        if not await budget.reserve_http():
+            raise RuntimeError("per-scan outbound request budget exhausted")
         https_transport = PinnedIPTransport(target_ip, verify=True)
         async with httpx.AsyncClient(transport=https_transport, timeout=3.0, follow_redirects=False) as client:
             async with client.stream("GET", f"https://{norm_domain}/") as resp_https:
@@ -524,6 +544,8 @@ async def audit_tls_and_https(
 
     # OPTIONS only reports the server's advertised methods; no write method is sent.
     try:
+        if not await budget.reserve_http():
+            raise RuntimeError("per-scan outbound request budget exhausted")
         options_transport = PinnedIPTransport(target_ip, verify=True)
         async with httpx.AsyncClient(transport=options_transport, timeout=3.0, follow_redirects=False) as client:
             async with client.stream("OPTIONS", f"https://{norm_domain}/") as response:

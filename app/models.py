@@ -64,7 +64,7 @@ class Finding(BaseModel):
     def attach_catalog_entry(cls, value: Any) -> Any:
         if isinstance(value, dict):
             value = dict(value)
-            guidance = get_finding_guidance(value.get("record_type", ""))
+            guidance = get_finding_guidance(value.get("record_type", ""), value.get("message", ""))
             value.setdefault("code", guidance["code"])
             value.setdefault("explanation", guidance)
         return value
@@ -127,6 +127,7 @@ class DomainScore(BaseModel):
     score: int
     grade: str
     label: str
+    scope: str = "DNS and email posture"
     inconclusive_count: int = 0
     inconclusive_checks: list[str] = Field(default_factory=list)
     factors: dict[str, DomainFactorScore]
@@ -182,4 +183,3 @@ class PortScanRequest(BaseModel):
     target: str
     ports: list[int] | None = None
     confirmed: bool = False
-    auth_token: str | None = None
