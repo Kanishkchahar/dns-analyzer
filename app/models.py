@@ -3,7 +3,9 @@
 import re
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.finding_catalog import get_finding_guidance
 
 
 DOMAIN_RE = re.compile(
@@ -54,6 +56,18 @@ class Finding(BaseModel):
     severity: str  # "error" | "warning" | "info"
     record_type: str
     message: str
+    code: str = "GEN-001"
+    explanation: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def attach_catalog_entry(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            value = dict(value)
+            guidance = get_finding_guidance(value.get("record_type", ""))
+            value.setdefault("code", guidance["code"])
+            value.setdefault("explanation", guidance)
+        return value
 
 
 class Summary(BaseModel):
@@ -93,6 +107,7 @@ class RemediationFix(BaseModel):
     value: str
     ttl: int = 3600
     provider_guides: dict[str, str] = Field(default_factory=dict)
+    provider_commands: dict[str, str] = Field(default_factory=dict)
     is_draft: bool = True
     impact_warning: str | None = None
     prerequisites: list[str] = Field(default_factory=list)
@@ -129,6 +144,7 @@ class AnalyzeResponse(BaseModel):
     security: SecurityAudit | None = None
     tls: dict[str, Any] | None = None
     subdomains: dict[str, Any] | None = None
+    dns_posture: dict[str, Any] = Field(default_factory=dict)
     coverage: list[dict[str, Any]] = Field(default_factory=list)
     remediation: list[RemediationFix] | None = None
     bind_zone_snippet: str | None = None

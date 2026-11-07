@@ -4,16 +4,18 @@ import asyncio
 from datetime import datetime, timezone
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from app.analyzer import analyze, summarize
 from app.bimi import check_bimi
 from app.dnssec import check_dnssec
+from app.dns_posture import check_nameserver_consistency, check_wildcard_dns, check_zone_transfers
 from app.email_auth import (
     analyze_dkim,
     analyze_dmarc,
@@ -50,7 +52,7 @@ from app.tls_check import audit_tls_and_https
 logger = logging.getLogger("dns_analyzer")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
-app = FastAPI(title="DNS Analyzer", version="2.0.0")
+app = FastAPI(title="DNS Analyzer", version="2.1.0")
 
 # Concurrency & runtime throttle budgets
 SCAN_SEMAPHORE = asyncio.Semaphore(8)
@@ -65,6 +67,7 @@ _SCAN_CACHE_TTL = 60.0
 _PATH_SCAN_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _PATH_SCAN_CACHE_TTL = 900.0
 _CUSTOM_DKIM_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_BADGE_CACHE: dict[str, tuple[float, bytes]] = {}
 
 # In-memory client rate limiter (60 requests per minute per IP, bounded to 2048 client records)
 _CLIENT_REQUESTS: dict[str, list[float]] = {}
@@ -89,6 +92,7 @@ def _store_cached_scan(domain: str, response: AnalyzeResponse) -> None:
         oldest_key = min(_SCAN_CACHE.keys(), key=lambda k: _SCAN_CACHE[k][0])
         del _SCAN_CACHE[oldest_key]
     _SCAN_CACHE[domain] = (now, response)
+    _BADGE_CACHE.pop(domain, None)
 
 
 def _store_path_scan_results(result: dict[str, Any]) -> None:
@@ -200,6 +204,7 @@ def _build_scan_coverage(
     subdomains: dict[str, Any] | None,
     bimi: dict[str, Any] | None,
     mail_transport: dict[str, Any] | None,
+    dns_posture: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     def item(name: str, status: str, detail: str) -> dict[str, str]:
         return {"name": name, "status": status, "detail": detail}
@@ -232,6 +237,21 @@ def _build_scan_coverage(
     result.append(item("Certificate Transparency", "complete" if ct_status == "complete" else "partial", f"Result: {ct_status}"))
     result.append(item("Common web paths", "not_run", "Run separately from Network & Scope"))
     result.append(item("Active port probes", "not_run", "Opt-in and controlled by server policy"))
+    posture = dns_posture or {}
+    axfr = posture.get("axfr", {})
+    consistency = posture.get("nameserver_consistency", {})
+    wildcard = posture.get("wildcard", {})
+    result.append(item(
+        "AXFR exposure",
+        "partial" if axfr.get("status") == "inconclusive" else "complete",
+        f"{axfr.get('nameservers_checked', 0)} nameserver(s) checked",
+    ))
+    result.append(item(
+        "Nameserver consistency",
+        "partial" if consistency.get("status") != "complete" else "complete",
+        f"{len(consistency.get('observations', []))} direct observations",
+    ))
+    result.append(item("Wildcard DNS", "partial" if wildcard.get("status") == "inconclusive" else "complete", f"Result: {wildcard.get('status', 'unavailable')}"))
     return result
 
 
@@ -268,6 +288,8 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
 
     import dns.asyncresolver
     resolver = dns.asyncresolver.Resolver()
+    ns_records = records.get("NS", {}).get("records", [])
+    ns_hosts = [item.get("host") if isinstance(item, dict) else str(item) for item in ns_records]
 
     # SPF
     txt_records = records.get("TXT", {}).get("records", [])
@@ -310,6 +332,9 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         (tls_data, tls_findings),
         (sub_data, sub_findings),
         (mail_transport_data, mail_transport_findings),
+        (axfr_data, axfr_findings),
+        (wildcard_data, wildcard_findings),
+        (ns_consistency_data, ns_consistency_findings),
     ) = await asyncio.gather(
         _isolated_data_check("DMARC", fetch_dmarc(domain, resolver, apex=zone_apex), {"status": "inconclusive", "policy": None, "reason": "DMARC lookup failed."}),
         _isolated_data_check("DKIM", check_dkim_selectors(domain, resolver), {"status": "inconclusive", "selectors_found": [], "selectors_checked": [], "has_dkim": False}),
@@ -318,7 +343,22 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         _isolated_pair_check("TLS", audit_tls_and_https(domain), {"scanned": False, "status": "error", "reason": "TLS audit did not complete."}),
         _isolated_pair_check("SUBDOMAINS", discover_passive_subdomains(zone_apex, resolver), {"domain": zone_apex, "source": "Certificate Transparency (crt.sh)", "status": "unavailable", "reason": "Subdomain inventory did not complete.", "discovered_count": 0, "subdomains": []}),
         _isolated_pair_check("MAIL TRANSPORT", check_mail_transport(domain, resolver), {"mta_sts": {"status": "inconclusive", "reason": "Check did not complete."}, "tls_rpt": {"status": "inconclusive", "reason": "Check did not complete."}}),
+        _isolated_pair_check("AXFR", check_zone_transfers(zone_apex, ns_hosts, resolver), {"zone": zone_apex, "status": "inconclusive", "nameservers_checked": 0, "servers": []}),
+        _isolated_pair_check("WILDCARD DNS", check_wildcard_dns(zone_apex, resolver), {"status": "inconclusive", "addresses": [], "records": {"A": [], "AAAA": []}}),
+        _isolated_pair_check("NS CONSISTENCY", check_nameserver_consistency(zone_apex, ns_hosts, resolver), {"status": "inconclusive", "observations": [], "serials_match": None, "ns_sets_match": None}),
     )
+    wildcard_ips = set(wildcard_data.get("addresses", []))
+    if wildcard_data.get("status") == "detected" and sub_data.get("subdomains"):
+        for subdomain in sub_data["subdomains"]:
+            ips = set(subdomain.get("ips", []))
+            if ips and not subdomain.get("cname") and ips.issubset(wildcard_ips):
+                subdomain["status"] = "wildcard_only"
+                subdomain["wildcard_only"] = True
+        sub_data["subdomains"].sort(key=lambda item: (
+            -item.get("risk_score", 0),
+            {"dangling": 0, "unverified": 1, "resolving": 2, "wildcard_only": 3, "inactive": 4}.get(item.get("status"), 5),
+            item.get("subdomain", ""),
+        ))
     dmarc_findings = analyze_dmarc(dmarc_data) + dmarc_scan_findings
     dkim_findings = analyze_dkim(dkim_data) + dkim_scan_findings
 
@@ -371,6 +411,9 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         + bimi_findings
         + tls_findings
         + sub_findings
+        + axfr_findings
+        + wildcard_findings
+        + ns_consistency_findings
     )
     all_counts = summarize(all_findings)
 
@@ -380,6 +423,7 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
     coverage = _build_scan_coverage(
         records, spf_lookup_data, dmarc_data, dkim_data, dnssec_data,
         takeover_data, tls_data, sub_data, bimi_data, mail_transport_data,
+        {"axfr": axfr_data, "wildcard": wildcard_data, "nameserver_consistency": ns_consistency_data},
     )
 
     return AnalyzeResponse(
@@ -394,6 +438,11 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         security=security_audit,
         tls=tls_data,
         subdomains=sub_data,
+        dns_posture={
+            "axfr": axfr_data,
+            "wildcard": wildcard_data,
+            "nameserver_consistency": ns_consistency_data,
+        },
         coverage=coverage,
         remediation=fixes,
         bind_zone_snippet=zone_snippet,
@@ -522,6 +571,41 @@ async def api_subdomains(domain: str, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail="Failed to retrieve subdomain records.") from exc
 
 
+@app.get("/api/badge/{domain}", response_class=Response)
+async def api_grade_badge(domain: str, request: Request) -> Response:
+    """Serve a cached grade badge only after an analysis has populated scan cache."""
+    _enforce_rate_limit(request)
+    try:
+        req = AnalyzeRequest(domain=domain)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    now = asyncio.get_running_loop().time()
+    cached_badge = _BADGE_CACHE.get(req.domain)
+    if cached_badge and now - cached_badge[0] < 3600:
+        return Response(cached_badge[1], media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=3600"})
+    scan = _get_cached_scan(req.domain)
+    if not scan or not scan.domain_score:
+        raise HTTPException(status_code=404, detail="No recent scan is available for this domain. Run an analysis first.")
+    grade = scan.domain_score.grade
+    color = "#63b995" if grade.startswith("A") else "#e0a458" if grade in ("B", "C") else "#e36d6d"
+    label = f"{req.domain} · {grade} · {scan.domain_score.score}/100"
+    import html as html_module
+    escaped_label = html_module.escape(label, quote=True)
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="230" height="28" role="img" '
+        f'aria-label="{escaped_label}"><title>{escaped_label}</title>'
+        '<rect width="230" height="28" rx="5" fill="#1b1e22"/>'
+        f'<path d="M0 5a5 5 0 0 1 5-5h220a5 5 0 0 1 5 5v18a5 5 0 0 1-5 5H5a5 5 0 0 1-5-5z" fill="#1b1e22"/>'
+        f'<path d="M0 5a5 5 0 0 1 5-5h82v28H5a5 5 0 0 1-5-5z" fill="{color}"/>'
+        f'<text x="10" y="18" fill="#0c0d0e" font-family="Arial,sans-serif" font-size="11" font-weight="700">{html_module.escape(req.domain)}</text>'
+        f'<text x="96" y="18" fill="#f2f0ea" font-family="Arial,sans-serif" font-size="11" font-weight="700">Grade {grade} · {scan.domain_score.score}/100</text></svg>'
+    ).encode("utf-8")
+    if len(_BADGE_CACHE) >= 256 and req.domain not in _BADGE_CACHE:
+        del _BADGE_CACHE[min(_BADGE_CACHE, key=lambda key: _BADGE_CACHE[key][0])]
+    _BADGE_CACHE[req.domain] = (now, svg)
+    return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=3600"})
+
+
 @app.get("/api/report/{domain}", response_class=HTMLResponse)
 async def api_report(domain: str, request: Request) -> HTMLResponse:
     """Return a downloadable self-contained HTML report (reusing recent scan if available)."""
@@ -582,6 +666,7 @@ async def api_report(domain: str, request: Request) -> HTMLResponse:
             subdomains=scan.subdomains,
             path_scan=cached_paths,
             coverage=report_coverage,
+            dns_posture=scan.dns_posture,
         )
         return HTMLResponse(
             content=html,
@@ -619,10 +704,14 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 # Static files (served last so /api/* routes take priority)
 # ---------------------------------------------------------------------------
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+if not STATIC_DIR.is_dir():
+    import sys
+    STATIC_DIR = Path(sys.prefix) / "static"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def root() -> HTMLResponse:
-    with open("static/index.html", encoding="utf-8") as f:
+    with open(STATIC_DIR / "index.html", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())

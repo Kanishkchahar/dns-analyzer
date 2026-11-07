@@ -72,6 +72,9 @@ _TEMPLATE = """<!DOCTYPE html>
   .info .severity-tag { background: rgba(101,185,232,0.15); color: var(--accent); }
   .finding-rtype { font-family: 'Geist Mono', monospace; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
   .finding-msg { color: var(--text-primary); font-size: 14px; line-height: 1.5; }
+  .finding-code { color: var(--accent); font: 10px 'Geist Mono', monospace; margin-left: 8px; }
+  .finding-guidance { color: var(--text-secondary); font-size: 12px; margin-top: 9px; }
+  .finding-guidance summary { color: var(--accent); cursor: pointer; }
   .finding-msg code { font-family: 'Geist Mono', monospace; font-size: 12px; background: var(--raised); padding: 1px 4px; border-radius: 3px; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
   th { text-align: left; padding: 8px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); border-bottom: 1px solid var(--hairline); }
@@ -375,8 +378,8 @@ _TEMPLATE = """<!DOCTYPE html>
     {% if subdomains.reason %}<p style="color:var(--text-muted);font-size:13px;margin-bottom:8px;">{{ subdomains.reason }}</p>{% endif %}
     <div class="auth-card-row"><span class="auth-card-key">Discovered</span><span class="auth-card-val">{{ subdomains.discovered_count|default(0) }}{% if subdomains.discovered_total and subdomains.discovered_total != subdomains.discovered_count %} of {{ subdomains.discovered_total }}{% endif %}</span></div>
     {% if subdomains.subdomains %}
-    <table><thead><tr><th>Hostname</th><th>State</th><th>Addresses / CNAME</th></tr></thead><tbody>
-      {% for host in subdomains.subdomains %}<tr><td>{{ host.subdomain }}</td><td>{{ host.status }}</td><td>{{ (host.ips or [])|join(', ') }}{% if host.cname %} · {{ host.cname }}{% endif %}</td></tr>{% endfor %}
+    <table><thead><tr><th>Hostname</th><th>State</th><th>Addresses / CNAME</th><th>Risk tags</th><th>First seen</th></tr></thead><tbody>
+      {% for host in subdomains.subdomains %}<tr><td>{{ host.subdomain }}</td><td>{{ host.status }}{% if host.takeover and host.takeover.vulnerable %} · takeover risk{% endif %}</td><td>{{ (host.ips or [])|join(', ') }}{% if host.cname %} · {{ host.cname }}{% endif %}</td><td>{{ (host.risk_tags or [])|join(', ') }}</td><td>{{ host.first_seen or 'Not reported' }}</td></tr>{% endfor %}
     </tbody></table>
     {% endif %}
   </div>
@@ -406,6 +409,21 @@ _TEMPLATE = """<!DOCTYPE html>
   </tbody></table></div>
   {% endif %}
 
+  {% if dns_posture %}
+  <h2>🧭 Authoritative DNS Checks</h2>
+  {% set axfr = dns_posture.axfr or {} %}
+  <div class="auth-card">
+    <div class="auth-card-title">AXFR Exposure · {{ axfr.status|default('unavailable') }}</div>
+    <p style="color:var(--text-muted);font-size:13px;">Only server names and transfer record counts are retained; transferred record contents are not included.</p>
+    {% for server in axfr.servers or [] %}<div class="auth-card-row"><span class="auth-card-key">{{ server.nameserver }}</span><span class="auth-card-val">{{ server.status }} · {{ server.records_exposed }} record(s)</span></div>{% endfor %}
+    {% set consistency = dns_posture.nameserver_consistency or {} %}
+    <div class="auth-card-row"><span class="auth-card-key">Nameserver consistency</span><span class="auth-card-val">SOA serials {{ 'match' if consistency.serials_match else 'differ' }} · NS sets {{ 'match' if consistency.ns_sets_match else 'differ' }}</span></div>
+    {% for observation in consistency.observations or [] %}<div class="auth-card-row"><span class="auth-card-key">{{ observation.nameserver }} ({{ observation.address }})</span><span class="auth-card-val">SOA {{ observation.soa_serial or 'unavailable' }} · {{ (observation.ns_records or [])|join(', ') }}{% if observation.errors %} · {{ observation.errors }}{% endif %}</span></div>{% endfor %}
+    {% set wildcard = dns_posture.wildcard or {} %}
+    <div class="auth-card-row"><span class="auth-card-key">Wildcard DNS</span><span class="auth-card-val">{{ wildcard.status|default('unavailable') }}{% if wildcard.addresses %} · {{ wildcard.addresses|join(', ') }}{% endif %}</span></div>
+  </div>
+  {% endif %}
+
   <h2>Findings</h2>
   {% if findings %}
     {% for f in findings %}
@@ -413,8 +431,11 @@ _TEMPLATE = """<!DOCTYPE html>
       <div>
         <span class="severity-tag">{{ f.severity }}</span>
         <div class="finding-rtype">{{ f.record_type }}</div>
+        <code class="finding-code">{{ f.code }}</code>
       </div>
-      <div class="finding-msg">{{ f.message | format_msg }}</div>
+      <div class="finding-msg">{{ f.message | format_msg }}
+        {% if f.explanation %}<details class="finding-guidance"><summary>{{ f.explanation.title }}</summary><p>{{ f.explanation.why }}</p><p><strong>How it could be abused:</strong> {{ f.explanation.attacker }}</p><p><strong>Suggested fix:</strong> {{ f.explanation.fix }}</p><small>{{ f.explanation.technical }} · {{ f.explanation.reference }}</small></details>{% endif %}
+      </div>
     </div>
     {% endfor %}
   {% else %}
@@ -502,6 +523,7 @@ def build_report(
     subdomains: Any = None,
     path_scan: Any = None,
     coverage: Any = None,
+    dns_posture: Any = None,
 ) -> str:
     """Render a self-contained HTML report string."""
     return _tmpl.render(
@@ -517,4 +539,5 @@ def build_report(
         subdomains=subdomains,
         path_scan=path_scan,
         coverage=coverage,
+        dns_posture=dns_posture,
     )

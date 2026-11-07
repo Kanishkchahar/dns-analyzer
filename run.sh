@@ -7,6 +7,7 @@
 #   bash run.sh --docker     # Build & launch container via Docker
 #   bash run.sh --test       # Run the automated test suite
 #   bash run.sh --setup-only # Run setup/dependency install only
+#   ./venv/bin/dns-analyzer example.com # Run a CLI scan after setup
 #   bash run.sh --help       # Display help reference
 # ============================================================
 
@@ -42,7 +43,8 @@ for arg in "$@"; do
     echo "  bash run.sh <port>       Start server on custom port (e.g., 9000)"
     echo "  bash run.sh --docker, -d Build & launch containerized service via Docker"
     echo "  bash run.sh --test, -t   Run the automated pytest suite"
-    echo "  bash run.sh --setup-only Prepare virtual environment without running server"
+    echo "  bash run.sh --setup-only Prepare environment and install the CLI"
+    echo "  ./venv/bin/dns-analyzer <domain> Run the shared scan pipeline from the CLI"
     echo "  bash run.sh --help, -h   Show this help message"
     echo ""
     exit 0
@@ -101,11 +103,15 @@ PYTHON="venv/bin/python"
 if ! "$PYTHON" -c 'import fastapi, uvicorn, dns.resolver, jinja2, pytest' &>/dev/null; then
   NEED_PIP_INSTALL=true
 fi
+if [ ! -x "venv/bin/dns-analyzer" ]; then
+  NEED_PIP_INSTALL=true
+fi
 
 if [ "$NEED_PIP_INSTALL" = true ]; then
   echo -e "  ${YELLOW}→${NC} Installing / updating dependencies from requirements.txt..."
-  "$PYTHON" -m pip install --upgrade pip -q
+  "$PYTHON" -m pip install --upgrade pip setuptools wheel -q
   "$PYTHON" -m pip install -r requirements.txt -q
+  "$PYTHON" -m pip install --no-build-isolation --no-deps -e . -q
   echo -e "  ${GREEN}✔ Dependencies ready.${NC}"
 else
   echo -e "  ${GREEN}✔ Virtual environment and dependencies verified.${NC}"

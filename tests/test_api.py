@@ -56,8 +56,14 @@ def mock_external_network_calls():
     """Mock external passive CT logs and TLS probes so unit tests execute deterministically in milliseconds."""
     mock_tls = ({"scanned": True, "tls_version": "TLSv1.3", "certificate": {"is_expired": False, "days_remaining": 90}}, [])
     mock_sub = ({"discovered_count": 0, "subdomains": []}, [])
+    mock_axfr = ({"zone": "example.com", "status": "complete", "nameservers_checked": 0, "servers": []}, [])
+    mock_wildcard = ({"status": "not_detected", "addresses": [], "records": {"A": [], "AAAA": []}}, [])
+    mock_ns_consistency = ({"status": "complete", "observations": [], "serials_match": True, "ns_sets_match": True}, [])
     with patch("app.main.audit_tls_and_https", return_value=mock_tls), \
-         patch("app.main.discover_passive_subdomains", return_value=mock_sub):
+         patch("app.main.discover_passive_subdomains", return_value=mock_sub), \
+         patch("app.main.check_zone_transfers", return_value=mock_axfr), \
+         patch("app.main.check_wildcard_dns", return_value=mock_wildcard), \
+         patch("app.main.check_nameserver_consistency", return_value=mock_ns_consistency):
         yield
 
 
@@ -88,6 +94,24 @@ class TestAPIEndpoints:
             assert resp.status_code == 200
             assert "text/html" in resp.headers["content-type"]
             assert "DNS Analyzer" in resp.text
+
+    async def test_grade_badge_requires_a_recent_scan_and_serves_svg_after_scan(self):
+        from app.main import _store_cached_scan, run_full_scan
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            missing = await client.get("/api/badge/example.com")
+        assert missing.status_code == 404
+
+        with patch("dns.asyncresolver.Resolver", return_value=mock_dns_system):
+            scan = await run_full_scan("example.com")
+        _store_cached_scan("example.com", scan)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/badge/example.com")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("image/svg+xml")
+        assert response.headers["cache-control"] == "public, max-age=3600"
+        assert "example.com" in response.text
 
     async def test_post_analyze_valid_domain(self, mock_dns_system):
         with patch("dns.asyncresolver.Resolver", return_value=mock_dns_system):

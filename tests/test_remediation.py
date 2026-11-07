@@ -87,3 +87,15 @@ class TestRemediation:
         assert "$TTL 3600" in zone_text
         assert '@\tIN\tTXT\t"v=spf1 -all"' in zone_text
         assert '_dmarc\tIN\tTXT\t"v=DMARC1; p=reject"' in zone_text
+
+    def test_bind_zone_splits_long_txt_into_rfc_sized_strings(self):
+        fix = RemediationFix(title="Long TXT", record_type="TXT", host="_dmarc", value="x" * 300)
+        snippet = generate_bind_zone_file("example.com", [fix])
+
+        assert '"' + ("x" * 255) + '" "' + ("x" * 45) + '"' in snippet
+
+    def test_bind_zone_does_not_quote_address_rdata(self):
+        fix = RemediationFix(title="IPv4", record_type="A", host="www", value="203.0.113.15")
+        snippet = generate_bind_zone_file("example.com", [fix])
+
+        assert "www\tIN\tA\t203.0.113.15" in snippet

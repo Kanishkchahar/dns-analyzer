@@ -66,6 +66,13 @@ class TestDataSchemas:
         assert f.record_type == "A"
         assert f.message == "Test error message"
 
+    def test_finding_gets_stable_catalog_code_and_plain_language_guidance(self):
+        finding = Finding(severity="error", record_type="AXFR", message="Zone transfer was allowed.")
+
+        assert finding.code == "DNS-AXFR-001"
+        assert finding.explanation["fix"]
+        assert "never record contents" in finding.explanation["technical"]
+
     def test_summary_schema(self):
         s = Summary(errors=1, warnings=2, info=3)
         assert s.errors == 1

@@ -6,6 +6,7 @@ and configuration blocks for Cloudflare, AWS Route 53, GoDaddy, and BIND format.
 
 from typing import Any
 from app.models import RemediationFix
+from app.provider_templates import _quote_txt, _txt_chunks, apply_provider_templates
 
 
 def _detect_mx_provider(records: dict[str, Any] | None) -> tuple[str, str]:
@@ -157,6 +158,8 @@ def generate_remediation_fixes(
             }
         ))
 
+    for fix in fixes:
+        apply_provider_templates(domain, fix)
     return fixes
 
 
@@ -175,6 +178,7 @@ def generate_bind_zone_file(domain: str, fixes: list[RemediationFix]) -> str:
     for fix in fixes:
         if fix.record_type in ("TXT", "CNAME", "A", "AAAA"):
             lines.append(f"; {fix.title}")
-            lines.append(f"{fix.host}\tIN\t{fix.record_type}\t\"{fix.value}\"")
+            value = " ".join(_quote_txt(chunk) for chunk in _txt_chunks(fix.value)) if fix.record_type == "TXT" else fix.value
+            lines.append(f"{fix.host}\tIN\t{fix.record_type}\t{value}")
             lines.append("")
     return "\n".join(lines)

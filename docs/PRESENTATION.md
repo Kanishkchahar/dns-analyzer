@@ -44,7 +44,7 @@ bash run.sh
 
 | # | Domain to Test | What It Proves to the Audience |
 |---|----------------|---------------------------------|
-| **1** | `cloudflare.com` (or click Quick Chip) | **Enterprise Hardening:** Perfect Grade **A+ (100/100)**. Dual-Stack routing, Cryptographically signed DNSSEC with valid parent DS delegation, active BIMI logo, zero dangling CNAMEs, and strict `p=reject` DMARC. |
+| **1** | `cloudflare.com` (or click Quick Chip) | **Posture Overview:** Inspect the live score and available DNS, mail, TLS, DNSSEC delegation, and nameserver checks. Results depend on current DNS and service responses; do not assume a fixed grade. |
 | **2** | `google.com` | **Email Scale:** Strict DMARC enforcement, strong SPF, multiple verified DKIM selector keys, and redundant authoritative nameservers. |
 | **3** | `https://www.boot.dev/dashboard` | **Automatic URL Sanitization:** Paste a full dirty URL with protocol, path, and query parameters. The platform instantly extracts `boot.dev` automatically with zero user effort. |
 | **4** | `example.com` | **Actionable Remediation Wizard:** Reveals missing SPF/DMARC records. Click **1-Click Fixes →** to show auto-generated Cloudflare, Route 53, and GoDaddy records, plus the instant **Export BIND Zone File** feature. |
@@ -54,7 +54,7 @@ bash run.sh
 1. ⚡ **Asynchronous Concurrency**: *"Independent DNS and security checks run concurrently with bounded timeouts. Results can vary with DNS, CT, and target response times."*
 2. 🍱 **Bento Grid Security Cockpit**: *"The left hero card features an animated circular score ring anchoring the overall posture (A+ to F), accompanied by a 2×2 grid of rich, un-truncated diagnostic telemetry."*
 3. 🛡️ **Subdomain Takeover Defense**: *"Scans CNAME pointers against known cloud fingerprints (AWS S3, GitHub Pages, Heroku, Shopify) to catch dangling CNAMEs before malicious actors seize them."*
-4. 🔐 **DNSSEC Cryptographic Chain-of-Trust**: *"Validates Zone Signing Keys (ZSK), Key Signing Keys (KSK), algorithms (ECDSA, Ed25519), and parent DS records to guarantee protection against DNS cache poisoning (Kaminsky attacks)."*
+4. 🔐 **DNSSEC Delegation Check**: *"Inspects published DNSKEY and DS records and checks for a matching delegation. Full RRSIG cryptographic validation and root trust-chain verification are not implemented yet."*
 5. 📈 **SPF 10-Lookup Recursion Meter & Flattener**: *"Visual bar tracking lookups against the strict RFC 7208 limit of 10, with an automatic CIDR flattener that optimizes over-limit records to 0 lookups."*
 6. ✨ **BIMI Brand Inbox Validation**: *"Audits whether the domain publishes a verified SVG logo and satisfies strict DMARC criteria for official avatar display in Gmail and Apple Mail."*
 7. 🔧 **1-Click Copyable Fixes & BIND Export**: *"Not just a problem spotter — an automated solution. Generates exact zone fixes tailored for Cloudflare, AWS Route 53, and GoDaddy, plus downloadable standard BIND zone files."*
@@ -109,7 +109,7 @@ The dashboard overview is structured as a **Two-Tier Security Posture Cockpit** 
 * Traditional utilities (`dig`, `nslookup`) are single-query, CLI-only, and provide no contextual policy analysis or remediation.
 
 ### The Solution:
-DNS Analyzer v2 automates full-zone resolution, email spoofing protection audits, cryptographic verification, and takeover threat hunting into a unified, zero-dependency web interface.
+DNS Analyzer v2 combines DNS and email configuration checks, partial DNSSEC delegation inspection, selected web checks, and known-pattern takeover detection in a browser dashboard. The backend uses Python dependencies; the browser interface is served as static HTML, CSS, and JavaScript without a frontend build step.
 
 ---
 
@@ -280,10 +280,10 @@ The main analysis runs the checks below. Common web path checks and active port 
 * **What It Tells You**: Discovers "dangling" CNAME records pointing to decommissioned or deleted cloud instances.
 * **Why It Is Important**: **Critical CVE Vulnerability**. If a company deletes an AWS S3 bucket (`old-assets.s3.amazonaws.com`) but forgets to delete the DNS CNAME (`assets.company.com`), any attacker can register that bucket name on AWS for $0 and take over `assets.company.com`. They can then host phishing login pages, steal session cookies via cross-domain access, and distribute malware under the company's trusted domain.
 
-#### 19. DNSSEC Cryptographic Chain-of-Trust Audit (RFC 4033, 4034, 4035)
-* **What It Does**: Queries Zone Signing Keys (ZSK), Key Signing Keys (KSK), public key algorithms (ECDSA P-256, Ed25519, RSA), and validates parent TLD Delegation Signer (`DS`) records.
-* **What It Tells You**: Confirms whether the zone's DNS records are digitally signed and cryptographically tied to the global root trust anchor.
-* **Why It Is Important**: Standard DNS queries travel in plain unencrypted UDP. Attackers on public Wi-Fi, malicious ISPs, or compromised routers can inject fake DNS responses (DNS Cache Poisoning / Kaminsky attacks) to silently redirect users entering `yourbank.com` to an identical phishing server. DNSSEC renders cache poisoning mathematically impossible.
+#### 19. DNSSEC Delegation Inspection (RFC 4033, 4034, 4035)
+* **What It Does**: Queries DNSKEY and DS records, reports key algorithms, and checks whether a parent DS digest matches a published DNSKEY.
+* **What It Tells You**: Shows whether the observed delegation records match. It does not validate RRSIGs or construct the complete root-to-domain trust chain.
+* **Why It Is Important**: A mismatched DS and DNSKEY can cause validating resolvers to treat a signed zone as bogus. This check is a useful deployment signal, not a full DNSSEC validator.
 
 #### 20. BIMI (Brand Indicators for Message Identification) Check (RFC 8617)
 * **What It Does**: Queries `default._bimi.{domain}` for verified SVG brand logos and checks whether the domain's DMARC policy meets the strict eligibility criteria (`p=quarantine` or `p=reject` with `pct=100`).
@@ -291,8 +291,8 @@ The main analysis runs the checks below. Common web path checks and active port 
 * **Why It Is Important**: BIMI increases email open rates by up to 21%, dramatically boosts consumer brand trust, and visually proves to non-technical users that an email is 100% authentic.
 
 #### 21. Remediation Suggestions & BIND Zone File Export
-* **What It Does**: Cross-correlates all diagnostic findings to synthesize exact copy-paste DNS records tailored for Cloudflare, AWS Route 53, and GoDaddy, plus an exportable RFC-compliant BIND zone file (`.zone`).
-* **What It Tells You**: The precise configuration lines needed to transition a domain from a failing security posture to a hardened Grade A+.
+* **What It Does**: Creates draft DNS records and provider guidance for Cloudflare, Route 53, Namecheap, Hostinger, BigRock, Google Cloud DNS, and Azure DNS, plus a BIND zone snippet.
+* **What It Tells You**: Suggested configuration values to review with the DNS provider before publishing; generated fixes are not automatically applied.
 * **Why It Is Important**: A scanner that only reports errors creates friction. This feature bridges diagnosis and resolution, allowing administrators to harden their domain in under 60 seconds.
 
 ---
@@ -351,7 +351,7 @@ The main analysis runs the checks below. Common web path checks and active port 
 | **Phishing** | RFC 7489 | `check_dmarc_policy`: Audits `none` → `quarantine` → `reject` & `rua` | **ERROR/WARN**|
 | **Signatures**| RFC 6376 | `check_dkim_selectors`: Audits 15 selectors & public key extraction | **INFO/WARN** |
 | **Hijacking** | CVE Standards | `check_subdomain_takeover`: Dangling CNAME cloud provider audit | **ERROR** |
-| **Crypto** | RFC 4033–4035 | `check_dnssec`: Cryptographic chain-of-trust & DS delegation | **INFO/WARN** |
+| **Crypto** | RFC 4033–4035 | `check_dnssec`: DNSKEY inspection and DS-to-DNSKEY delegation match; no full RRSIG chain validation | **INFO/WARN** |
 | **Branding** | RFC 8617 | `check_bimi`: SVG logo publication & DMARC eligibility | **INFO** |
 | **Zone Cut** | RFC 1034/2181 | `discover_zone_apex`: Authoritative zone tree cut discovery | **INFO** |
 | **Web Security** | RFC 5246/8446 | `audit_tls_and_https`: Certificate expiration, TLS 1.3 & HSTS | **WARN/INFO** |
@@ -375,7 +375,7 @@ The main analysis runs the checks below. Common web path checks and active port 
 * **Q: Why use `asyncio.gather` instead of sequential lookups?**  
   *Answer:* DNS lookups are network I/O-bound. Running 7 DNS queries + SPF + DMARC + 15 DKIM selectors sequentially at ~150ms per network round-trip takes **3 to 4 seconds**. With `asyncio.gather`, all queries execute concurrently on Python's event loop, completing in the time of the single slowest lookup (~150ms total), achieving a **15x to 20x performance speedup**.
 * **Q: Why Vanilla JavaScript instead of React, Next.js, or Vue?**  
-  *Answer:* The application is an ultra-fast diagnostic utility. Vanilla JS requires **zero build step, zero compilation, and zero `node_modules`**. This eliminates supply chain vulnerabilities, guarantees sub-millisecond initial asset loading, and ensures the platform is 100% self-contained.
+  *Answer:* The browser interface is plain HTML, CSS, and JavaScript, so it needs no frontend build step or Node.js toolchain. The Python backend still installs its runtime dependencies.
 
 ---
 
@@ -386,7 +386,7 @@ The main analysis runs the checks below. Common web path checks and active port 
   *Answer:*
   - `p=none`: Audit mode. Unauthorized emails are delivered normally to recipient inboxes; only XML telemetry reports are generated. Does not stop phishing.
   - `p=quarantine`: Moderate enforcement. Unauthorized emails are routed to the recipient's Spam/Junk folder.
-  - `p=reject`: Maximum enforcement. Unauthorized emails are outright blocked and dropped at the SMTP gateway, achieving complete phishing immunity.
+  - `p=reject`: Requests receivers to reject messages that fail DMARC policy evaluation. Receiver behavior can vary, and this does not prevent every form of phishing or spoofing.
 * **Q: How is the overall Email Health Score computed?**  
   *Answer:* The algorithm starts at 100 points, deducting 15 points per ERROR (e.g. missing SPF/DMARC, duplicate records) and 8 points per WARNING (e.g. weak `p=none` policy, SPF lookups approaching 10). The score is clamped between 0 and 100 and mapped to letter grades: A+ (95–100), A (85–94), B (70–84), C (55–69), D (40–54), and F (<40).
 
@@ -444,7 +444,7 @@ The main analysis runs the checks below. Common web path checks and active port 
 
 ## 10. Closing Statement
 
-> *"DNS Analyzer v2 transforms complex, low-level networking protocols into clear, actionable security intelligence. By unifying concurrent DNS resolution, recursive SPF flattening, DMARC enforcement, DNSSEC validation, subdomain takeover defense, and an executive Bento Grid cockpit into a zero-dependency web platform, it provides both non-technical leaders and systems engineers with the exact insights needed to protect their digital perimeter. Thank you, and I look forward to your questions."*
+> *"DNS Analyzer v2 brings DNS and email checks, selected TLS and web diagnostics, known-pattern takeover checks, and remediation guidance into one dashboard. Its coverage panel shows where checks are incomplete, so teams can use the results as a starting point for investigation. Thank you."*
 
 ---
 
@@ -457,5 +457,8 @@ The main analysis runs the checks below. Common web path checks and active port 
 | `bash run.sh --docker` | **Docker v2:** Build and run containerized multi-stage service via Docker |
 | `bash run.sh --test` | Run the automated test suite |
 | `bash run.sh --setup-only` | Pre-install dependencies and prepare `venv/` without launching server |
+| `./venv/bin/dns-analyzer example.com` | Run the shared scan pipeline from the CLI |
+| `./venv/bin/dns-analyzer example.com --json` | Print machine-readable scan JSON |
+| `./venv/bin/dns-analyzer example.com --min-grade B` | Exit with code 2 when the grade is below B; code 3 indicates error findings |
 | `docker run -d -p 8000:8000 kanishkchahar/dns-analyzer:v2.1.0` | Run the versioned production image directly via Docker |
 | `bash run.sh --help` | Display command usage and script flags |

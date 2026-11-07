@@ -549,7 +549,7 @@ function hideResults() {
 }
 
 // ── Render ────────────────────────────────────────────────────
-function renderResults(data) {
+function renderResults(data, recheckContext = null) {
   currentDomain = data.domain;
   currentScanData = data;
   resultDomain.textContent = data.domain;
@@ -576,7 +576,7 @@ function renderResults(data) {
   badgeInfo.classList.toggle("zero", data.summary.info === 0);
 
   // Bento Grid Security Posture Cockpit
-  renderBentoCockpit(data);
+  renderBentoCockpit(data, recheckContext?.previousScore ?? null);
   renderScanCoverage(data.coverage || []);
   renderScanHistory(data);
 
@@ -603,6 +603,7 @@ function renderResults(data) {
   if (recordsCount) {
     recordsCount.textContent = `${renderedRecordTypes} record type${renderedRecordTypes === 1 ? "" : "s"}`;
   }
+  renderDnsAuthorityAudit(data.dns_posture || {});
 
   // Render dig view terminal simulation if active
   renderDigView();
@@ -636,6 +637,34 @@ function renderResults(data) {
 
   results.classList.add("visible");
   results.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderDnsAuthorityAudit(posture) {
+  const root = document.getElementById("dns-authority-audit");
+  if (!root) return;
+  const axfr = posture.axfr || {};
+  const consistency = posture.nameserver_consistency || {};
+  const wildcard = posture.wildcard || {};
+  const servers = axfr.servers || [];
+  const observations = consistency.observations || [];
+  const tone = status => status === "detected" || status === "transfer_allowed" ? "pill-warn" : status === "inconclusive" || status === "partial" ? "pill-warn" : "pill-info";
+  root.innerHTML = `
+    <h3>Authoritative DNS Checks</h3>
+    <div class="dns-authority-grid">
+      <article class="auth-card"><div class="auth-card-title"><span class="pill ${servers.some(item => item.records_exposed > 0) ? "pill-fail" : tone(axfr.status)}">${escapeHtml(axfr.status || "unavailable")}</span>Zone transfer (AXFR)</div>
+        <p class="auth-helper-copy">Only nameserver names and record counts are retained. Zone contents are never displayed.</p>
+        ${servers.map(item => `<div class="auth-card-row"><span class="auth-card-key">${escapeHtml(item.nameserver)}</span><span class="auth-card-val">${escapeHtml(item.status)} · ${Number(item.records_exposed || 0)} record(s)</span></div>`).join("") || `<p class="auth-empty">No authoritative nameservers were available to check.</p>`}
+      </article>
+      <article class="auth-card"><div class="auth-card-title"><span class="pill ${consistency.status === "complete" ? "pill-ok" : "pill-warn"}">${escapeHtml(consistency.status || "unavailable")}</span>Nameserver consistency</div>
+        <div class="auth-card-row"><span class="auth-card-key">SOA serials</span><span class="auth-card-val">${consistency.serials_match === true ? "Match" : consistency.serials_match === false ? "Differ" : "Not compared"}</span></div>
+        <div class="auth-card-row"><span class="auth-card-key">NS sets</span><span class="auth-card-val">${consistency.ns_sets_match === true ? "Match" : consistency.ns_sets_match === false ? "Differ" : "Not compared"}</span></div>
+        ${observations.map(item => `<div class="auth-card-row"><span class="auth-card-key">${escapeHtml(item.nameserver)} · ${escapeHtml(item.address || "")}</span><span class="auth-card-val">SOA ${escapeHtml(String(item.soa_serial ?? "unavailable"))}${item.errors ? ` · ${escapeHtml(JSON.stringify(item.errors))}` : ""}</span></div>`).join("")}
+      </article>
+      <article class="auth-card"><div class="auth-card-title"><span class="pill ${tone(wildcard.status)}">${escapeHtml(wildcard.status || "unavailable")}</span>Wildcard DNS</div>
+        <p class="auth-card-val">${escapeHtml((wildcard.addresses || []).join(", ") || wildcard.reason || "No wildcard address detected.")}</p>
+        <p class="auth-helper-copy">CT hostnames marked wildcard only resolve to these probe addresses and have no explicit CNAME.</p>
+      </article>
+    </div>`;
 }
 
 function renderScanCoverage(coverage) {
@@ -813,7 +842,7 @@ function updateTabBadges(data) {
 }
 
 // ── Bento Grid Security Posture Cockpit ───────────────────────
-function renderBentoCockpit(data) {
+function renderBentoCockpit(data, previousScore = null) {
   const hero = document.getElementById("bento-hero");
   const bentoRingFg = document.getElementById("bento-ring-fg");
   const bentoGrade = document.getElementById("bento-grade");
@@ -842,7 +871,10 @@ function renderBentoCockpit(data) {
 
     bentoRingFg.style.stroke = ringColor;
     bentoGrade.style.color = ringColor;
-    bentoRingFg.style.strokeDashoffset = circumference;
+    const startOffset = previousScore === null
+      ? circumference
+      : circumference - (circumference * Math.max(0, Math.min(100, previousScore)) / 100);
+    bentoRingFg.style.strokeDashoffset = startOffset;
     bentoGrade.textContent = sc.grade;
     bentoScoreNum.textContent = `${sc.score}/100`;
 
@@ -1129,8 +1161,10 @@ function renderFinding(f) {
     <div class="finding-meta">
       <span class="severity-tag">${escapeHtml(f.severity)}</span>
       <span class="finding-rtype">${escapeHtml(f.record_type)}</span>
+      <code class="finding-code">${escapeHtml(f.code || "GEN-001")}</code>
     </div>
     <div class="finding-msg">${msgHtml}</div>
+    ${f.explanation ? `<details class="finding-guidance"><summary>${escapeHtml(f.explanation.title || "What this means and what to do")}</summary><p>${escapeHtml(f.explanation.why || "")}</p><p><strong>How it could be abused:</strong> ${escapeHtml(f.explanation.attacker || "")}</p><p><strong>Suggested fix:</strong> ${escapeHtml(f.explanation.fix || "")}</p><small>${escapeHtml(f.explanation.technical || "")}${f.explanation.reference ? ` · ${escapeHtml(f.explanation.reference)}` : ""}</small></details>` : ""}
   `;
   return div;
 }
@@ -2014,7 +2048,7 @@ function renderSubdomains(subData) {
         const safe = /^[=+@\-\t\r]/.test(text) ? `'${text}` : text;
         return `"${safe.replaceAll('"', '""')}"`;
       };
-      const rows = [["hostname", "status", "addresses", "cname"], ...subs.map(item => [item.subdomain, item.status, (item.ips || []).join("; "), item.cname || ""])];
+      const rows = [["hostname", "status", "addresses", "cname", "first_seen", "risk_tags", "takeover_status"], ...subs.map(item => [item.subdomain, item.status, (item.ips || []).join("; "), item.cname || "", item.first_seen || "", (item.risk_tags || []).join("; "), item.takeover?.status || "not_checked"])];
       const csv = rows.map(row => row.map(cell).join(",")).join("\r\n");
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
       const url = URL.createObjectURL(blob);
@@ -2068,6 +2102,9 @@ function renderSubdomains(subData) {
             <th>Subdomain</th>
             <th>Resolved IPv4 / IPv6</th>
             <th>CNAME Pointer</th>
+            <th>Risk tags</th>
+            <th>First seen</th>
+            <th>Takeover</th>
             <th>Status</th>
             <th>Action</th>
           </tr>
@@ -2076,10 +2113,13 @@ function renderSubdomains(subData) {
   `;
 
   for (const s of subs) {
-    const isDangling = s.status === "dangling";
+    const isDangling = s.status === "dangling" || s.takeover?.vulnerable;
+    const takeoverStatus = s.takeover?.status || "not_checked";
     const statusPill = isDangling
-      ? `<span class="pill pill-fail"><span class="status-indicator-dot dot-yellow"></span> Dangling CNAME</span>`
-      : (s.status === "resolving"
+      ? `<span class="pill pill-fail"><span class="status-indicator-dot dot-yellow"></span>${s.takeover?.vulnerable ? "Takeover risk" : "Dangling CNAME"}</span>`
+      : (s.status === "wildcard_only"
+          ? `<span class="pill pill-info">Wildcard only</span>`
+          : s.status === "resolving"
           ? `<span class="pill pill-ok"><span class="status-indicator-dot dot-green"></span> Active</span>`
           : `<span class="pill pill-warn"><span class="status-indicator-dot dot-yellow"></span> Inactive</span>`);
 
@@ -2090,6 +2130,9 @@ function renderSubdomains(subData) {
         <td style="font-family:'Geist Mono', monospace; font-weight:600; color:var(--text-primary);">${escapeHtml(s.subdomain)}</td>
         <td style="font-family:'Geist Mono', monospace; font-size:12px;">${escapedIps || '<span style="color:var(--text-muted)">None</span>'}</td>
         <td style="font-family:'Geist Mono', monospace; font-size:12px; color:var(--text-muted);">${escapeHtml(s.cname || "—")}</td>
+        <td>${(s.risk_tags || []).map(tag => `<span class="pill pill-warn">${escapeHtml(tag)}</span>`).join(" ") || "—"}</td>
+        <td>${escapeHtml(s.first_seen || "Not reported")}</td>
+        <td>${escapeHtml(takeoverStatus)}</td>
         <td>${statusPill}</td>
         <td>
           <button class="btn btn-secondary btn-add-scope" data-host="${escapeHtml(s.subdomain)}" style="padding:4px 10px; font-size:11px;" type="button">
@@ -2156,6 +2199,13 @@ function renderRemediation(fixes, snippet) {
     `;
     card.appendChild(header);
 
+    const recheckButton = document.createElement("button");
+    recheckButton.type = "button";
+    recheckButton.className = "btn btn-secondary remediation-recheck-btn";
+    recheckButton.textContent = "Re-check after fix";
+    recheckButton.addEventListener("click", () => recheckAfterFix(fix, recheckButton));
+    card.appendChild(recheckButton);
+
     // Copy block with host and value
     const copyContent = `${fix.value}`;
     const copyBlock = makeCopyBlock(copyContent);
@@ -2195,6 +2245,12 @@ function renderRemediation(fixes, snippet) {
         item.innerHTML = `<strong style="color:var(--text-primary);">${escapeHtml(provider)}:</strong> ${escapeHtml(guide)}`;
         guidesContainer.appendChild(item);
       }
+      for (const [provider, command] of Object.entries(fix.provider_commands || {})) {
+        const item = document.createElement("div");
+        item.className = "fix-provider-item provider-command";
+        item.innerHTML = `<strong style="color:var(--text-primary);">${escapeHtml(provider)} CLI:</strong> <code>${escapeHtml(command)}</code>`;
+        guidesContainer.appendChild(item);
+      }
       card.appendChild(guidesContainer);
     }
 
@@ -2202,6 +2258,53 @@ function renderRemediation(fixes, snippet) {
   }
 
   remediationSection.style.display = "block";
+}
+
+async function recheckAfterFix(fix, button) {
+  if (!currentDomain || !currentScanData) return;
+  const previous = currentScanData;
+  const oldScore = previous.domain_score?.score ?? 0;
+  const observedTtl = previous.records?.[fix.record_type]?.ttl;
+  button.disabled = true;
+  button.textContent = "Re-checking…";
+  setLoading(true);
+  try {
+    const response = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain: currentDomain, force_refresh: true }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Fresh scan failed.");
+    const oldFindings = previous.findings || [];
+    const newFindings = data.findings || [];
+    const remaining = [...newFindings];
+    const fixed = [];
+    for (const oldFinding of oldFindings) {
+      const index = remaining.findIndex(item => item.code === oldFinding.code && item.message === oldFinding.message);
+      if (index >= 0) remaining.splice(index, 1);
+      else fixed.push(oldFinding);
+    }
+    renderResults(data, { previousScore: oldScore });
+    const note = document.createElement("section");
+    note.className = "recheck-result-card";
+    const describe = items => items.length
+      ? items.map(item => `<li><code>${escapeHtml(item.code || "GEN-001")}</code> ${escapeHtml(item.record_type)}: ${escapeHtml(item.explanation?.title || item.message)}</li>`).join("")
+      : "<li>None</li>";
+    note.innerHTML = `<h3>Re-check results</h3>
+      <p>Overall score: <strong>${oldScore} → ${data.domain_score?.score ?? 0}</strong></p>
+      <p><strong>Resolved since previous scan (${fixed.length})</strong></p><ul>${describe(fixed)}</ul>
+      <p><strong>New findings (${remaining.length})</strong></p><ul>${describe(remaining)}</ul>
+      <p class="dns-cache-note">DNS cache note: ${observedTtl ? `the previous ${escapeHtml(fix.record_type)} TTL was ${Number(observedTtl)} seconds. Recursive resolvers may continue serving cached answers for up to that TTL after a change.` : `the previous ${escapeHtml(fix.record_type)} TTL was unavailable, so the remaining DNS cache delay cannot be estimated.`}</p>`;
+    remediationList.prepend(note);
+    showToast("Fresh scan complete. Compare resolved and new findings above the fix list.");
+  } catch (error) {
+    showToast(error.message || "Fresh scan failed.", "danger");
+    button.disabled = false;
+    button.textContent = "Re-check after fix";
+  } finally {
+    setLoading(false);
+  }
 }
 
 // ── Utility ───────────────────────────────────────────────────
@@ -2432,7 +2535,8 @@ function generateMarkdownSummary(data) {
   if (data.findings && data.findings.length > 0) {
     data.findings.slice(0, 10).forEach((f) => {
       const emoji = f.severity === "error" ? "🔴" : f.severity === "warning" ? "🟡" : "ℹ️";
-      md.push(`- ${emoji} **[${f.record_type}]** ${f.message}`);
+      md.push(`- ${emoji} **[${f.code || "GEN-001"} · ${f.record_type}]** ${f.message}`);
+      if (f.explanation?.fix) md.push(`  - **Fix:** ${f.explanation.fix}`);
     });
     if (data.findings.length > 10) {
       md.push(`- *...and ${data.findings.length - 10} additional findings.*`);

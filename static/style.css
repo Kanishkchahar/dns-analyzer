@@ -72,13 +72,13 @@ p, .hero-sub, .modal-sub, .sec-card-desc, .remediation-sub {
 .app-header {
   border-bottom: 1px solid var(--hairline);
   background: var(--surface);
-  padding: 0 32px;
+  padding: 0 clamp(16px, 2.2vw, 40px);
   position: sticky;
   top: 0;
   z-index: 100;
 }
 .header-inner {
-  max-width: 1560px;
+  max-width: none;
   width: 100%;
   margin: 0 auto;
   height: 56px;
@@ -139,10 +139,10 @@ p, .hero-sub, .modal-sub, .sec-card-desc, .remediation-sub {
 }
 
 main {
-  max-width: 1560px;
+  max-width: none;
   width: 100%;
   margin: 0 auto;
-  padding: 40px 32px 80px;
+  padding: 36px clamp(16px, 2.2vw, 40px) 80px;
 }
 
 /* ── Hero / Input Section ── */
@@ -1830,6 +1830,28 @@ main {
   margin: 3px 0;
 }
 
+.remediation-recheck-btn { margin: 12px 0 4px; }
+.remediation-recheck-btn:disabled { opacity: 0.65; cursor: progress; }
+.recheck-result-card {
+  padding: 16px 18px;
+  margin: 0 0 16px;
+  border: 1px solid var(--accent, #63b9e8);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent, #63b9e8) 7%, var(--surface, #1b1e22));
+}
+.recheck-result-card h3 { margin: 0 0 10px; }
+.recheck-result-card p { margin: 8px 0 4px; }
+.recheck-result-card ul { margin: 4px 0 10px; padding-left: 22px; }
+.recheck-result-card li { margin: 4px 0; }
+.recheck-result-card code { color: var(--accent, #63b9e8); }
+.dns-cache-note {
+  padding: 10px 12px;
+  border-left: 3px solid var(--warning, #e0a458);
+  border-radius: 4px;
+  background: rgba(224, 164, 88, 0.08);
+  color: var(--text-secondary);
+}
+
 /* ── Modal Dialog (Shortcuts & Accessibility) ── */
 dialog.modal {
   border: none;
@@ -2684,3 +2706,13 @@ dialog.modal::backdrop {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+.dns-authority-audit { margin-top: 24px; }
+.dns-authority-audit h3 { margin: 0 0 12px; color: var(--text-primary); font-size: 16px; }
+.dns-authority-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.dns-authority-grid .auth-card { min-width: 0; }
+@media (max-width: 900px) { .dns-authority-grid { grid-template-columns: 1fr; } }
+.finding-code { color: var(--accent); font: 10px 'Geist Mono', monospace; opacity: .9; }
+.finding-guidance { margin-top: 8px; color: var(--text-secondary); font-size: 12px; }
+.finding-guidance summary { color: var(--accent); cursor: pointer; font-size: 11px; font-weight: 600; }
+.finding-guidance p { margin-top: 6px; }
+.finding-guidance small { display: block; margin-top: 6px; color: var(--text-muted); }

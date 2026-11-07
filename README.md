@@ -2,6 +2,8 @@
 
 A high-performance, asynchronous DNS and web security posture scanner. Enter a domain or full URL to review DNS records (including CAA), SPF / DMARC / DKIM, DNSSEC, MTA-STS and TLS-RPT, TLS certificates, browser security headers, passive Certificate Transparency subdomains, and more. The dashboard includes optional scoped path discovery, scan coverage and browser-local history, CSV and report exports, and actionable findings.
 
+The dashboard uses the full browser width. Current releases also include direct-authority AXFR and nameserver checks, wildcard DNS detection, a command-line scanner, finding explanations, provider-specific remediation guidance, and a cached grade badge endpoint. See [Current scope and limitations](#current-scope-and-limitations) for checks that are not implemented yet.
+
 ---
 
 ## 🚀 Quick Start
@@ -97,20 +99,49 @@ docker stop dns-analyzer-v2 && docker rm dns-analyzer-v2
 - **DKIM Multi-Selector Scanner (RFC 6376)**: Checks common selectors and lets users supply up to 20 additional selector names. Results include public key metadata and distinguish missing records from inconclusive DNS lookups.
 - **Mail Transport Security**: Checks `_mta-sts` and `_smtp._tls` DNS records, safely retrieves a published MTA-STS policy file, and reports TLS-RPT destinations. It does not send email.
 - **Subdomain Takeover Defense (CVE Threat Hunting)**: Detects dangling CNAMEs pointing to abandoned cloud endpoints (AWS S3, GitHub Pages, Heroku, Shopify, Zendesk, Surge, Azure, Vercel) before attackers hijack them.
-- **DNSSEC Chain-of-Trust (RFC 4033–4035)**: Audits Key Signing Keys (KSK), Zone Signing Keys (ZSK), algorithms (ECDSA, Ed25519, RSA), and parent registry DS records to guarantee immunity against DNS cache poisoning (Kaminsky attacks).
+- **DNSSEC delegation check (RFC 4033–4035)**: Inspects DNSKEY and parent DS records, key algorithms, and DS-to-DNSKEY matches. This is a partial check, not complete DNSSEC signature or trust-chain validation.
+- **Authoritative DNS posture**: Attempts TCP AXFR against listed nameservers (reports only record counts), probes random labels for wildcard DNS, and directly compares nameserver SOA serials and NS answers.
 - **TLS & HTTPS Security Audit**: Certificate validity, negotiated TLS, HTTPS redirection, HSTS, CSP risk notes, Permissions-Policy, cross-origin isolation headers, and cookie security flags. An `OPTIONS` request reports advertised methods only; the scanner does not send write-method probes.
-- **Passive Subdomain Inventory**: Queries Certificate Transparency (CT) logs for publicly logged hostnames, checks discovered DNS pointers, and provides CSV export.
+- **Passive Subdomain Inventory**: Queries Certificate Transparency (CT) logs for publicly logged hostnames, resolves discovered names, checks CNAME takeover signatures, labels wildcard-only results, marks risky labels, records available first-seen dates, sorts by risk, and provides CSV export.
 - **Optional Common Path Scan**: Checks a bounded set of common web paths and reads same-origin `robots.txt` and sitemap references. It does not crawl directories; discovered paths are labeled for review and are not accessed automatically beyond the bounded checks.
 - **Scan Coverage & Change History**: Shows completed, partial, blocked, and optional checks. The browser can compare DNS, CT, TLS certificate, and optional path results with earlier scans stored locally.
 - **Scoped Network Inventory & Port Verification**: Nmap-style scoped target resolution and safe port auditing with strict SSRF guardrails (blocking RFC 1918 private subnets `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and loopback `127.0.0.0/8`).
 - **BIMI Brand Certification (RFC 8617)**: Verifies SVG brand logo publication and VMC eligibility for inbox verification in Gmail, Apple Mail, and Yahoo Mail.
 
 ### 3. Actionable Remediation & Multi-Format Export
-- **1-Click DNS Fix Generator**: Tailored copy-paste records for Cloudflare, AWS Route 53, and GoDaddy.
+- **DNS Fix Generator**: Draft copy-paste records with provider guidance for Cloudflare, AWS Route 53, Namecheap, Hostinger, BigRock, Google Cloud DNS, and Azure DNS. CLI examples are included where supported. Review generated changes before applying them.
+- **Re-check after a fix**: Runs a fresh scan, compares findings, and shows the observed record TTL as a cache-delay guide.
+- **Finding catalog**: Gives findings stable codes and shared plain-language explanations, attacker context, technical notes, and fixes.
 - **Export BIND Zone File**: Generates compliant `.zone` configuration files with one click.
 - **Standalone Offline Report**: Single-file HTML report with inlined styles that opens without a web server.
 - **CLI `dig` Terminal Simulation**: Toggle between visual card view and an interactive colorized terminal output (`dig +noall +answer`).
 - **One-Click Markdown & JSON Export**: Instant copyable Markdown summary tables for GitHub/Slack and raw JSON exports for automation.
+- **Command-line scanner**: `dns-analyzer example.com` runs the same scan pipeline as the API; supports JSON and minimum-grade gates.
+- **Grade badge API**: `/api/badge/{domain}` serves an SVG badge only after an in-memory scan result exists.
+
+### CLI
+
+The setup script installs the `dns-analyzer` command into `venv/`:
+
+```bash
+bash run.sh --setup-only
+./venv/bin/dns-analyzer example.com
+./venv/bin/dns-analyzer example.com --json
+./venv/bin/dns-analyzer example.com --min-grade B
+```
+
+Exit codes: `0` success, `1` invalid input or tool failure, `2` grade below `--min-grade`, and `3` when the scan has error-level findings. Error findings take precedence over the grade threshold.
+
+### Current scope and limitations
+
+- DNSSEC currently verifies DS-to-DNSKEY delegation matching. It does not perform cryptographic RRSIG validation or display a complete root/TLD/domain trust chain.
+- AXFR results expose server status and record counts only; record contents are not returned. Network checks are time-bounded and use public nameserver addresses.
+- Takeover detection uses the signatures shipped with this repository; it is not an exhaustive service catalog and automated fingerprints can become stale.
+- Scan history remains in browser local storage. There is no server-side scheduler, verified-account system, email alerting, or webhook monitoring.
+- The API does not yet provide the planned bulk full-analysis workflow. The existing scoped network list scan is a separate diagnostic.
+- RDAP domain-expiry and dangling-nameserver registration checks are not implemented yet.
+- Grade badges are process-local and disappear when the server restarts or its scan cache expires. They are not backed by a persistent scan database.
+- TLS/HTTP, CT, DNS, and third-party responses can fail or vary. The coverage panel reports checks that are inconclusive or unavailable; results are not a guarantee of security.
 
 ---
 
@@ -138,6 +169,10 @@ docker stop dns-analyzer-v2 && docker rm dns-analyzer-v2
 ```
 dns-analyzer/
 ├── app/                     # FastAPI backend, scans, models, and report builder
+│   ├── cli.py                # Installed command-line entry point
+│   ├── dns_posture.py        # AXFR, wildcard, and direct NS consistency checks
+│   ├── finding_catalog.py    # Stable finding codes and explanations
+│   └── provider_templates.py # DNS provider guidance and TXT formatting
 ├── static/                  # Browser UI (HTML, CSS, and JavaScript)
 ├── tests/                   # Unit, integration, and API tests
 ├── docs/
@@ -147,6 +182,7 @@ dns-analyzer/
 ├── .dockerignore            # Files excluded from Docker build context
 ├── pytest.ini               # Pytest discovery and warning configuration
 ├── requirements.txt         # Python runtime and test dependencies
+├── pyproject.toml            # Package metadata and dns-analyzer CLI entry point
 └── run.sh                   # Local setup, test, Docker, and server commands
 ```
 
@@ -165,7 +201,11 @@ The local `venv/` (or `.venv/`) is generated by the setup script and ignored by 
   "domain": "example.com"
 }
 ```
-*(Also accepts dirty URLs such as `https://example.com/path?query=1` — the hostname is auto-extracted).*
+
+### 2. Read a previously scanned domain's grade badge
+
+`GET /api/badge/{domain}` returns a cached SVG badge if a scan result is still present in this server process. It returns `404` when that domain has not been scanned or the in-memory result has expired.
+*(Also accepts a full URL such as `https://example.com/path?query=1`; the hostname is extracted.)*
 
 **Response Schema (Sample):**
 ```json
@@ -256,11 +296,11 @@ docker build --target test -t dns-analyzer-test .
 |:---|:---|:---|
 | **RFC 1034 / 1035** | Domain System Concepts & Facility | Core record structure, CNAME exclusivity, NS delegation |
 | **RFC 1912 / 2182** | DNS Operational Guidelines | Authoritative server redundancy, SOA refresh/retry sanity |
-| **RFC 5321** | Simple Mail Transfer Protocol (SMTP) | MX existence, mail host reachability, delivery guarantee |
+| **RFC 5321** | Simple Mail Transfer Protocol (SMTP) | MX existence and mail host address resolution |
 | **RFC 7208** | Sender Policy Framework (SPF) | Authorized senders, syntax qualifiers, 10-lookup limit |
 | **RFC 7489** | DMARC Domain-based Message Authentication | Reject/quarantine enforcement, alignment, aggregate reports |
 | **RFC 6376** | DomainKeys Identified Mail (DKIM) | Selector discovery, public key extraction, cryptographic integrity |
-| **RFC 4033 / 4034 / 4035** | DNS Security Extensions (DNSSEC) | RRSIG validation, DNSKEY verification, DS parent trust delegation |
+| **RFC 4033 / 4034 / 4035** | DNS Security Extensions (DNSSEC) | DNSKEY inspection and DS-to-DNSKEY delegation matching |
 | **RFC 8617** | Brand Indicators for Message Identification (BIMI) | Official logo presentation in verified client inboxes |
 | **RFC 8659** | DNS Certification Authority Authorization (CAA) | Certificate issuance policy and inherited parent records |
 | **RFC 8461** | SMTP MTA Strict Transport Security (MTA-STS) | Published mail transport policy and HTTPS policy-file checks |
@@ -284,7 +324,10 @@ Coverage spans:
 - `test_analyzer.py`: 9 RFC infrastructure checks and summary generation
 - `test_spf.py`: SPF parsing, lookup recursion tracking, and CIDR record flattening
 - `test_email_auth.py`: DMARC policy grading, DKIM selectors, and weighted health scoring
-- `test_dnssec.py`: Cryptographic chain-of-trust, algorithm detection, and DS validation
+- `test_dnssec.py`: DNSKEY/DS delegation status and matching
+- `test_dns_posture.py`: AXFR count-only behavior, wildcard detection, and direct-authority consistency
+- `test_cli.py`: Human/JSON output, grade threshold, and exit codes
+- `test_provider_templates.py`: TXT chunk formatting and provider remediation guidance
 - `test_takeover.py`: Subdomain takeover fingerprints and dangling CNAME detection
 - `test_bimi.py`: BIMI logo parsing, VMC verification, and DMARC eligibility
 - `test_network_scan.py`: Scope verification, SSRF blocking, and active port scan policies

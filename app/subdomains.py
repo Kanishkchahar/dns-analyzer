@@ -14,6 +14,7 @@ import dns.asyncresolver
 
 from app.models import Finding
 from app.resolver import _safe_query
+from app.takeover import check_subdomain_takeover
 
 
 async def discover_passive_subdomains(
@@ -35,7 +36,7 @@ async def discover_passive_subdomains(
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
 
-    discovered_names: set[str] = set()
+    discovered_names: dict[str, str | None] = {}
 
     try:
         url = f"https://crt.sh/?q=%25.{norm_domain}&output=json"
@@ -71,17 +72,20 @@ async def discover_passive_subdomains(
                         for item in raw_json:
                             if isinstance(item, dict):
                                 name_val = item.get("name_value", "")
+                                first_seen = str(item.get("entry_timestamp") or item.get("not_before") or "") or None
                                 for line in name_val.splitlines():
                                     clean_name = line.strip().lower().lstrip("*.")
                                     if clean_name.endswith(f".{norm_domain}") and clean_name != norm_domain:
-                                        discovered_names.add(clean_name)
+                                        prior = discovered_names.get(clean_name)
+                                        if clean_name not in discovered_names or (first_seen and (not prior or first_seen < prior)):
+                                            discovered_names[clean_name] = first_seen
                         if is_truncated:
                             result["status"] = "partial"
                             result["incomplete"] = True
                             findings.append(Finding(
                                 severity="info",
                                 record_type="Inventory",
-                                message=f"Certificate Transparency log stream reached {max_bytes // 1024} KB limit. Partial inventory returned ({len(discovered_names)} subdomains discovered).",
+                            message=f"Certificate Transparency log stream reached {max_bytes // 1024} KB limit. Partial inventory returned ({len(discovered_names)} subdomains discovered).",
                             ))
                     elif is_truncated:
                         result["status"] = "unavailable"
@@ -119,7 +123,7 @@ async def discover_passive_subdomains(
 
     # Cap to max_hosts for responsive performance
     discovered_total = len(discovered_names)
-    sorted_hosts = sorted(list(discovered_names))[:max_hosts]
+    sorted_hosts = sorted(discovered_names)[:max_hosts]
     result["discovered_total"] = discovered_total
     result["discovered_count"] = len(sorted_hosts)
     if discovered_total > max_hosts and result["status"] == "complete":
@@ -140,25 +144,44 @@ async def discover_passive_subdomains(
     async def _resolve_subdomain(sub: str) -> dict[str, Any]:
         async with sub_semaphore:
             a_task = _safe_query(resolver, sub, "A")
+            aaaa_task = _safe_query(resolver, sub, "AAAA")
             cname_task = _safe_query(resolver, sub, "CNAME")
-            a_res, cname_res = await asyncio.gather(a_task, cname_task)
+            a_res, aaaa_res, cname_res = await asyncio.gather(a_task, aaaa_task, cname_task)
 
-            ips = a_res.get("records", []) if a_res.get("status") == "ok" else []
+            ips = (a_res.get("records", []) if a_res.get("status") == "ok" else []) + (aaaa_res.get("records", []) if aaaa_res.get("status") == "ok" else [])
             cnames = cname_res.get("records", []) if cname_res.get("status") == "ok" else []
             cname_target = cnames[0] if cnames else None
 
-            query_statuses = (a_res.get("status"), cname_res.get("status"))
+            query_statuses = (a_res.get("status"), aaaa_res.get("status"), cname_res.get("status"))
             query_failed = any(s in ("timeout", "no_nameservers", "error") for s in query_statuses)
             status = "resolving" if ips else ("dangling" if cname_target else ("unverified" if query_failed else "inactive"))
+            labels = set(sub.split("."))
+            risk_tags = sorted(labels.intersection({"dev", "development", "staging", "stage", "test", "testing", "admin", "old", "legacy", "internal", "int", "qa", "uat", "backup"}))
+            takeover_data = None
+            if cname_target:
+                takeover_data, _ = await check_subdomain_takeover(
+                    sub,
+                    {"CNAME": {"status": "ok", "records": [cname_target]}},
+                    resolver,
+                )
             return {
                 "subdomain": sub,
                 "ips": ips,
                 "cname": cname_target,
                 "status": status,
+                "first_seen": discovered_names.get(sub),
+                "risk_tags": risk_tags,
+                "takeover": takeover_data,
             }
 
     sub_tasks = [_resolve_subdomain(h) for h in sorted_hosts]
     sub_results = await asyncio.gather(*sub_tasks)
+    risk_order = {"dangling": 0, "unverified": 1, "resolving": 2, "inactive": 3}
+    for item in sub_results:
+        tag_weight = 2 if item["risk_tags"] else 0
+        takeover_weight = 5 if (item.get("takeover") or {}).get("vulnerable") else 0
+        item["risk_score"] = takeover_weight + tag_weight + (1 if item["status"] == "dangling" else 0)
+    sub_results.sort(key=lambda item: (-item["risk_score"], risk_order.get(item["status"], 4), item["subdomain"]))
     result["subdomains"] = sub_results
 
     unresolved_count = sum(1 for item in sub_results if item["status"] == "unverified")
@@ -178,6 +201,14 @@ async def discover_passive_subdomains(
             severity="warning",
             record_type="SUBDOMAINS",
             message=f"Discovered {dangling_count} subdomain(s) with dangling CNAME pointers via Certificate Transparency. Review for subdomain takeover risk.",
+        ))
+
+    takeover_hosts = [item["subdomain"] for item in sub_results if (item.get("takeover") or {}).get("vulnerable")]
+    if takeover_hosts:
+        findings.append(Finding(
+            severity="error",
+            record_type="SUBDOMAIN TAKEOVER",
+            message=f"The CT inventory found {len(takeover_hosts)} hostname(s) with a dangling CNAME matching a known provider signature: {', '.join(takeover_hosts[:8])}{'…' if len(takeover_hosts) > 8 else ''}. Verify ownership and reclaim or remove the DNS alias.",
         ))
 
     return result, findings
