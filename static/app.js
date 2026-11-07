@@ -1572,7 +1572,7 @@ function renderTLS(tls) {
 
   const cert = tls.certificate;
   let statusClass = "badge-green";
-  let statusText = "TLS 1.3 Active";
+  let statusText = tls.tls_version ? `${tls.tls_version} Active` : "Active";
   if (!cert || cert.is_expired) {
     statusClass = "badge-red";
     statusText = "Expired";
