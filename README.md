@@ -1,10 +1,10 @@
-# DNS Analyzer v2 — InboxShield Edition
+# DNS Analyzer v2 — Security Posture Cockpit Edition
 
-A web-based DNS lookup, misconfiguration analyzer, and **email authentication security scanner**. Enter any domain — or paste a full URL like `https://example.com/page` — and get real DNS records (A, AAAA, MX, NS, TXT, CNAME, SOA) fetched concurrently, plus SPF / DMARC / DKIM analysis, an email health score, and a downloadable diagnostic report.
+A high-performance, asynchronous DNS audit and email authentication security scanner. Enter any domain — or paste a full URL like `https://example.com/page` — and get real DNS records (A, AAAA, MX, NS, TXT, CNAME, SOA) fetched concurrently via non-blocking I/O, plus SPF / DMARC / DKIM analysis, DNSSEC chain validation, subdomain takeover defense, BIMI logo auditing, an executive Bento Grid security cockpit, and downloadable diagnostic reports.
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ### One-Command Setup & Launch (Recommended)
 
@@ -12,39 +12,49 @@ A web-based DNS lookup, misconfiguration analyzer, and **email authentication se
 bash run.sh
 ```
 
-This all-in-one script will:
-- Check your Python version (3.11+ required)
-- Automatically verify or create the `venv/` virtual environment
-- Install any missing dependencies from `requirements.txt`
-- Start the server on **http://127.0.0.1:8000**
+This all-in-one runner automatically:
+- Verifies Python 3.11+ (supports Python 3.11, 3.12, 3.13, 3.14)
+- Verifies or self-heals the local `venv/` virtual environment
+- Installs or updates dependencies from `requirements.txt`
+- Starts the production server on **http://127.0.0.1:8000** with auto-reload
 
-#### Custom port
+#### Custom Port
 
 ```bash
 bash run.sh 9000
 ```
 
-#### Setup only (without launching server)
+#### Setup Only (Prepare Environment Without Starting Server)
 
 ```bash
 bash run.sh --setup-only
 ```
 
+#### Automated Test Suite (94 Automated Tests)
+
+```bash
+bash run.sh --test
+# Or run pytest directly in venv:
+./venv/bin/pytest -v
+```
+
+---
+
 ### Run with Docker
 
-Build the image from the project directory:
+Build the lightweight container image:
 
 ```bash
 docker build -t dns-analyzer .
 ```
 
-Run it and open **http://127.0.0.1:8000**:
+Run containerized on port 8000:
 
 ```bash
 docker run --rm -p 8000:8000 dns-analyzer
 ```
 
-To use another host port, map it to container port 8000, for example:
+Map to any custom host port (e.g. 9000):
 
 ```bash
 docker run --rm -p 9000:8000 dns-analyzer
@@ -52,177 +62,195 @@ docker run --rm -p 9000:8000 dns-analyzer
 
 ---
 
-## Scripts
+## ⚡ Key Architecture & Features
 
-| Script | What it does |
-|--------|-------------|
-| `bash run.sh` | **Unified runner:** verifies environment, auto-installs dependencies, and launches server |
-| `bash run.sh <port>` | Starts the server on a custom port (e.g. `9000`) |
-| `bash run.sh --setup-only` | Installs dependencies and prepares `venv` without launching the server |
+### 1. Executive Security Posture Cockpit (Asymmetric Bento Grid)
+- **Dominant Score Ring Hero (Left Column)**: Animated SVG circular health ring translating DNS & email posture into an immediate letter grade (**A+ to F**) and numerical score (**0–100**).
+- **Executive Posture Subtitle & Filter Badges**: Real-time status headlines (`All Systems Authenticated & Safe`, `Warnings — Review Advised`, or `Critical Issues Detected`) with one-click filtering by severity (Errors, Warnings, Info).
+- **Four 2×2 Quadrants (Zero Text Truncation)**:
+  - **🌐 DNS Infrastructure**: Dual-Stack status (IPv4 / IPv6), redundant NS count, and SOA authority.
+  - **✉️ Email Authentication**: Phishing defense posture, SPF policy, DMARC enforcement level, and DKIM selectors.
+  - **🔐 Cryptography & Takeover**: DNSSEC key algorithms, DS delegation status, and dangling CNAME checks.
+  - **🔧 1-Click Remediation**: Number of copy-paste zone fixes ready with direct jump navigation.
 
----
+### 2. Comprehensive Scan Suite
+- **7 Core DNS Record Types**: A, AAAA, MX, NS, TXT, CNAME, SOA fetched in parallel via `asyncio.gather`.
+- **9 RFC Infrastructure Rules**: Dual-stack reachability, NS redundancy, NS/MX IP resolution, CNAME coexistence conflicts (RFC 1034), SOA refresh/retry sanity (RFC 1912), and TTL bounds.
+- **SPF Deep Audit (RFC 7208)**: Syntax validation, recursion tree traversal against the 10-lookup limit, `+all` spoof detection, and automatic CIDR flattening.
+- **DMARC Security Engine (RFC 7489)**: Evaluates policy enforcement (`none` → `quarantine` → `reject`), alignment flags (`adkim`, `aspf`), and aggregate reporting (`rua`).
+- **DKIM Multi-Selector Scanner (RFC 6376)**: Concurrently audits 15 common selector endpoints (`google`, `default`, `s1`, `mail`, `k1`, `zendesk`, `amazonses`, etc.) and extracts public keys.
+- **Subdomain Takeover Defense (CVE Threat Hunting)**: Detects dangling CNAMEs pointing to abandoned cloud endpoints (AWS S3, GitHub Pages, Heroku, Shopify, Zendesk, Surge, Azure, Vercel) before attackers hijack them.
+- **DNSSEC Chain-of-Trust (RFC 4033–4035)**: Audits Key Signing Keys (KSK), Zone Signing Keys (ZSK), algorithms (ECDSA, Ed25519, RSA), and parent registry DS records to guarantee immunity against DNS cache poisoning (Kaminsky attacks).
+- **BIMI Brand Certification (RFC 8617)**: Verifies SVG brand logo publication and VMC eligibility for inbox verification in Gmail, Apple Mail, and Yahoo Mail.
 
-## Usage
-
-1. Paste any **domain** or **full URL** into the input box and press **Analyze**
-2. Examples of accepted input:
-   - `example.com`
-   - `www.boot.dev`
-   - `https://www.boot.dev/dashboard`
-   - `https://github.com/user/repo?tab=stars`
-3. The hostname is automatically extracted from URLs — no need to clean it up manually
-4. View the **Email Health Score** (A+ to F) and **SPF / DMARC / DKIM** authentication cards
-5. Click **Download Report** to save a standalone HTML report of the results
-
----
-
-## Features
-
-### v1 — DNS Infrastructure Analysis
-- Concurrent DNS resolution via `asyncio.gather` — all record types in one round trip
-- Accepts full URLs — automatically extracts the hostname
-- Rule-based analyzer with 9 check categories:
-  - Domain IP resolution
-  - NS record existence & redundancy
-  - NS host reachability
-  - MX record existence & host reachability
-  - CNAME conflict detection (RFC 1034)
-  - SOA sanity (refresh/retry/expire values)
-  - TTL sanity (zero TTL, extremely high TTL)
-- Color-coded findings dashboard (error / warning / info)
-- Summary badges (errors / warnings / info counts)
-- Downloadable self-contained HTML report (works offline)
-- Clean 400 errors for invalid input — no silent failures
-- Accessible UI: skip link, `aria-live`, `:focus-visible` rings, reduced-motion support
-
-### v2 — InboxShield Email & Enterprise Security Suite ✨
-- **SPF Analysis** (RFC 7208):
-  - Parse SPF TXT records into structured data
-  - Recursive DNS lookup counting against the 10-lookup limit
-  - SPF record flattening — auto-generates an optimized `ip4`/`ip6`-only record
-  - Detects: missing SPF, multiple SPF records, `+all`, `?all`, deprecated `ptr` mechanism, oversized records
-- **DMARC Analysis** (RFC 7489):
-  - Fetch and parse `_dmarc.{domain}` TXT records
-  - Policy strength grading: `none` → `quarantine` → `reject`
-  - Detects: missing DMARC, weak policies, no aggregate reporting, partial enforcement (`pct < 100`)
-- **DKIM Analysis** (RFC 6376):
-  - Concurrent scan of 15 common selectors (`google`, `default`, `selector1`, `selector2`, `s1`, `s2`, `dkim`, `mail`, `k1`, `mandrill`, `zendesk`, `amazonses`, etc.)
-  - Public key extraction and validation
-- **Subdomain Takeover Defense Scanner** (CVE Threat Hunting):
-  - Analyzes CNAME pointers against known cloud provider fingerprints (AWS S3, GitHub Pages, Heroku, Shopify, Zendesk, Surge, Ghost, Azure, Vercel)
-  - Detects dangling CNAMEs pointing to unresolvable/decommissioned endpoints before attackers hijack them
-- **DNSSEC Cryptographic Chain-of-Trust** (RFC 4033, 4034, 4035):
-  - Audits Key Signing Keys (KSK), Zone Signing Keys (ZSK), algorithms (ECDSA, Ed25519, RSA), and parent DS delegation records
-  - Verifies immunity against DNS cache poisoning (Kaminsky attacks)
-- **BIMI Brand Certification** (RFC 8617):
-  - Audits `default._bimi.{domain}` for verified company logo display in Gmail, Apple Mail, and Yahoo Mail
-- **1-Click Remediation & BIND Zone File Generator**:
-  - Automatically generates tailored copy-paste DNS records for Cloudflare, AWS Route 53, and GoDaddy
-  - Exportable RFC-standard BIND zone file (`.zone`) with one click
-- **Design Engineering & UI/UX Craft** (Inspired by Linear, Vercel, Stripe, Raycast & Apple):
-  - **Keyboard-First Ergonomics**: Instant navigation with `/` to search, `?` for shortcuts modal, `1`–`4` for sample chips, `f` for severity filter cycling, `d` for offline reports, and `z` for BIND zone export
-  - **Executive Posture Matrix**: 4-quadrant high-level health overview (Routing, Redundancy, Email Defense, DNSSEC)
-  - **Smart Provider Intelligence**: Auto-detects MX & NS providers (Google Workspace, Microsoft 365, Cloudflare, Route 53) and categorizes cryptic TXT verification records (SPF, Google, Apple, Stripe, GitHub)
-  - **Actionable 1-Click Resolution**: Copyable DNS records with checkmark affirmations and humanized time intervals (`7200s (2 hrs)`)
-  - **Sticky Jump Navigation & Frosted Glass Toast**: Blur backdrops (`backdrop-filter`), active scroll tracking, and 350ms staggered card reveals
+### 3. Actionable Remediation & Multi-Format Export
+- **1-Click DNS Fix Generator**: Tailored copy-paste records for Cloudflare, AWS Route 53, and GoDaddy.
+- **Export BIND Zone File**: Generates compliant `.zone` configuration files with one click.
+- **Standalone Offline Report**: Single-file HTML report with inlined styles that opens without a web server.
+- **CLI `dig` Terminal Simulation**: Toggle between visual card view and an interactive colorized terminal output (`dig +noall +answer`).
+- **One-Click Markdown & JSON Export**: Instant copyable Markdown summary tables for GitHub/Slack and raw JSON exports for automation.
 
 ---
 
-## Project Structure
+## ⌨️ Radical Ease of Access & Shortcuts
+
+| Shortcut | Action |
+|:---:|---|
+| <kbd>/</kbd> | Focus the domain search bar from anywhere |
+| <kbd>Enter</kbd> | Run concurrent analysis |
+| <kbd>1</kbd> – <kbd>4</kbd> | Analyze sample domains (`google.com`, `cloudflare.com`, etc.) |
+| <kbd>f</kbd> | Cycle findings severity filters (All → Errors → Warnings → Info) |
+| <kbd>v</kbd> | Toggle between Record Cards and CLI `dig` Terminal view |
+| <kbd>c</kbd> | Copy shareable scan link (`?domain=...`) |
+| <kbd>m</kbd> | Copy formatted Markdown summary for GitHub or Slack |
+| <kbd>j</kbd> | Export complete raw scan JSON data |
+| <kbd>d</kbd> | Download standalone offline HTML diagnostic report |
+| <kbd>z</kbd> | Download copy-paste BIND zone file |
+| <kbd>?</kbd> | Open Keyboard Shortcuts & Accessibility Modal |
+| <kbd>Esc</kbd> | Dismiss modals, error banners, or clear search queries |
+
+---
+
+## 📁 Project Structure
 
 ```
 dns-analyzer/
 ├── app/
-│   ├── main.py          # FastAPI app & routes (high-concurrency gateway)
-│   ├── resolver.py      # Async DNS lookups (concurrent)
-│   ├── analyzer.py      # 9 DNS infrastructure checks
-│   ├── spf.py           # SPF parser, lookup counter, flattener
-│   ├── email_auth.py    # DMARC/DKIM analysis & health scoring
-│   ├── dnssec.py        # DNSSEC cryptographic chain-of-trust audit ✨
-│   ├── takeover.py      # Subdomain takeover & dangling CNAME detector ✨
-│   ├── bimi.py          # BIMI brand logo email inbox validator ✨
-│   ├── remediation.py   # 1-Click DNS fix & BIND zone file generator ✨
-│   ├── models.py        # Pydantic request/response schemas
-│   └── report.py        # Standalone offline HTML diagnostic reports
+│   ├── main.py          # FastAPI application & REST routing gateway
+│   ├── resolver.py      # Non-blocking concurrent DNS resolution (dnspython)
+│   ├── analyzer.py      # 9 core RFC infrastructure validation checks
+│   ├── spf.py           # SPF recursive parser, 10-lookup counter & flattener
+│   ├── email_auth.py    # DMARC enforcement, DKIM selector scanner & score engine
+│   ├── dnssec.py        # DNSSEC cryptographic chain-of-trust audit
+│   ├── takeover.py      # Subdomain takeover & dangling CNAME threat scanner
+│   ├── bimi.py          # BIMI inbox logo brand validation
+│   ├── remediation.py   # 1-Click DNS fix generator & BIND zone builder
+│   ├── models.py        # Strict Pydantic request/response validation schemas
+│   └── report.py        # Offline self-contained HTML diagnostic report builder
 ├── static/
-│   ├── index.html       # Dashboard UI with Quick Chips & Remediation Wizard
-│   ├── style.css        # Geist design system (dark theme)
-│   └── app.js           # Frontend logic, filter tabs, copy triggers, SVG ring
-├── run.sh               # Single all-in-one script (auto-setup & launch)
-├── Dockerfile           # Container image build
-├── .dockerignore        # Exclude local files from image builds
-├── requirements.txt     # Python dependencies
-├── PRESENTATION.md      # Master demo script, architecture & viva Q&A
-├── .gitignore
+│   ├── index.html       # Dashboard UI with Asymmetric Bento Grid Cockpit
+│   ├── style.css        # Geist design tokens, dark mode, responsive styles
+│   └── app.js           # Vanilla JS controller, tab navigation, SVG score ring
+├── tests/               # Complete automated test suite (94 tests)
+│   ├── conftest.py      # Shared fixtures & mock DNS resolvers
+│   ├── test_models.py   # Domain sanitization & Pydantic models
+│   ├── test_analyzer.py # 9 RFC infrastructure checks & summary tests
+│   ├── test_spf.py      # SPF parser, lookup counter & flattener tests
+│   ├── test_email_auth.py # DMARC, DKIM & email health score tests
+│   ├── test_dnssec.py   # DNSSEC chain-of-trust audit tests
+│   ├── test_takeover.py # Subdomain takeover & dangling CNAME tests
+│   ├── test_bimi.py     # BIMI brand logo inbox tests
+│   ├── test_remediation.py # 1-Click fixes & BIND zone generator tests
+│   ├── test_report.py   # Standalone HTML report rendering tests
+│   ├── test_resolver.py # Concurrent async DNS resolver tests
+│   └── test_api.py      # FastAPI endpoints integration tests
+├── pytest.ini           # Pytest discovery and warning configuration
+├── run.sh               # Unified CLI runner (setup, launch & test)
+├── Dockerfile           # Secure container build with healthcheck & non-root user
+├── requirements.txt     # Python dependencies with version boundaries
+├── PRESENTATION.md      # Master demo script, scan directory & viva reference
 └── README.md
 ```
 
 ---
 
-## Tech Stack
+## 🔌 API Reference
 
-| Layer     | Technology                              |
-|-----------|-----------------------------------------|
-| Backend   | Python 3.11+, FastAPI, dnspython        |
-| Server    | uvicorn (ASGI)                          |
-| Frontend  | Plain HTML + CSS + Vanilla JS (no framework) |
-| Templates | Jinja2 (report generation)              |
-| DNS       | dnspython async resolver                |
+### 1. Run Domain Analysis
+`POST /api/analyze`
 
----
+**Request Body:**
+```json
+{
+  "domain": "example.com"
+}
+```
+*(Also accepts dirty URLs such as `https://example.com/path?query=1` — the hostname is auto-extracted).*
 
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET`  | `/` | Serves the dashboard |
-| `POST` | `/api/analyze` | Runs a full DNS + email auth analysis. Body: `{ "domain": "example.com" }` |
-| `GET`  | `/api/report/{domain}` | Downloads a standalone HTML report with email auth data |
-
-### API Response (v2)
-
-The `/api/analyze` response now includes an `email_auth` object:
-
+**Response Schema (Sample):**
 ```json
 {
   "domain": "example.com",
-  "scan_timestamp": "2024-01-01 12:00:00 UTC",
-  "records": { ... },
-  "findings": [ ... ],
-  "summary": { "errors": 0, "warnings": 1, "info": 5 },
+  "scan_timestamp": "2026-11-07 12:00:00 UTC",
+  "records": {
+    "A": { "status": "ok", "ttl": 300, "records": ["93.184.215.14"] },
+    "AAAA": { "status": "ok", "ttl": 300, "records": ["2606:2800:21f:cb07:6820:80da:af6b:8b2c"] },
+    "MX": { "status": "no_records", "ttl": null, "records": [] },
+    "NS": { "status": "ok", "ttl": 86400, "records": [{ "host": "a.iana-servers.net", "resolves": true }] },
+    "TXT": { "status": "ok", "ttl": 3600, "records": ["v=spf1 -all"] },
+    "CNAME": { "status": "no_records", "ttl": null, "records": [] },
+    "SOA": { "status": "ok", "ttl": 3600, "records": { "mname": "ns.icann.org", "serial": 2024010101 } }
+  },
+  "findings": [
+    { "severity": "info", "record_type": "A", "message": "Domain resolves to 1 IPv4 address (Dual-Stack available)." }
+  ],
+  "summary": { "errors": 0, "warnings": 0, "info": 1 },
   "email_auth": {
-    "spf": { "raw": "v=spf1 ...", "all_mechanism": "-all", ... },
-    "spf_lookups": { "total_lookups": 7, "limit": 10, "over_limit": false },
-    "spf_flattened": { "flattened_record": "v=spf1 ip4:... -all" },
-    "dmarc": { "raw": "v=DMARC1; p=reject; ...", "policy": "reject", "pct": 100 },
-    "dkim": { "has_dkim": true, "selectors_found": [ ... ] },
-    "score": { "score": 92, "grade": "A", "label": "Good" }
-  }
+    "spf": { "raw": "v=spf1 -all", "all_mechanism": "-all" },
+    "spf_lookups": { "total_lookups": 0, "limit": 10, "over_limit": false },
+    "dmarc": { "raw": "v=DMARC1; p=reject;", "policy": "reject", "pct": 100 },
+    "dkim": { "has_dkim": true, "selectors_found": [] },
+    "score": { "score": 100, "grade": "A+", "label": "Optimal" }
+  },
+  "security": {
+    "dnssec": { "status": "secured", "dnskey_count": 2, "ds_count": 2 },
+    "takeover": { "vulnerable": false, "status": "safe" },
+    "bimi": { "has_bimi": false, "dmarc_eligible": true }
+  },
+  "remediation": [],
+  "bind_zone_snippet": "; BIND Zone file ..."
 }
 ```
 
----
+### 2. Download Standalone Offline Report
+`GET /api/report/{domain}`
 
-## RFC Standards Referenced
-
-| RFC | Standard | What We Check |
-|-----|----------|---------------|
-| RFC 1034 / 1035 | DNS Specification | CNAME conflicts, NS requirements |
-| RFC 1912 / 2182 | DNS Operations | SOA refresh/retry/expire sanity |
-| RFC 5321 | SMTP | MX record existence & reachability |
-| RFC 7208 | SPF | Record parsing, 10-lookup limit, policy analysis |
-| RFC 7489 | DMARC | Policy parsing, enforcement, reporting |
-| RFC 6376 | DKIM | Selector discovery, key validation |
+Returns a self-contained `.html` file with embedded CSS, fully viewable offline.
 
 ---
 
-## Future Scope (v3 ideas)
+## 📜 RFC Standards Referenced
 
-- DNSSEC chain-of-trust verification
-- Subdomain takeover detection
-- Wildcard DNS detection
-- Scan history / database (PostgreSQL)
-- Bulk domain scanning
-- Webhook alerts (Slack/Discord)
-- PDF export
-- User accounts / auth
+| RFC | Specification | Diagnostic Scope |
+|:---|:---|:---|
+| **RFC 1034 / 1035** | Domain System Concepts & Facility | Core record structure, CNAME exclusivity, NS delegation |
+| **RFC 1912 / 2182** | DNS Operational Guidelines | Authoritative server redundancy, SOA refresh/retry sanity |
+| **RFC 5321** | Simple Mail Transfer Protocol (SMTP) | MX existence, mail host reachability, delivery guarantee |
+| **RFC 7208** | Sender Policy Framework (SPF) | Authorized senders, syntax qualifiers, 10-lookup limit |
+| **RFC 7489** | DMARC Domain-based Message Authentication | Reject/quarantine enforcement, alignment, aggregate reports |
+| **RFC 6376** | DomainKeys Identified Mail (DKIM) | Selector discovery, public key extraction, cryptographic integrity |
+| **RFC 4033 / 4034 / 4035** | DNS Security Extensions (DNSSEC) | RRSIG validation, DNSKEY verification, DS parent trust delegation |
+| **RFC 8617** | Brand Indicators for Message Identification (BIMI) | Official logo presentation in verified client inboxes |
+
+---
+
+## 🧪 Testing
+
+The platform features an automated test suite with **94 unit and integration tests**:
+
+```bash
+# Run via all-in-one runner:
+bash run.sh --test
+
+# Or run pytest directly:
+./venv/bin/pytest -v
+```
+
+Coverage spans:
+- `test_analyzer.py`: 9 RFC infrastructure checks and summary generation
+- `test_spf.py`: SPF parsing, lookup recursion tracking, and CIDR record flattening
+- `test_email_auth.py`: DMARC policy grading, DKIM selectors, and weighted health scoring
+- `test_dnssec.py`: Cryptographic chain-of-trust, algorithm detection, and DS validation
+- `test_takeover.py`: Subdomain takeover fingerprints and dangling CNAME detection
+- `test_bimi.py`: BIMI logo parsing, VMC verification, and DMARC eligibility
+- `test_remediation.py`: 1-Click fix generator and BIND zone file creation
+- `test_report.py`: Standalone offline HTML report rendering
+- `test_resolver.py`: Concurrent asynchronous DNS resolution
+- `test_api.py`: FastAPI endpoints and HTTP contract validation
+- `test_models.py`: Domain validation regex and Pydantic schemas
+
+---
+
+## 📄 License
+
+MIT License. Designed and engineered for high-concurrency DNS diagnostics, infrastructure auditing, and modern cybersecurity resilience.

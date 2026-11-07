@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================
-# run.sh — All-in-one Setup & Server Launcher for DNS Analyzer
+# run.sh — All-in-one Setup, Test & Server Launcher for DNS Analyzer
 # Usage:
 #   bash run.sh              # Auto-setup (if needed) & start on port 8000
 #   bash run.sh 9000         # Auto-setup & start on custom port 9000
+#   bash run.sh --test       # Run the 94-test automated test suite
 #   bash run.sh --setup-only # Run setup/dependency install only
+#   bash run.sh --help       # Display help reference
 # ============================================================
 
 set -e
@@ -19,21 +21,35 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 SETUP_ONLY=false
+RUN_TESTS=false
 PORT=8000
 
 # Parse arguments
 for arg in "$@"; do
   if [ "$arg" = "--setup-only" ]; then
     SETUP_ONLY=true
+  elif [ "$arg" = "--test" ] || [ "$arg" = "-t" ]; then
+    RUN_TESTS=true
+  elif [ "$arg" = "--help" ] || [ "$arg" = "-h" ]; then
+    echo ""
+    echo -e "${GREEN}DNS Analyzer v2 — InboxShield Edition${NC}"
+    echo "Usage:"
+    echo "  bash run.sh              Start server on http://127.0.0.1:8000"
+    echo "  bash run.sh <port>       Start server on custom port (e.g., 9000)"
+    echo "  bash run.sh --test, -t   Run the 94 automated pytest suite"
+    echo "  bash run.sh --setup-only Prepare virtual environment without running server"
+    echo "  bash run.sh --help, -h   Show this help message"
+    echo ""
+    exit 0
   elif [[ "$arg" =~ ^[0-9]+$ ]]; then
     PORT="$arg"
   fi
 done
 
 echo ""
-echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║   DNS Analyzer v2 — InboxShield Edition      ║${NC}"
-echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
+echo -e "${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║   DNS Analyzer v2 — Security Posture Cockpit         ║${NC}"
+echo -e "${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
 echo ""
 
 # ── 1. Python version check ───────────────────────────────────
@@ -64,7 +80,7 @@ fi
 PYTHON="venv/bin/python"
 
 # ── 3. Check / install dependencies ───────────────────────────
-if ! "$PYTHON" -c 'import fastapi, uvicorn, dns.resolver, jinja2' &>/dev/null; then
+if ! "$PYTHON" -c 'import fastapi, uvicorn, dns.resolver, jinja2, pytest' &>/dev/null; then
   NEED_PIP_INSTALL=true
 fi
 
@@ -82,6 +98,13 @@ if [ "$SETUP_ONLY" = true ]; then
   echo -e "  ${GREEN}✔ Setup complete! Run ${YELLOW}bash run.sh${GREEN} to start the server.${NC}"
   echo ""
   exit 0
+fi
+
+if [ "$RUN_TESTS" = true ]; then
+  echo ""
+  echo -e "  ${CYAN}➜ Running automated test suite (94 tests)...${NC}"
+  "$PYTHON" -m pytest -v
+  exit $?
 fi
 
 # ── 4. Port validation ────────────────────────────────────────

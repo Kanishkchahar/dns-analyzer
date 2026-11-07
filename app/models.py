@@ -23,6 +23,16 @@ class AnalyzeRequest(BaseModel):
         v = v.strip().lower()
         if not v:
             raise ValueError("Domain must not be empty.")
+        # Strip scheme (http://, https://)
+        v = re.sub(r"^https?://", "", v, flags=re.IGNORECASE)
+        # Strip path, query, and fragment
+        v = re.sub(r"[/\\?#].*$", "", v)
+        # Strip trailing port if present
+        v = re.sub(r":\d+$", "", v)
+        v = v.strip(".")
+
+        if not v:
+            raise ValueError("Domain must not be empty.")
         if not DOMAIN_RE.match(v):
             raise ValueError(
                 f"'{v}' does not look like a valid domain name. "

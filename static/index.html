@@ -74,7 +74,8 @@
             spellcheck="false"
             aria-label="Domain to analyze"
           />
-          <kbd class="input-kbd-hint" title="Press / to focus">/</kbd>
+          <button id="clear-input-btn" class="input-clear-btn" type="button" aria-label="Clear domain input" style="display:none;">&times;</button>
+          <kbd class="input-kbd-hint" id="input-kbd-hint" title="Press / to focus">/</kbd>
         </div>
         <button
           id="analyze-btn"
@@ -122,164 +123,325 @@
     <!-- ── Results ── -->
     <section id="results" aria-label="Analysis results" aria-live="polite">
 
-      <!-- Download bar -->
+      <!-- Download bar & Multi-Format Actions -->
       <div class="download-bar">
         <p>Results for <span id="result-domain"></span></p>
-        <button class="btn-download" id="download-btn" type="button">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <path d="M7 1v8M4 6l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M2 10v1.5a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-          Download Report
-        </button>
-      </div>
-
-      <!-- Section Jump Navigation -->
-      <nav class="jump-nav" id="jump-nav" aria-label="Section navigation">
-        <a href="#summary-section" class="jump-pill active">Overview</a>
-        <a href="#email-score-section" class="jump-pill">Email Health</a>
-        <a href="#email-auth-section" class="jump-pill">Authentication</a>
-        <a href="#security-suite-section" class="jump-pill">Threat Defense</a>
-        <a href="#remediation-section" class="jump-pill">Remediation</a>
-        <a href="#findings-section" class="jump-pill">Findings</a>
-        <a href="#records-section" class="jump-pill">DNS Records</a>
-      </nav>
-
-      <!-- Summary badges & Executive Posture Matrix -->
-      <div class="summary-section" id="summary-section" aria-label="Summary">
-        <p class="summary-heading">Executive Overview</p>
-        <div class="summary-badges">
-          <div class="badge badge-errors" id="badge-errors">
-            <span class="count" id="count-errors">0</span>
-            <span class="label">Errors</span>
-          </div>
-          <div class="badge badge-warnings" id="badge-warnings">
-            <span class="count" id="count-warnings">0</span>
-            <span class="label">Warnings</span>
-          </div>
-          <div class="badge badge-info" id="badge-info">
-            <span class="count" id="count-info">0</span>
-            <span class="label">Info</span>
-          </div>
-        </div>
-
-        <!-- Posture Matrix -->
-        <div class="posture-matrix" id="posture-matrix">
-          <div class="posture-card">
-            <div class="posture-icon" id="posture-routing-icon">🌐</div>
-            <div class="posture-info">
-              <span class="posture-label">DNS Routing</span>
-              <span class="posture-val" id="posture-routing">Evaluating...</span>
-            </div>
-          </div>
-          <div class="posture-card">
-            <div class="posture-icon" id="posture-redundancy-icon">🛡️</div>
-            <div class="posture-info">
-              <span class="posture-label">NS Redundancy</span>
-              <span class="posture-val" id="posture-redundancy">Evaluating...</span>
-            </div>
-          </div>
-          <div class="posture-card">
-            <div class="posture-icon" id="posture-email-icon">✉️</div>
-            <div class="posture-info">
-              <span class="posture-label">Email Defense</span>
-              <span class="posture-val" id="posture-email">Evaluating...</span>
-            </div>
-          </div>
-          <div class="posture-card">
-            <div class="posture-icon" id="posture-dnssec-icon">🔐</div>
-            <div class="posture-info">
-              <span class="posture-label">DNSSEC Cryptography</span>
-              <span class="posture-val" id="posture-dnssec">Evaluating...</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Email Health Score -->
-      <div id="email-score-section" class="email-score-section" style="display:none;">
-        <div class="score-ring-container">
-          <svg class="score-ring-svg" width="110" height="110" viewBox="0 0 110 110">
-            <circle class="score-ring-bg" cx="55" cy="55" r="48"/>
-            <circle class="score-ring-fg" id="score-ring-fg" cx="55" cy="55" r="48"/>
-          </svg>
-          <div class="score-ring-text">
-            <span class="score-grade-letter" id="score-grade"></span>
-            <span class="score-grade-num" id="score-num"></span>
-          </div>
-        </div>
-        <div class="score-info">
-          <h3 id="score-label">Email Health</h3>
-          <p id="score-desc">Based on SPF, DMARC, and DKIM analysis</p>
-        </div>
-      </div>
-
-      <!-- Email Authentication Cards -->
-      <div id="email-auth-section" class="email-auth-section" style="display:none;">
-        <h2 class="section-title">📧 Email Authentication</h2>
-        <div id="email-auth-cards"></div>
-      </div>
-
-      <!-- Advanced Security Suite (DNSSEC, Subdomain Takeover, BIMI) -->
-      <div id="security-suite-section" class="security-suite-section" style="display:none;">
-        <h2 class="section-title">🛡️ Advanced Security &amp; Threat Defense</h2>
-        <div id="security-cards" class="security-cards-grid"></div>
-      </div>
-
-      <!-- 1-Click Remediation Fix Generator -->
-      <div id="remediation-section" class="remediation-section" style="display:none;">
-        <div class="remediation-header">
-          <div>
-            <h2 class="section-title" style="margin-bottom:4px;">🔧 1-Click DNS Fix Generator</h2>
-            <p class="remediation-sub">Copy-pasteable records tailored for Cloudflare, AWS Route 53, and GoDaddy to achieve an A+ security posture.</p>
-          </div>
-          <button class="btn-download-zone" id="download-zone-btn" type="button">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <div class="download-actions-group">
+          <button class="btn-action-pill" id="share-link-btn" type="button" title="Copy link to this scan">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <path d="M6.5 9.5a3.5 3.5 0 0 0 5 0l2-2a3.5 3.5 0 0 0-5-5L7.5 3.5"/>
+              <path d="M9.5 6.5a3.5 3.5 0 0 0-5 0l-2 2a3.5 3.5 0 0 0 5 5L8.5 12.5"/>
+            </svg>
+            <span>Share Link</span>
+          </button>
+          <button class="btn-action-pill" id="copy-md-btn" type="button" title="Copy Markdown summary table for Slack/GitHub">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <path d="M2 3h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/>
+              <path d="M4 6v4M4 6l2 2.5L8 6v4M11 6l2 2-2 2"/>
+            </svg>
+            <span>Copy Markdown</span>
+          </button>
+          <button class="btn-action-pill" id="export-json-btn" type="button" title="Download raw JSON scan data">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <path d="M4 2v12M12 2v12M8 5v6M6 8h4"/>
+            </svg>
+            <span>Export JSON</span>
+          </button>
+          <button class="btn-download" id="download-btn" type="button" title="Download standalone offline HTML report">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
               <path d="M7 1v8M4 6l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
               <path d="M2 10v1.5a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
             </svg>
-            Export BIND Zone File
+            <span>Download Report</span>
           </button>
         </div>
-        <div id="remediation-list"></div>
       </div>
 
-      <!-- Findings list -->
-      <div class="findings-section" id="findings-section">
-        <div class="findings-header">
-          <h2 class="section-title" style="margin-bottom:0">Findings</h2>
-          <div class="findings-controls">
-            <div class="findings-search-wrap">
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                <circle cx="7" cy="7" r="5"/>
-                <path d="M11 11l4 4"/>
-              </svg>
-              <input
-                type="text"
-                id="findings-search"
-                class="findings-search"
-                placeholder="Search findings (e.g. spf, mx, ttl)..."
-                aria-label="Search findings by keyword"
-              />
+      <!-- Segmented Navigation Bar -->
+      <nav class="segment-nav" id="segment-nav" role="tablist" aria-label="Analysis report segments">
+        <button class="segment-tab active" type="button" role="tab" id="tab-overview" data-target="panel-overview" aria-controls="panel-overview" aria-selected="true">
+          <span>Overview</span>
+        </button>
+        <button class="segment-tab" type="button" role="tab" id="tab-email" data-target="panel-email" aria-controls="panel-email" aria-selected="false">
+          <span>Email Security</span>
+          <span class="tab-badge" id="tab-badge-email">--</span>
+        </button>
+        <button class="segment-tab" type="button" role="tab" id="tab-threats" data-target="panel-threats" aria-controls="panel-threats" aria-selected="false">
+          <span>Threat Defense</span>
+          <span class="tab-badge" id="tab-badge-threats">--</span>
+        </button>
+        <button class="segment-tab" type="button" role="tab" id="tab-remediation" data-target="panel-remediation" aria-controls="panel-remediation" aria-selected="false">
+          <span>Remediation</span>
+          <span class="tab-badge fix-badge" id="tab-badge-fixes">0</span>
+        </button>
+        <button class="segment-tab" type="button" role="tab" id="tab-records" data-target="panel-records" aria-controls="panel-records" aria-selected="false">
+          <span>DNS Records</span>
+          <span class="tab-badge">7</span>
+        </button>
+        <button class="segment-tab" type="button" role="tab" id="tab-findings" data-target="panel-findings" aria-controls="panel-findings" aria-selected="false">
+          <span>Findings</span>
+          <span class="tab-badge findings-badge" id="tab-badge-findings">0</span>
+        </button>
+        <button class="segment-tab segment-tab-all" type="button" role="tab" id="tab-all" data-target="all" aria-selected="false">
+          <span>All Sections</span>
+        </button>
+      </nav>
+
+      <!-- Panel 1: Overview — Security Posture Cockpit (Asymmetric Bento Grid) -->
+      <div class="results-tab-panel active" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+        <div class="bento-cockpit">
+          <!-- Left Hero: Overall Security Posture (spans 2 rows) -->
+          <div class="bento-hero" id="bento-hero">
+            <span class="bento-section-label">Overall Security Posture</span>
+            <div class="bento-ring-area">
+              <div class="bento-ring-wrap">
+                <svg class="score-ring-svg bento-ring-svg" width="140" height="140" viewBox="0 0 140 140">
+                  <circle class="score-ring-bg" cx="70" cy="70" r="60"/>
+                  <circle class="score-ring-fg bento-ring-fg" id="bento-ring-fg" cx="70" cy="70" r="60"/>
+                </svg>
+                <div class="score-ring-text">
+                  <span class="score-grade-letter" id="bento-grade">--</span>
+                  <span class="score-grade-num" id="bento-score-num">--/100</span>
+                </div>
+              </div>
             </div>
-            <div class="filter-group" role="tablist" aria-label="Filter findings by severity">
-              <button class="filter-chip active" type="button" data-filter="all" role="tab" aria-selected="true">All</button>
-              <button class="filter-chip" type="button" data-filter="error" role="tab" aria-selected="false">Errors</button>
-              <button class="filter-chip" type="button" data-filter="warning" role="tab" aria-selected="false">Warnings</button>
-              <button class="filter-chip" type="button" data-filter="info" role="tab" aria-selected="false">Info</button>
+            <p class="bento-hero-subtitle" id="bento-hero-subtitle">Analyzing security posture…</p>
+            <div class="bento-hero-badges">
+              <div class="badge badge-errors" id="badge-errors">
+                <span class="count" id="count-errors">0</span>
+                <span class="label">Errors</span>
+              </div>
+              <div class="badge badge-warnings" id="badge-warnings">
+                <span class="count" id="count-warnings">0</span>
+                <span class="label">Warnings</span>
+              </div>
+              <div class="badge badge-info" id="badge-info">
+                <span class="count" id="count-info">0</span>
+                <span class="label">Info</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Top-Right: DNS Infrastructure -->
+          <div class="bento-card bento-dns" id="bento-dns">
+            <div class="bento-card-header">
+              <span class="bento-card-icon">🌐</span>
+              <span class="bento-card-title">DNS Infrastructure</span>
+            </div>
+            <div class="bento-card-headline" id="bento-dns-headline">Evaluating…</div>
+            <ul class="bento-card-bullets" id="bento-dns-bullets">
+              <li><span class="bullet-label">IPv4:</span> <span class="bullet-val">Resolving…</span></li>
+              <li><span class="bullet-label">IPv6:</span> <span class="bullet-val">Resolving…</span></li>
+              <li><span class="bullet-label">NS:</span> <span class="bullet-val">Checking…</span></li>
+            </ul>
+            <div class="bento-card-footer">
+              <div class="bento-status-bar">
+                <span class="bento-status-dot"></span>
+                <span class="bento-status-text" id="bento-dns-status">Pending</span>
+              </div>
+              <button class="bento-nav-link" type="button" data-switch="tab-records">DNS Records →</button>
+            </div>
+          </div>
+
+          <!-- Top-Right: Email Authentication -->
+          <div class="bento-card bento-email" id="bento-email">
+            <div class="bento-card-header">
+              <span class="bento-card-icon">✉️</span>
+              <span class="bento-card-title">Email Authentication</span>
+            </div>
+            <div class="bento-card-headline" id="bento-email-headline">Evaluating…</div>
+            <ul class="bento-card-bullets" id="bento-email-bullets">
+              <li><span class="bullet-label">SPF:</span> <span class="bullet-val">Checking…</span></li>
+              <li><span class="bullet-label">DMARC:</span> <span class="bullet-val">Checking…</span></li>
+              <li><span class="bullet-label">DKIM:</span> <span class="bullet-val">Checking…</span></li>
+            </ul>
+            <div class="bento-card-footer">
+              <div class="bento-status-bar">
+                <span class="bento-status-dot"></span>
+                <span class="bento-status-text" id="bento-email-status">Pending</span>
+              </div>
+              <button class="bento-nav-link" type="button" data-switch="tab-email">Email Auth →</button>
+            </div>
+          </div>
+
+          <!-- Bottom-Right: Cryptography & Takeover -->
+          <div class="bento-card bento-crypto" id="bento-crypto">
+            <div class="bento-card-header">
+              <span class="bento-card-icon">🔐</span>
+              <span class="bento-card-title">Cryptography &amp; Takeover</span>
+            </div>
+            <div class="bento-card-headline" id="bento-crypto-headline">Evaluating…</div>
+            <ul class="bento-card-bullets" id="bento-crypto-bullets">
+              <li><span class="bullet-label">DNSSEC:</span> <span class="bullet-val">Auditing…</span></li>
+              <li><span class="bullet-label">DS Chain:</span> <span class="bullet-val">Validating…</span></li>
+              <li><span class="bullet-label">Takeover:</span> <span class="bullet-val">Scanning…</span></li>
+            </ul>
+            <div class="bento-card-footer">
+              <div class="bento-status-bar">
+                <span class="bento-status-dot"></span>
+                <span class="bento-status-text" id="bento-crypto-status">Pending</span>
+              </div>
+              <button class="bento-nav-link" type="button" data-switch="tab-threats">Threat Defense →</button>
+            </div>
+          </div>
+
+          <!-- Bottom-Right: 1-Click Remediation -->
+          <div class="bento-card bento-fixes" id="bento-fixes">
+            <div class="bento-card-header">
+              <span class="bento-card-icon">🔧</span>
+              <span class="bento-card-title">1-Click Remediation</span>
+            </div>
+            <div class="bento-card-headline" id="bento-fixes-headline">Evaluating…</div>
+            <ul class="bento-card-bullets" id="bento-fixes-bullets">
+              <li><span class="bullet-label">Fixes:</span> <span class="bullet-val">Generating…</span></li>
+              <li><span class="bullet-label">Posture:</span> <span class="bullet-val">Assessing…</span></li>
+            </ul>
+            <div class="bento-card-footer">
+              <div class="bento-status-bar">
+                <span class="bento-status-dot" id="bento-fixes-dot"></span>
+                <span class="bento-status-text" id="bento-fixes-status">Pending</span>
+              </div>
+              <button class="bento-nav-link" type="button" data-switch="tab-remediation">1-Click Fixes →</button>
             </div>
           </div>
         </div>
-        <div id="findings-list" role="list" aria-label="Findings"></div>
       </div>
 
-      <!-- DNS Records -->
-      <div class="records-section" id="records-section">
-        <div class="records-header-row">
-          <h2 class="section-title" style="margin-bottom:0">DNS Records</h2>
-          <span class="records-meta-tag" id="records-count">7 record types</span>
+      <!-- Panel 2: Email Security Suite -->
+      <div class="results-tab-panel" id="panel-email" role="tabpanel" aria-labelledby="tab-email">
+        <!-- Email Health Score -->
+        <div id="email-score-section" class="email-score-section" style="display:none;">
+          <div class="score-ring-container">
+            <svg class="score-ring-svg" width="110" height="110" viewBox="0 0 110 110">
+              <circle class="score-ring-bg" cx="55" cy="55" r="48"/>
+              <circle class="score-ring-fg" id="score-ring-fg" cx="55" cy="55" r="48"/>
+            </svg>
+            <div class="score-ring-text">
+              <span class="score-grade-letter" id="score-grade"></span>
+              <span class="score-grade-num" id="score-num"></span>
+            </div>
+          </div>
+          <div class="score-info">
+            <h3 id="score-label">Email Health</h3>
+            <p id="score-desc">Based on SPF, DMARC, and DKIM analysis</p>
+          </div>
         </div>
-        <div class="records-grid" id="records-grid"></div>
+
+        <!-- Email Authentication Cards -->
+        <div id="email-auth-section" class="email-auth-section" style="display:none;">
+          <h2 class="section-title">📧 Email Authentication Protocols</h2>
+          <div id="email-auth-cards"></div>
+        </div>
+      </div>
+
+      <!-- Panel 3: Threat Defense -->
+      <div class="results-tab-panel" id="panel-threats" role="tabpanel" aria-labelledby="tab-threats">
+        <!-- Advanced Security Suite (DNSSEC, Subdomain Takeover, BIMI) -->
+        <div id="security-suite-section" class="security-suite-section" style="display:none;">
+          <h2 class="section-title">🛡️ Advanced Security &amp; Threat Defense</h2>
+          <div id="security-cards" class="security-cards-grid"></div>
+        </div>
+      </div>
+
+      <!-- Panel 4: Remediation -->
+      <div class="results-tab-panel" id="panel-remediation" role="tabpanel" aria-labelledby="tab-remediation">
+        <!-- 1-Click Remediation Fix Generator -->
+        <div id="remediation-section" class="remediation-section" style="display:none;">
+          <div class="remediation-header">
+            <div>
+              <h2 class="section-title" style="margin-bottom:4px;">🔧 1-Click DNS Fix Generator</h2>
+              <p class="remediation-sub">Copy-pasteable records tailored for Cloudflare, AWS Route 53, and GoDaddy to achieve an A+ security posture.</p>
+            </div>
+            <button class="btn-download-zone" id="download-zone-btn" type="button">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M7 1v8M4 6l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M2 10v1.5a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              Export BIND Zone File
+            </button>
+          </div>
+          <div id="remediation-list"></div>
+        </div>
+      </div>
+
+      <!-- Panel 5: Findings -->
+      <div class="results-tab-panel" id="panel-findings" role="tabpanel" aria-labelledby="tab-findings">
+        <!-- Findings list -->
+        <div class="findings-section" id="findings-section">
+          <div class="findings-header">
+            <h2 class="section-title" style="margin-bottom:0">Diagnostic Findings</h2>
+            <div class="findings-controls">
+              <div class="findings-search-wrap">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                  <circle cx="7" cy="7" r="5"/>
+                  <path d="M11 11l4 4"/>
+                </svg>
+                <input
+                  type="text"
+                  id="findings-search"
+                  class="findings-search"
+                  placeholder="Search findings (e.g. spf, mx, ttl)..."
+                  aria-label="Search findings by keyword"
+                />
+              </div>
+              <div class="filter-group" role="tablist" aria-label="Filter findings by severity">
+                <button class="filter-chip active" type="button" data-filter="all" role="tab" aria-selected="true">All</button>
+                <button class="filter-chip" type="button" data-filter="error" role="tab" aria-selected="false">Errors</button>
+                <button class="filter-chip" type="button" data-filter="warning" role="tab" aria-selected="false">Warnings</button>
+                <button class="filter-chip" type="button" data-filter="info" role="tab" aria-selected="false">Info</button>
+              </div>
+            </div>
+          </div>
+          <div id="findings-list" role="list" aria-label="Findings"></div>
+        </div>
+      </div>
+
+      <!-- Panel 6: DNS Records -->
+      <div class="results-tab-panel" id="panel-records" role="tabpanel" aria-labelledby="tab-records">
+        <!-- DNS Records -->
+        <div class="records-section" id="records-section">
+          <div class="records-header-row">
+            <div>
+              <h2 class="section-title" style="margin-bottom:0">DNS Records</h2>
+              <span class="records-meta-tag" id="records-count">7 record types</span>
+            </div>
+            <div class="records-view-toggle" role="group" aria-label="Records view format">
+              <button id="view-cards-btn" class="view-toggle-btn active" type="button" aria-pressed="true">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 2.5zM2.5 2a.5.5 0 0 0-.5.5v4h12v-4a.5.5 0 0 0-.5-.5h-11zm12 5.5h-12v4a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5v-4z"/>
+                </svg>
+                <span>Card View</span>
+              </button>
+              <button id="view-dig-btn" class="view-toggle-btn" type="button" aria-pressed="false">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <path d="M6 12.5a.5.5 0 0 0 .5.5h7a.5.5 0 0 0 0-1h-7a.5.5 0 0 0-.5.5zm-4.354-6.146a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L2.707 6l2.647 2.646a.5.5 0 0 1-.708.708l-3-3z"/>
+                </svg>
+                <span>CLI dig View</span>
+              </button>
+            </div>
+          </div>
+          <div class="records-grid" id="records-grid"></div>
+
+          <!-- CLI / dig Terminal Simulation Container -->
+          <div class="records-dig-container" id="records-dig-container" style="display:none;">
+            <div class="dig-terminal-header">
+              <div class="terminal-dots" aria-hidden="true">
+                <span class="dot red"></span>
+                <span class="dot yellow"></span>
+                <span class="dot green"></span>
+              </div>
+              <span class="terminal-title">dig +noall +answer — <span id="dig-domain-label"></span></span>
+              <button class="btn-copy-dig" id="copy-dig-btn" type="button">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                  <rect x="5" y="5" width="8" height="8" rx="1.5"/>
+                  <path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"/>
+                </svg>
+                <span>Copy Output</span>
+              </button>
+            </div>
+            <pre class="dig-terminal-body" id="dig-terminal-body" tabindex="0"></pre>
+          </div>
+        </div>
       </div>
 
     </section>
@@ -305,6 +467,10 @@
           <div class="shortcut-row"><kbd>Enter</kbd> <span>Run concurrent DNS analysis</span></div>
           <div class="shortcut-row"><kbd>1</kbd> – <kbd>4</kbd> <span>Instantly analyze sample domains</span></div>
           <div class="shortcut-row"><kbd>f</kbd> <span>Cycle findings filter (All → Errors → Warnings → Info)</span></div>
+          <div class="shortcut-row"><kbd>v</kbd> <span>Toggle DNS records view (Cards vs CLI dig)</span></div>
+          <div class="shortcut-row"><kbd>c</kbd> <span>Copy shareable scan URL</span></div>
+          <div class="shortcut-row"><kbd>m</kbd> <span>Copy Markdown summary for Slack/GitHub</span></div>
+          <div class="shortcut-row"><kbd>j</kbd> <span>Export raw scan JSON data</span></div>
           <div class="shortcut-row"><kbd>d</kbd> <span>Download self-contained offline HTML report</span></div>
           <div class="shortcut-row"><kbd>z</kbd> <span>Export copy-paste BIND zone file</span></div>
           <div class="shortcut-row"><kbd>?</kbd> <span>Open this help &amp; shortcuts reference</span></div>

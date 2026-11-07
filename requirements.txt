@@ -1,5 +1,8 @@
-fastapi
-uvicorn[standard]
-dnspython
-pydantic
-jinja2
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+dnspython>=2.6.0
+pydantic>=2.6.0
+jinja2>=3.1.3
+httpx>=0.27.0
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

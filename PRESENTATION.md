@@ -1,32 +1,34 @@
-# 🛡️ DNS Analyzer v2 (InboxShield Edition)
+# 🛡️ DNS Analyzer v2 — Security Posture Cockpit
 ## Master Presentation, Demo Script & Technical Viva Reference
 
 > **Project Author:** Kanishk  
-> **Version:** 2.0 — InboxShield Edition  
-> **Tech Stack:** Python 3.11+ · FastAPI · dnspython · Vanilla JS · Jinja2 · Uvicorn  
+> **Version:** 2.0 — Security Posture Cockpit Edition  
+> **Tech Stack:** Python 3.11+ · FastAPI · dnspython · Vanilla JS · Jinja2 · Uvicorn · Pytest (94 Automated Tests)  
 
 ---
 
 ## 📑 Table of Contents
 1. [Elevator Pitch & Opening Statement](#1-elevator-pitch--opening-statement)
 2. [Live Demonstration Script (2–3 Minutes)](#2-live-demonstration-script-23-minutes)
-3. [Executive Summary & Problem Statement](#3-executive-summary--problem-statement)
-4. [Tech Stack & Architectural Justifications](#4-tech-stack--architectural-justifications)
+3. [The Security Posture Cockpit (Asymmetric Bento Grid)](#3-the-security-posture-cockpit-asymmetric-bento-grid)
+4. [Executive Summary & Problem Statement](#4-executive-summary--problem-statement)
 5. [System Architecture & Concurrency Workflow](#5-system-architecture--concurrency-workflow)
-6. [RFC Rules & Security Standards Reference](#6-rfc-rules--security-standards-reference)
-7. [Comprehensive Interview & Viva Q&A (Categories A–E)](#7-comprehensive-interview--viva-qa)
-8. [Pro Tips to Impress Teachers & Evaluators](#8-pro-tips-to-impress-teachers--evaluators)
-9. [Closing Statement](#9-closing-statement)
-10. [Quick Start](#10-quick-start)
+6. [Comprehensive Scan Directory: What Scans It Runs, What They Tell You & Why They Are Critical](#6-comprehensive-scan-directory-what-scans-it-runs-what-they-tell-you--why-they-are-critical)
+7. [RFC Rules & Security Standards Reference](#7-rfc-rules--security-standards-reference)
+8. [Comprehensive Interview & Viva Q&A (Categories A–F)](#8-comprehensive-interview--viva-qa)
+9. [Pro Tips to Impress Teachers & Evaluators](#9-pro-tips-to-impress-teachers--evaluators)
+10. [Closing Statement](#10-closing-statement)
+11. [Quick Start & Scripts](#11-quick-start--scripts)
 
 ---
 
 ## 1. Elevator Pitch & Opening Statement
 
-> *"Good morning / afternoon. Today, I am presenting **DNS Analyzer v2 — InboxShield Edition**.*  
-> *DNS is the phonebook and foundational backbone of the internet, while email authentication is the frontline defense against phishing and spoofing. Misconfigured DNS zones silently bring down websites, drop critical emails, and expose companies to cyberattacks.*  
+> *"Good morning / afternoon. Today, I am presenting **DNS Analyzer v2 — Security Posture Cockpit Edition**.*  
 >  
-> *Traditional CLI tools like `dig` or `nslookup` require running multiple commands sequentially and manual expert interpretation. I built a modern, asynchronous web platform that audits all 7 major DNS record types in parallel, evaluates 15+ RFC compliance checks, audits SPF, DMARC, and DKIM email security, and produces an instant letter-graded diagnostic report — in under 2 seconds."*
+> *DNS is the foundational routing fabric of the modern internet, and email authentication is our frontline defense against identity spoofing and credential theft. Yet, misconfigured DNS zones silently bring down mission-critical platforms, cause transactional emails to be marked as spam, and expose companies to catastrophic subdomain hijacking.*  
+>  
+> *Traditional command-line utilities like `dig` or `nslookup` are manual, sequential, and output cryptic text that requires deep RFC expertise to interpret. I engineered a modern, non-blocking platform that queries all 7 primary DNS record types in parallel, evaluates 18+ RFC compliance and vulnerability checks, audits SPF / DMARC / DKIM / DNSSEC / Subdomain Takeover / BIMI, and organizes the results into an executive **Asymmetric Bento Grid** cockpit — complete with 1-click BIND zone fixes, in under 200 milliseconds."*
 
 ---
 
@@ -42,236 +44,350 @@ bash run.sh
 
 | # | Domain to Test | What It Proves to the Audience |
 |---|----------------|---------------------------------|
-| **1** | `cloudflare.com` (or click Quick Chip) | **Enterprise Best Practice:** Score **A+**. Fully secured DNSSEC (ECDSA), Active BIMI logo, Subdomain Takeover protected, and strong DMARC policy. |
-| **2** | `google.com` | **Email Scale:** Strict DMARC enforcement, strong SPF, and multiple verified DKIM selectors. |
-| **3** | `https://www.boot.dev/dashboard` | **Automatic URL Extraction:** Paste the full URL. Watch the frontend extract the hostname `boot.dev` automatically with zero user cleanup required. |
-| **4** | `example.com` | **Remediation Wizard:** Shows missing email auth, with the **1-Click DNS Fix Generator** generating exact Cloudflare/AWS Route 53 records and exportable BIND zone file! |
-| **5** | `invalid!!!domain` | **Resilience & Validation:** Pydantic regex rejects bad input instantly with clean HTTP 400 error banner — no server crashes. |
+| **1** | `cloudflare.com` (or click Quick Chip) | **Enterprise Hardening:** Perfect Grade **A+ (100/100)**. Dual-Stack routing, Cryptographically signed DNSSEC with valid parent DS delegation, active BIMI logo, zero dangling CNAMEs, and strict `p=reject` DMARC. |
+| **2** | `google.com` | **Email Scale:** Strict DMARC enforcement, strong SPF, multiple verified DKIM selector keys, and redundant authoritative nameservers. |
+| **3** | `https://www.boot.dev/dashboard` | **Automatic URL Sanitization:** Paste a full dirty URL with protocol, path, and query parameters. The platform instantly extracts `boot.dev` automatically with zero user effort. |
+| **4** | `example.com` | **Actionable Remediation Wizard:** Reveals missing SPF/DMARC records. Click **1-Click Fixes →** to show auto-generated Cloudflare, Route 53, and GoDaddy records, plus the instant **Export BIND Zone File** feature. |
+| **5** | `invalid!!!domain` | **Resilience & Validation:** Pydantic validation rejects malformed input with a clean HTTP 400 error banner — no server exceptions or unhandled tracebacks. |
 
-### Key Features to Call Out During the Demo:
-1. ⚡ **Concurrent Lookups**: *"All 7 DNS record types + SPF + DMARC + DKIM + DNSSEC + Subdomain Takeover + BIMI return concurrently in under 200ms using `asyncio.gather` — zero sequential waiting."*
-2. 📊 **Email Health Score Ring**: *"The animated circular SVG ring computes a weighted score (0–100) and assigns an A+ to F grade based on real RFC compliance."*
-3. 🛡️ **Subdomain Takeover Defense**: *"Detects dangling CNAME records pointing to abandoned AWS S3, GitHub Pages, Heroku, or Shopify endpoints before attackers hijack them."*
-4. 🔐 **DNSSEC Cryptographic Chain**: *"Audits Zone Signing Keys (ZSK), Key Signing Keys (KSK), and parent DS delegations to protect against DNS cache poisoning."*
-5. ✨ **BIMI Brand Certification**: *"Checks whether the domain qualifies to display its verified brand logo in Gmail and Apple Mail customer inboxes."*
-6. 🔧 **1-Click Remediation & BIND Zone File**: *"Not just a scanner — an actionable solution. Generates exact copy-paste DNS records for Cloudflare, Route 53, and GoDaddy with an instant BIND zone file export."*
-7. 🎛️ **Interactive Severity Filters**: *"Click 'Errors', 'Warnings', or 'Info' badges to filter the diagnostic findings instantly without page reloads."*
-8. 📈 **SPF Lookup Meter Bar**: *"Visual meter displaying real-time lookups against RFC 7208 limit of 10 with automatic flattening recommendations."*
-9. 📥 **Offline Download Report**: *"Single-file standalone report with all CSS embedded, opening completely offline."*
-10. ♿ **Radical Ease of Access**: *"Keyboard-first navigation (`/`, `?`, `1-4`, `f`, `d`), persistent search history, URL auto-sanitization, and plain-English tooltips for non-technical users."*
-11. 🧠 **Executive Posture Matrix & Smart Provider Intelligence**: *"4-quadrant high-level health matrix (Routing, Redundancy, Email Defense, DNSSEC), live findings text search, auto-detected providers (Google Workspace, Microsoft 365, Cloudflare), and humanized durations."*
+### Key Features to Highlight During the Demo:
+1. ⚡ **Asynchronous Concurrency**: *"All 7 record types + SPF + DMARC + DKIM + DNSSEC + Subdomain Takeover + BIMI return simultaneously in under 200ms using Python's `asyncio.gather` — zero sequential blocking."*
+2. 🍱 **Bento Grid Security Cockpit**: *"The left hero card features an animated circular score ring anchoring the overall posture (A+ to F), accompanied by a 2×2 grid of rich, un-truncated diagnostic telemetry."*
+3. 🛡️ **Subdomain Takeover Defense**: *"Scans CNAME pointers against known cloud fingerprints (AWS S3, GitHub Pages, Heroku, Shopify) to catch dangling CNAMEs before malicious actors seize them."*
+4. 🔐 **DNSSEC Cryptographic Chain-of-Trust**: *"Validates Zone Signing Keys (ZSK), Key Signing Keys (KSK), algorithms (ECDSA, Ed25519), and parent DS records to guarantee protection against DNS cache poisoning (Kaminsky attacks)."*
+5. 📈 **SPF 10-Lookup Recursion Meter & Flattener**: *"Visual bar tracking lookups against the strict RFC 7208 limit of 10, with an automatic CIDR flattener that optimizes over-limit records to 0 lookups."*
+6. ✨ **BIMI Brand Inbox Validation**: *"Audits whether the domain publishes a verified SVG logo and satisfies strict DMARC criteria for official avatar display in Gmail and Apple Mail."*
+7. 🔧 **1-Click Copyable Fixes & BIND Export**: *"Not just a problem spotter — an automated solution. Generates exact zone fixes tailored for Cloudflare, AWS Route 53, and GoDaddy, plus downloadable standard BIND zone files."*
+8. ⌨️ **Radical Keyboard Ergonomics**: *"Operate the entire dashboard without a mouse: `/` focuses search, `?` opens help, `1`–`4` test samples, `f` filters findings, `v` toggles CLI dig view, `c` copies shareable links, `m` copies Markdown summaries, `j` exports JSON, `d` downloads offline reports, and `z` exports BIND zone files."*
 
 ---
 
-## 2.1 GUI Ease of Access & Presentation Walkthrough
+## 3. The Security Posture Cockpit (Asymmetric Bento Grid)
 
-When presenting this website to users, teachers, or evaluators, focus on **"Radical User Ease of Access"**. Explain how DNS Analyzer bridges the gap between deep infrastructure complexity and consumer-grade usability:
+The dashboard overview is structured as a **Two-Tier Security Posture Cockpit** inspired by industry benchmarks (Vercel Geist, Linear, and Cloudflare Radar):
 
 ```
-Traditional CLI (dig / nslookup)           DNS Analyzer v2 (Ease of Access)
-─────────────────────────────────          ─────────────────────────────────
-• Requires terminal & command syntax       • Zero install, clean browser UI
-• Must run 7–10 commands per domain        • 1-click concurrent audit in <200ms
-• Outputs cryptic raw DNS zone text        • Visual color-coded health grades (A+ to F)
-• Leaves users clueless how to fix bugs    • 1-Click copyable DNS fixes & BIND zone file
-• Fails on dirty URLs                      • Auto-extracts hostname from any URL
-• Mouse-only or CLI-only                   • Full keyboard accessibility (`/`, `?`, `1-4`, `f`, `d`)
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  🌐 cloudflare.com  ·  Scanned Nov 7, 2026 12:00 UTC        [ Share Link ] [ Copy MD ] [ Export JSON ]│
+├─────────────────────────────────────┬──────────────────────────────────┬───────────────────────────────┤
+│                                     │ 🌐 DNS INFRASTRUCTURE            │ ✉️ EMAIL AUTHENTICATION       │
+│      OVERALL SECURITY POSTURE       │                                  │                               │
+│                                     │  Dual-Stack Reachable            │  Phishing Immune              │
+│         ╭───────────────╮           │  • IPv4: 2 Addresses Resolved    │  • SPF: Valid (-all policy)   │
+│        ╱                 ╲          │  • IPv6: 2 Addresses Resolved    │  • DMARC: Strict (p=reject)   │
+│       │     Grade A+      │         │  • NS: 5 Redundant Servers       │  • DKIM: Verified Selectors   │
+│       │     100 / 100     │         │                                  │                               │
+│        ╲                 ╱          │  [ Status: Healthy ● ]           │  [ Status: Enforced ● ]       │
+│         ╰───────────────╯           │  [ DNS Records → ]               │  [ Email Auth → ]             │
+│                                     ├──────────────────────────────────┼───────────────────────────────┤
+│   All Systems Authenticated & Safe  │ 🔐 CRYPTOGRAPHY & TAKEOVER       │ 🔧 1-CLICK REMEDIATION        │
+│                                     │                                  │                               │
+│   ┌────────┐ ┌────────┐ ┌────────┐  │  Hardened Against Hijacking      │  Actionable Zone Fixes        │
+│   │ 0 ERR  │ │ 0 WARN │ │ 7 INFO │  │  • DNSSEC: Cryptographically OK  │  • 0 Critical Fixes Needed    │
+│   └────────┘ └────────┘ └────────┘  │  • DS Delegation: Valid (parent) │  • Posture: Fully Hardened    │
+│                                     │  • Takeover Risk: Zero Dangling  │                               │
+│  [ Click badge to filter findings ] │  [ Status: Secured ● ]           │  [ Status: Optimal ● ]        │
+│                                     │  [ Threat Defense → ]            │  [ 1-Click Fixes → ]          │
+└─────────────────────────────────────┴──────────────────────────────────┴───────────────────────────────┘
 ```
 
-### The 5 Ease-of-Access Talking Points to Deliver:
-
-1. **Zero-Barrier Input & URL Hygiene**:
-   > *"Users don't need to know domain syntax. You can paste dirty strings like `https://boot.dev/dashboard?ref=test` and the frontend regex automatically cleans it to `boot.dev`. Plus, returning users have their recent searches saved locally in 1-click history chips."*
-
-2. **Full Keyboard-Driven Accessibility (WCAG Compliant)**:
-   > *"Power users and screen-reader users can operate the entire platform without touching a mouse. Pressing `/` jumps to search, `1` through `4` test sample domains, `f` cycles findings severity filters, `d` triggers report downloads, and `?` opens our comprehensive shortcuts modal."*
-
-3. **Cognitive Clarity Over Information Overload**:
-   > *"Instead of bombarding non-technical administrators with cryptic RFC error codes, we provide plain-English 'What is this?' info badges (`?`) across SPF, DMARC, DKIM, DNSSEC, and BIMI. The circular SVG health ring translates complex security posture into an immediate letter grade (A+ through F)."*
-
-4. **Visual Transparency & Live Progress**:
-   > *"During analysis, an animated micro-status bar informs the user in real time about concurrent operations (`Querying 7 record types... Auditing SPF... Inspecting DNSSEC...`), eliminating user friction and perceived wait times."*
-
-5. **Actionable 1-Click Resolution**:
-   > *"Ease of access isn't just about reading data — it's about solving problems effortlessly. Our 1-Click DNS Fix Generator provides tailored copy-paste snippets for Cloudflare, Route 53, and GoDaddy, plus an exportable standard BIND zone file."*
+### Why This Design Beats Traditional Layouts:
+1. **Dominant Visual Centerpiece**: The animated SVG health ring sits on the left, anchoring the dashboard. Executives and non-technical stakeholders instantly comprehend domain health in 3 seconds.
+2. **Zero Text Truncation**: Squeezing 4 metrics into a single row forces ellipsis truncation (`IPv4 (2...`, `Cryptograph...`). The 2×2 layout gives each quadrant ample breathing room for complete sentences, bullet points, and live status dots.
+3. **Seamless Progressive Disclosure**: High-level status is presented in the Bento overview, while deep protocol details (RFC parameters, hex public keys, raw records) reside in dedicated segmented tabs accessible with one click.
 
 ---
 
-## 3. Executive Summary & Problem Statement
+## 4. Executive Summary & Problem Statement
 
 ### The Problem:
-* **72% of organizations** experience DNS-related outages (EfficientIP Global DNS Threat Report).
-* **91% of cyberattacks** start with email spoofing or phishing (FBI IC3).
-* Standard diagnostic utilities (`dig`, `nslookup`) are:
-  - Single-query only (must run 7–10 commands per domain).
-  - Terminal-only and unstandardized.
-  - Incapable of automated policy evaluation or recursion tracking.
+* **72% of organizations** suffer DNS outages, with an average downtime cost exceeding $900,000 per incident (EfficientIP Global DNS Threat Report).
+* **91% of targeted cyberattacks** initiate via spear-phishing or domain spoofing (FBI Internet Crime Report).
+* **Thousands of subdomains** sit vulnerable to Dangling CNAME takeovers across abandoned AWS, GitHub, and Shopify resources (CVE-level threat).
+* Traditional utilities (`dig`, `nslookup`) are single-query, CLI-only, and provide no contextual policy analysis or remediation.
 
 ### The Solution:
-DNS Analyzer automates full-zone inspection, email security assessment, and RFC compliance auditing into a clean zero-dependency web interface.
-
----
-
-## 4. Tech Stack & Architectural Justifications
-
-| Component | Technology | Rationale & Why It Beats Alternatives |
-|:---|:---|:---|
-| **Backend Framework** | **FastAPI** (Python 3.11+) | Native `async`/`await` support for high concurrency event loops. Automatic Pydantic schema validation and OpenAPI serialization. Outperforms Flask and Django for I/O-bound networking. |
-| **ASGI Server** | **Uvicorn** | High-performance asynchronous server built on `uvloop` and `httptools`. Minimal memory footprint with multi-worker scaling. |
-| **DNS Engine** | **dnspython** (`dns.asyncresolver`) | The industry-standard Python DNS library. Provides non-blocking async query methods, raw RRset inspection, TTL extraction, and granular exception handling (`NXDOMAIN`, `NoAnswer`, `Timeout`). |
-| **Frontend UI** | **Vanilla HTML5 + Modern CSS + ES6+ JS** | **Zero build step, zero npm dependencies, zero node_modules.** Loads in milliseconds, zero supply-chain attack surface, accessible ARIA live regions, Geist design tokens. |
-| **Report Engine** | **Jinja2** | Generates self-contained single-file HTML reports with inlined CSS for offline portability. |
-| **Runner Script** | **Unified `run.sh`** | Combines dependency verification, self-healing venv rebuilding, and server launching in one command. |
-
----
-
-## 4.1 Design Engineering & World-Class UI/UX Benchmarks
-
-DNS Analyzer's interface was engineered by extracting proven design patterns from the world's most acclaimed software platforms:
-
-| Benchmark Platform | Defining UI/UX Trait | How It Is Applied in DNS Analyzer |
-|:---|:---|:---|
-| **Linear** (`linear.app`) | Keyboard-first ergonomics & tactile actuation | Full keyboard shortcuts modal (<kbd>?</kbd>), tactile button compressions (<kbd>active: scale(0.96)</kbd>), and strictly concentric nested radii (`outer = inner + padding`). |
-| **Vercel** (`vercel.com`) | Geist design tokens & tabular typography cadence | Geist monospace metrics, `text-wrap: balance` on headlines, `font-variant-numeric: tabular-nums` to eliminate layout jiggle, and real-time SPF 10-lookup meter bar. |
-| **Stripe** (`stripe.com`) | Actionable 1-click resolution & humanized data | 1-Click DNS Fix Generator for Cloudflare/Route53/GoDaddy, copy buttons with checkmark affirmations, and humanized durations (`7200s (2 hrs)`). |
-| **Raycast** (`raycast.com`) | Passive shortcut discovery & fast recall | Embedded keycap hints (`<kbd>/</kbd>`, `<kbd>?</kbd>`), persistent `localStorage` recent search history chips, and instant live findings search. |
-| **Supabase** (`supabase.com`) | High-contrast status & smart categorization | Automatic TXT record categorization (`SPF`, `Google Verify`, `Meta`, `Stripe`, `GitHub`), smart MX/NS provider pills, and instant BIND zone file export. |
-| **Cloudflare** (`cloudflare.com`) | Diagnostic telemetry & executive scorecards | Executive 4-Quadrant Posture Matrix (Routing, Redundancy, Email Defense, DNSSEC), circular animated SVG health gauge (A+ to F), and cryptographic chain validation. |
-| **Apple** (`apple.com` HIG) | Fluid spring motion & universal accessibility | Floating glassmorphism notifications (`backdrop-filter: blur(16px)`), sticky navigation bar with active scroll tracking, and 350ms staggered card reveals. |
+DNS Analyzer v2 automates full-zone resolution, email spoofing protection audits, cryptographic verification, and takeover threat hunting into a unified, zero-dependency web interface.
 
 ---
 
 ## 5. System Architecture & Concurrency Workflow
 
 ```
-               ┌───────────────────────────────────────────┐
-               │         Browser UI (Vanilla JS)           │
-               │  Quick chips / Keyboard shortcuts (/)     │
-               └─────────────────────┬─────────────────────┘
-                                     │ POST /api/analyze
-                                     ▼
-               ┌───────────────────────────────────────────┐
-               │        FastAPI Gateway (app/main.py)      │
-               │     Strict Pydantic Domain Validation     │
-               └─────┬───────────────┬───────────────┬─────┘
-                     │               │               │
-                     ▼               ▼               ▼
-           ┌──────────────────┐ ┌─────────┐ ┌────────────────┐
-           │ Async Resolver   │ │ SPF     │ │ DMARC & DKIM   │
-           │ 7 Record Types   │ │ Parser  │ │ Multi-Selector │
-           │ (asyncio.gather) │ │ Flatten │ │ Concurrent     │
-           │ [A, AAAA, MX,    │ │ Counter │ │ Scan (15 hosts)│
-           │  NS, TXT, CNAME, │ │ (spf.py)│ │ (email_auth.py)│
-           │  SOA]            │ └────┬────┘ └───────┬────────┘
-           └─────────┬────────┘      │              │
-                     └───────────────┼──────────────┘
-                                     ▼
-               ┌───────────────────────────────────────────┐
-               │          RFC Rule Analysis Engine         │
-               │  - 9 Infrastructure checks (analyzer.py)  │
-               │  - SPF 10-lookup & policy (spf.py)        │
-               │  - DMARC enforcement & rua (email_auth.py)│
-               │  - DKIM key validity (email_auth.py)      │
-               │  - Weighted Email Health Score (0-100)    │
-               └─────────────────────┬─────────────────────┘
-                                     │
-                     ┌───────────────┴───────────────┐
-                     ▼                               ▼
-       ┌───────────────────────────┐   ┌───────────────────────────┐
-       │   JSON Dashboard Stream   │   │  Self-Contained Report    │
-       │   Filters + Meter Bar     │   │  Jinja2 Offline HTML      │
-       └───────────────────────────┘   └───────────────────────────┘
+               ┌─────────────────────────────────────────────────────────┐
+               │           Browser UI (Vanilla JS & Modern CSS)          │
+               │  Bento Grid Cockpit · Live Telemetry · Keyboard Nav (/) │
+               └────────────────────────────┬────────────────────────────┘
+                                            │ POST /api/analyze {"domain": "..."}
+                                            ▼
+               ┌─────────────────────────────────────────────────────────┐
+               │              FastAPI Gateway (app/main.py)              │
+               │         Strict Pydantic URL & Domain Validation         │
+               └────┬──────────────┬──────────────┬──────────────┬───────┘
+                    │              │              │              │
+                    ▼              ▼              ▼              ▼
+          ┌────────────────┐ ┌──────────┐ ┌─────────────┐ ┌──────────────┐
+          │ Async Resolver │ │ SPF Deep │ │ DMARC/DKIM  │ │ Cryptography │
+          │ 7 Record Types │ │ Engine   │ │ Scanner     │ │ & Takeovers  │
+          │ A, AAAA, MX,   │ │ Parse,   │ │ Policy,     │ │ DNSSEC, DS,  │
+          │ NS, TXT, CNAME,│ │ Flatten, │ │ 15 Selectors│ │ Dangling     │
+          │ SOA            │ │ 10-Limit │ │ rua/ruf     │ │ CNAMEs, BIMI │
+          │ (resolver.py)  │ │ (spf.py) │ │(email_auth) │ │ (takeover/..)│
+          └────────┬───────┘ └────┬─────┘ └──────┬──────┘ └──────┬───────┘
+                   └──────────────┼──────────────┼───────────────┘
+                                  ▼
+               ┌─────────────────────────────────────────────────────────┐
+               │           Comprehensive RFC Rule Analysis Engine        │
+               │ • 9 Infrastructure Checks (analyzer.py)                 │
+               │ • SPF Recursion Tree & Flattening (spf.py)              │
+               │ • DMARC Policy & Weighted Score Calculation (0-100)     │
+               │ • DNSSEC Chain Validation & Subdomain Takeover Hunting  │
+               │ • 1-Click Remediation & BIND Zone Builder (remediation) │
+               └────────────────────────────┬────────────────────────────┘
+                                            │
+                            ┌───────────────┴───────────────┐
+                            ▼                               ▼
+              ┌───────────────────────────┐   ┌───────────────────────────┐
+              │ Dynamic Dashboard Stream  │   │ Standalone Offline Report │
+              │ Bento Cockpit + dig CLI   │   │ Jinja2 Embedded HTML File │
+              └───────────────────────────┘   └───────────────────────────┘
 ```
 
 ---
 
-## 6. RFC Rules & Security Standards Reference
+## 6. Comprehensive Scan Directory: What Scans It Runs, What They Tell You & Why They Are Critical
 
-### Core DNS Infrastructure Checks:
-1. **RFC 1035 (`check_domain_resolves`)**: Domain resolves to at least one valid IPv4 (`A`) or IPv6 (`AAAA`) record. *(Severity: ERROR)*
-2. **RFC 1034 / 1035 (`check_ns_exists`)**: Authoritative Nameserver records exist for the zone. *(Severity: ERROR)*
-3. **RFC 1035 §2.2 (`check_ns_redundancy`)**: At least 2 distinct nameservers exist to eliminate Single Points of Failure. *(Severity: WARNING)*
-4. **RFC 1035 (`check_ns_resolves`)**: Each authoritative NS host resolves to an IP address. *(Severity: ERROR)*
-5. **RFC 5321 (`check_mx_exists`)**: MX records present for mail-handling domains. *(Severity: INFO)*
-6. **RFC 5321 (`check_mx_resolves`)**: Mail exchange hosts resolve to reachable `A` records to prevent email bounce-backs. *(Severity: ERROR)*
-7. **RFC 1034 §3.6.2 & RFC 2181 (`check_cname_conflict`)**: Verifies CNAME does not coexist with other record types at the same node. *(Severity: ERROR)*
-8. **RFC 1912 / 2182 (`check_soa_sanity`)**: Validates SOA parameters (`refresh >= retry`, `expire >= 172,800s / 2 days`). *(Severity: WARNING)*
-9. **RFC 1035 (`check_ttl_sanity`)**: Flags `TTL = 0` (kills caching) and `TTL > 7 days` (prevents emergency IP failover). *(Severity: WARN/INFO)*
-
-### Email Authentication & Anti-Spoofing Checks:
-10. **RFC 7208 (`SPF Policy`)**: Checks for `v=spf1`, flags dangerous `+all` (anyone can spoof) and weak `?all` policies.
-11. **RFC 7208 §3.2 (`Multiple SPF Records`)**: Flags duplicate SPF records which cause receivers to return `PermError`.
-12. **RFC 7208 §4.6.4 (`SPF 10-Lookup Limit`)**: Recursively counts lookups. Warns at 8–10 lookups; raises an ERROR at >10. Provides automated flattened SPF generation.
-13. **RFC 7208 §5.5 (`Deprecated PTR`)**: Flags deprecated `ptr` mechanism.
-14. **RFC 7489 (`DMARC Evaluation`)**: Checks `_dmarc.{domain}` for `p=none` (monitoring only), `p=quarantine`, and `p=reject` (full enforcement), plus `rua` reporting and `pct` coverage.
-15. **RFC 6376 (`DKIM Verification`)**: Concurrently scans 15 common selectors (`google`, `default`, `s1`, `mail`, `k1`, etc.), extracting public keys and checking test flags (`t=y`).
+Here is the exhaustive inventory of all scans performed during each analysis:
 
 ---
 
-## 7. Comprehensive Interview & Viva Q&A
+### Category 1: Core DNS Infrastructure Scans
 
-### Category A: Core Concepts
+#### 1. IPv4 Resolution Scan (`A` Records)
+* **What It Does**: Queries the apex domain for 32-bit IPv4 address records (`A`).
+* **What It Tells You**: Returns the IPv4 addresses where the domain's web servers or proxy edge nodes reside.
+* **Why It Is Important**: Fundamental to web connectivity. If an `A` record is absent and no `AAAA` or `CNAME` exists, the domain is completely dark and unresolvable for 90%+ of internet users.
+
+#### 2. IPv6 Dual-Stack Resolution Scan (`AAAA` Records)
+* **What It Does**: Queries the domain for 128-bit IPv6 address records (`AAAA`).
+* **What It Tells You**: Confirms whether the domain supports native IPv6 routing or is legacy IPv4-only.
+* **Why It Is Important**: Over 45% of global Google users now access services via IPv6. On mobile networks (5G) and emerging ISP infrastructure that operate IPv6-only, lack of `AAAA` records causes traffic to route through translation gateways (NAT64/DNS64), adding latency and potential connection drops.
+
+#### 3. Authoritative Nameserver Existence Scan (`NS` Records)
+* **What It Does**: Checks whether authoritative nameserver records (`NS`) are published for the zone (RFC 1034 / 1035).
+* **What It Tells You**: Identifies the primary authoritative servers responsible for answering all DNS queries for the domain.
+* **Why It Is Important**: Without authoritative `NS` records, recursive DNS resolvers across the globe cannot locate the zone's records, resulting in total domain failure (`SERVFAIL`).
+
+#### 4. Nameserver Redundancy & Fault Tolerance Scan (RFC 1035 §2.2)
+* **What It Does**: Counts the number of distinct authoritative nameservers and validates redundancy (minimum of 2 required).
+* **What It Tells You**: Confirms whether the domain has distributed DNS resilience or a Single Point of Failure (SPOF).
+* **Why It Is Important**: If a domain has only 1 nameserver and that server goes down, crashes, or is DDoS'd, all services across the organization (website, email, API, VPN) instantly go offline. RFC 1035 mandates at least 2 independent nameservers.
+
+#### 5. Nameserver Host IP Reachability Scan
+* **What It Does**: Resolves each authoritative nameserver hostname to an underlying IP address.
+* **What It Tells You**: Verifies that nameserver hostnames are active and can be reached by recursive resolvers.
+* **Why It Is Important**: A registered nameserver hostname that fails to resolve is a "lame delegation". Resolvers attempting to query a dead nameserver suffer 3–5 second timeouts before failing over, causing painful page-load latency or random resolution failures.
+
+#### 6. Mail Exchange Existence & Host Resolution Scan (`MX` Records — RFC 5321)
+* **What It Does**: Fetches MX records, parses priority rankings, and resolves each mail server hostname to an active IP.
+* **What It Tells You**: Confirms the incoming mail infrastructure, failover order, and server availability.
+* **Why It Is Important**: If a company sends or receives email, its MX records must resolve. If an MX points to an unresolvable hostname, external mail servers (Gmail, Microsoft 365) immediately bounce incoming messages with `550 Host not found` errors.
+
+#### 7. CNAME Conflict & Node Exclusivity Scan (RFC 1034 §3.6.2 & RFC 2181)
+* **What It Does**: Audits whether a Canonical Name (`CNAME`) record coexists with other record types (`A`, `MX`, `NS`, `SOA`, `TXT`) at the same domain node.
+* **What It Tells You**: Detects invalid alias configurations that break DNS protocol rules.
+* **Why It Is Important**: RFC 1034 dictates that if a node has a CNAME, it can have *no other record types*. If a CNAME is placed on an apex domain (`example.com`), recursive resolvers ignore the domain's `MX` and `NS` records, silently dropping emails and causing unpredictable routing glitches.
+
+#### 8. Start of Authority (SOA) Parameter Sanity Scan (RFC 1912 / 2182)
+* **What It Does**: Inspects the zone's primary master (`mname`), administrator email (`rname`), serial number, refresh, retry, expire, and minimum TTL intervals.
+* **What It Tells You**: Verifies the operational synchronization health between primary and secondary nameservers.
+* **Why It Is Important**: 
+  - If `refresh < retry`, secondary servers poll out of order.
+  - If `expire` is under 172,800 seconds (2 days), a temporary outage on the primary server causes secondary servers to discard all zone records, wiping the domain from the internet.
+
+#### 9. Time-to-Live (TTL) Extreme Range & Caching Sanity Scan (RFC 1035)
+* **What It Does**: Audits TTL values across all returned DNS records for extreme anomalies.
+* **What It Tells You**: Flags `TTL = 0` (no caching) or excessively high TTL (`TTL > 7 days`).
+* **Why It Is Important**:
+  - `TTL = 0`: Disables caching completely. Every single user request hammers the authoritative nameserver, causing severe server load and slow page-load times.
+  - `TTL > 7 days`: Changes to IP addresses or server migrations take up to a week to propagate, paralyzing emergency failover responses during incidents or outages.
+
+---
+
+### Category 2: Email Authentication & Anti-Spoofing Scans (InboxShield)
+
+#### 10. SPF (Sender Policy Framework) Record & Policy Scan (RFC 7208)
+* **What It Does**: Parses `v=spf1` TXT records, evaluates mechanisms (`ip4`, `ip6`, `include`, `a`, `mx`), and evaluates the trailing policy (`-all`, `~all`, `?all`, `+all`).
+* **What It Tells You**: Identifies the exact IP addresses and cloud providers legally authorized to send email for this domain.
+* **Why It Is Important**: 
+  - Missing SPF allows any attacker anywhere in the world to forge emails using your domain.
+  - `+all` explicitly authorizes the entire internet to spoof your domain.
+  - `-all` (HardFail) informs recipient servers to outright reject unauthorized senders.
+
+#### 11. Multiple SPF Record Conflict Scan (RFC 7208 §3.2)
+* **What It Does**: Detects whether more than one `v=spf1` TXT record exists in the zone.
+* **What It Tells You**: Detects duplicate SPF records created when different teams or IT admins publish separate records for Google, Salesforce, or Zendesk.
+* **Why It Is Important**: RFC 7208 §3.2 mandates that a domain MUST NOT publish multiple SPF records. When receiving mail servers encounter multiple SPF records, they immediately return `PermError`, causing legitimate marketing, transactional, and executive emails to be marked as spam or dropped.
+
+#### 12. SPF Recursive 10-Lookup Limit & Tree Traversal Scan (RFC 7208 §4.6.4)
+* **What It Does**: Recursively traverses and counts every DNS lookup triggered by `include:`, `a`, `mx`, `ptr`, and `redirect` mechanisms.
+* **What It Tells You**: The exact number of DNS lookups required to evaluate the SPF record, warning if approaching the limit (8–10) or in violation (>10).
+* **Why It Is Important**: RFC 7208 limits lookups to 10 to prevent infinite recursive DNS amplification attacks. When a company uses Google Workspace (1 lookup) + Zendesk (2 lookups) + Salesforce (4 lookups) + SendGrid (3 lookups) + HubSpot (2 lookups) = 12 lookups, the record fails with `PermError`. Receivers stop reading the record and treat legitimate mail as unauthenticated.
+
+#### 13. Automatic SPF CIDR Record Flattening Engine
+* **What It Does**: Recursively resolves all nested `include:` domains down to raw `ip4:` and `ip6:` CIDR blocks, assembling an optimized zero-lookup record.
+* **What It Tells You**: Provides a drop-in replacement SPF record with 0 DNS lookups.
+* **Why It Is Important**: Eliminates the 10-lookup limit problem forever without removing any authorized cloud senders.
+
+#### 14. DMARC Enforcement & Alignment Policy Scan (RFC 7489)
+* **What It Does**: Queries `_dmarc.{domain}` and evaluates policy enforcement: `p=none` (monitoring), `p=quarantine` (deliver to spam), and `p=reject` (block at gateway), plus alignment flags (`adkim`, `aspf`).
+* **What It Tells You**: Whether recipient mail servers actively block phishing emails or merely log them.
+* **Why It Is Important**: `p=none` offers **zero protection** against spoofing. Attackers can still send phishing emails as your brand. Only `p=quarantine` and `p=reject` protect customers, employees, and partners from phishing.
+
+#### 15. DMARC Aggregate (`rua`) & Forensic (`ruf`) Telemetry Scan
+* **What It Does**: Verifies whether DMARC aggregate reporting URIs (`rua=mailto:...`) are configured.
+* **What It Tells You**: Confirms whether the domain owner receives daily XML telemetry reports from Gmail, Microsoft, and Yahoo about who is attempting to send email as their domain worldwide.
+* **Why It Is Important**: Without `rua`, IT administrators operate blind. They have no visibility into active phishing campaigns targeting their brand, nor do they know if a legitimate SaaS provider's emails are failing authentication.
+
+#### 16. DKIM (DomainKeys Identified Mail) Multi-Selector Scan (RFC 6376)
+* **What It Does**: Concurrently probes 15 industry-standard DKIM selectors (`google`, `default`, `s1`, `selector1`, `mail`, `k1`, `zendesk`, `amazonses`, `mandrill`, etc.) at `{selector}._domainkey.{domain}` and extracts RSA/Ed25519 public keys.
+* **What It Tells You**: Validates whether cryptographic signatures are published and confirms which cloud providers sign outgoing messages.
+* **Why It Is Important**: DKIM creates a cryptographic tamper-evident seal on outgoing emails. If an email is altered in transit (e.g. malicious invoice link substitution), the DKIM signature breaks and recipient servers flag the tampering.
+
+---
+
+### Category 3: Cryptography & Threat Defense Scans
+
+#### 17. Subdomain Takeover & Dangling CNAME Threat Scanner (CVE Threat Hunting)
+* **What It Does**: Analyzes CNAME pointers against known cloud provider fingerprints (AWS S3, GitHub Pages, Heroku, Shopify, Zendesk, Surge, Ghost, Azure, Vercel) and verifies whether the target endpoint resolves or is unclaimed.
+* **What It Tells You**: Discovers "dangling" CNAME records pointing to decommissioned or deleted cloud instances.
+* **Why It Is Important**: **Critical CVE Vulnerability**. If a company deletes an AWS S3 bucket (`old-assets.s3.amazonaws.com`) but forgets to delete the DNS CNAME (`assets.company.com`), any attacker can register that bucket name on AWS for $0 and take over `assets.company.com`. They can then host phishing login pages, steal session cookies via cross-domain access, and distribute malware under the company's trusted domain.
+
+#### 18. DNSSEC Cryptographic Chain-of-Trust Audit (RFC 4033, 4034, 4035)
+* **What It Does**: Queries Zone Signing Keys (ZSK), Key Signing Keys (KSK), public key algorithms (ECDSA P-256, Ed25519, RSA), and validates parent TLD Delegation Signer (`DS`) records.
+* **What It Tells You**: Confirms whether the zone's DNS records are digitally signed and cryptographically tied to the global root trust anchor.
+* **Why It Is Important**: Standard DNS queries travel in plain unencrypted UDP. Attackers on public Wi-Fi, malicious ISPs, or compromised routers can inject fake DNS responses (DNS Cache Poisoning / Kaminsky attacks) to silently redirect users entering `yourbank.com` to an identical phishing server. DNSSEC renders cache poisoning mathematically impossible.
+
+#### 19. BIMI (Brand Indicators for Message Identification) Certification (RFC 8617)
+* **What It Does**: Queries `default._bimi.{domain}` for verified SVG brand logos and checks whether the domain's DMARC policy meets the strict eligibility criteria (`p=quarantine` or `p=reject` with `pct=100`).
+* **What It Tells You**: Confirms whether the company's verified brand avatar will display next to emails in Gmail, Apple Mail, and Yahoo Mail.
+* **Why It Is Important**: BIMI increases email open rates by up to 21%, dramatically boosts consumer brand trust, and visually proves to non-technical users that an email is 100% authentic.
+
+#### 20. 1-Click Remediation & BIND Zone File Engine
+* **What It Does**: Cross-correlates all diagnostic findings to synthesize exact copy-paste DNS records tailored for Cloudflare, AWS Route 53, and GoDaddy, plus an exportable RFC-compliant BIND zone file (`.zone`).
+* **What It Tells You**: The precise configuration lines needed to transition a domain from a failing security posture to a hardened Grade A+.
+* **Why It Is Important**: A scanner that only reports errors creates friction. This feature bridges diagnosis and resolution, allowing administrators to harden their domain in under 60 seconds.
+
+---
+
+## 7. RFC Rules & Security Standards Reference
+
+| Category | RFC Standard | Rule Function / Inspection Scope | Severity |
+|:---|:---|:---|:---|
+| **Routing** | RFC 1035 | `check_domain_resolves`: Validates domain resolves to IPv4 or IPv6 | **ERROR** |
+| **Routing** | RFC 1034 / 1035 | `check_ns_exists`: Verifies authoritative nameservers exist | **ERROR** |
+| **Routing** | RFC 1035 §2.2 | `check_ns_redundancy`: Enforces minimum of 2 distinct nameservers | **WARNING** |
+| **Routing** | RFC 1035 | `check_ns_resolves`: Verifies each nameserver host resolves to an IP | **ERROR** |
+| **Email** | RFC 5321 | `check_mx_exists`: Verifies mail exchange records are published | **INFO** |
+| **Email** | RFC 5321 | `check_mx_resolves`: Verifies mail hosts resolve to reachable IPs | **ERROR** |
+| **DNS Rules** | RFC 1034 §3.6.2 | `check_cname_conflict`: Ensures CNAME exclusivity at zone node | **ERROR** |
+| **Operations**| RFC 1912 / 2182 | `check_soa_sanity`: Audits SOA refresh, retry, and expire sanity | **WARNING** |
+| **Operations**| RFC 1035 | `check_ttl_sanity`: Flags `TTL = 0` and `TTL > 7 days` | **WARN/INFO** |
+| **Anti-Spoof**| RFC 7208 | `check_spf_policy`: Checks for `v=spf1`, flags `+all` and weak `?all` | **ERROR/WARN**|
+| **Anti-Spoof**| RFC 7208 §3.2 | `check_spf_multiple`: Flags duplicate SPF records causing PermError | **ERROR** |
+| **Anti-Spoof**| RFC 7208 §4.6.4| `check_spf_lookup_limit`: Recursive 10-lookup count & tree audit | **ERROR/WARN**|
+| **Anti-Spoof**| RFC 7208 §5.5 | `check_spf_deprecated_ptr`: Flags deprecated and slow `ptr` mechanism| **WARNING** |
+| **Phishing** | RFC 7489 | `check_dmarc_policy`: Audits `none` → `quarantine` → `reject` & `rua` | **ERROR/WARN**|
+| **Signatures**| RFC 6376 | `check_dkim_selectors`: Audits 15 selectors & public key extraction | **INFO/WARN** |
+| **Hijacking** | CVE Standards | `check_subdomain_takeover`: Dangling CNAME cloud provider audit | **ERROR** |
+| **Crypto** | RFC 4033–4035 | `check_dnssec`: Cryptographic chain-of-trust & DS delegation | **INFO/WARN** |
+| **Branding** | RFC 8617 | `check_bimi`: SVG logo publication & DMARC eligibility | **INFO** |
+
+---
+
+## 8. Comprehensive Interview & Viva Q&A
+
+### Category A: Core Concepts & Motivation
 * **Q: What is the primary purpose of this project?**  
-  *Answer:* To automate domain DNS health verification and email spoofing defense analysis into a fast, non-blocking web platform that provides immediate diagnostic answers rather than raw manual output.
-* **Q: Why is DNS misconfiguration dangerous?**  
-  *Answer:* It can cause total site downtime (lack of NS redundancy), dropped emails (unresolvable MX hosts), and security breaches (dangling CNAME takeovers, email domain spoofing).
-
-### Category B: Technical Implementation & Concurrency
-* **Q: Why use `asyncio.gather` instead of standard sequential lookups?**  
-  *Answer:* Querying 7 DNS record types sequentially with network round-trips (~150ms each) takes over 1 second. With `asyncio.gather`, all queries execute concurrently on Python's event loop, finishing in the time of the single slowest lookup (~150ms total), achieving a **7x speedup**.
-* **Q: Why Vanilla JS over React/Angular?**  
-  *Answer:* The application does not require heavy state stores. Vanilla JS gives instantaneous load times, zero build pipeline, zero node_modules, and zero supply chain vulnerabilities.
-
-### Category C: Email Authentication & Security
-* **Q: What is SPF Record Flattening?**  
-  *Answer:* RFC 7208 limits SPF queries to 10 DNS lookups. Enterprises using multiple SaaS providers easily exceed 10 lookups, causing emails to be rejected (`PermError`). SPF flattening recursively resolves all `include:` and `redirect=` domains into direct `ip4:` and `ip6:` CIDR blocks, reducing DNS lookups to exactly **zero**.
-* **Q: What is the difference between DMARC `none`, `quarantine`, and `reject`?**  
-  *Answer:* `p=none` is audit mode (reports only, no delivery impact). `p=quarantine` moves failed messages to Spam. `p=reject` blocks unauthorized messages at the SMTP gateway.
-* **Q: How does the Email Health Score calculate?**  
-  *Answer:* It begins at 100 points, deducting 15 points per ERROR (e.g., missing SPF/DMARC) and 8 points per WARNING (e.g., weak policy, lookup count approaching 10). Clamped to 0–100 and mapped to A+, A, B, C, D, or F.
-
-### Category D: System Operations & Self-Healing
-* **Q: How does `run.sh` ensure reliability across different environments?**  
-  *Answer:* It validates Python 3.11+, detects architecture-corrupted or invalid virtual environments, automatically rebuilds `venv/` if broken, verifies required packages, and validates port boundaries before starting Uvicorn.
+  *Answer:* To automate comprehensive DNS infrastructure health auditing, email spoofing defense evaluation, and cryptographic security verification into a fast, non-blocking web platform that provides immediate diagnostic answers and copy-paste remediation rather than raw, cryptic command-line output.
+* **Q: Why is DNS misconfiguration dangerous to businesses?**  
+  *Answer:* DNS is the single point of failure for all internet services. A lack of nameserver redundancy can take down an entire digital presence; an unresolvable MX host drops critical business emails; a dangling CNAME allows attackers to take over subdomains; and a missing or weak SPF/DMARC policy allows cybercriminals to forge executive emails to steal money or credentials.
 
 ---
 
-## 8. Pro Tips to Impress Teachers & Evaluators
+### Category B: Concurrency, Performance & Architecture
+* **Q: Why use `asyncio.gather` instead of sequential lookups?**  
+  *Answer:* DNS lookups are network I/O-bound. Running 7 DNS queries + SPF + DMARC + 15 DKIM selectors sequentially at ~150ms per network round-trip takes **3 to 4 seconds**. With `asyncio.gather`, all queries execute concurrently on Python's event loop, completing in the time of the single slowest lookup (~150ms total), achieving a **15x to 20x performance speedup**.
+* **Q: Why Vanilla JavaScript instead of React, Next.js, or Vue?**  
+  *Answer:* The application is an ultra-fast diagnostic utility. Vanilla JS requires **zero build step, zero compilation, and zero `node_modules`**. This eliminates supply chain vulnerabilities, guarantees sub-millisecond initial asset loading, and ensures the platform is 100% self-contained.
 
-1. **Show the REST API via `curl` in a second terminal:**
+---
+
+### Category C: Email Defense & SPF Flattening
+* **Q: What is SPF Record Flattening and how does your engine implement it?**  
+  *Answer:* RFC 7208 strictly limits SPF evaluation to 10 DNS lookups to prevent Denial of Service loops. Enterprises integrating multiple SaaS platforms (Google, Zendesk, Salesforce, SendGrid) easily exceed 10 lookups, causing receivers to return `PermError` and reject emails. Our flattener recursively follows all `include:` and `redirect=` domains, resolves their underlying A/AAAA records into direct CIDR IP blocks (`ip4:` and `ip6:`), and outputs an optimized replacement record requiring exactly **0 DNS lookups**.
+* **Q: What is the difference between DMARC `none`, `quarantine`, and `reject`?**  
+  *Answer:*
+  - `p=none`: Audit mode. Unauthorized emails are delivered normally to recipient inboxes; only XML telemetry reports are generated. Does not stop phishing.
+  - `p=quarantine`: Moderate enforcement. Unauthorized emails are routed to the recipient's Spam/Junk folder.
+  - `p=reject`: Maximum enforcement. Unauthorized emails are outright blocked and dropped at the SMTP gateway, achieving complete phishing immunity.
+* **Q: How is the overall Email Health Score computed?**  
+  *Answer:* The algorithm starts at 100 points, deducting 15 points per ERROR (e.g. missing SPF/DMARC, duplicate records) and 8 points per WARNING (e.g. weak `p=none` policy, SPF lookups approaching 10). The score is clamped between 0 and 100 and mapped to letter grades: A+ (95–100), A (85–94), B (70–84), C (55–69), D (40–54), and F (<40).
+
+---
+
+### Category D: Threat Hunting & Cryptography
+* **Q: What is a Subdomain Takeover and how does your scanner detect it?**  
+  *Answer:* A subdomain takeover occurs when a DNS CNAME points to an external cloud service (e.g. `sub.example.com` → `mybucket.s3.amazonaws.com`), but the cloud resource is deleted or unclaimed. Attackers can register that exact resource name on AWS and take full control of `sub.example.com`. Our scanner evaluates CNAME targets against known provider fingerprints (AWS S3, GitHub Pages, Heroku, Shopify, etc.) and tests target resolution to identify dangling endpoints before attackers discover them.
+* **Q: How does DNSSEC protect against DNS Cache Poisoning (Kaminsky attacks)?**  
+  *Answer:* Standard DNS queries travel over unencrypted UDP without authentication, allowing attackers on the network to spoof responses. DNSSEC adds cryptographic signatures (`RRSIG`) generated by a private key. Resolvers verify the signature using the zone's public key (`DNSKEY`), which is anchored by a cryptographic hash (`DS` record) in the parent TLD. If an attacker alters the IP address, the signature validation fails and the poisoned response is rejected.
+
+---
+
+### Category E: UI/UX & Design Engineering
+* **Q: What design principles make your Bento Grid superior to traditional tables?**  
+  *Answer:* It applies the Two-Tier Cognitive Model:
+  1. *Tier 1 (Executive Cockpit)*: The left hero card with the circular health ring answers the user's primary question in 3 seconds: "Am I secure and what is broken?"
+  2. *Tier 2 (Actionable Telemetry)*: The 2×2 grid groups metrics into logical pillars (DNS, Email, Cryptography, Remediation) with zero text truncation, live status dots, and direct jump navigation.
+
+---
+
+### Category F: Reliability & Code Quality
+* **Q: How do you guarantee stability across Python versions?**  
+  *Answer:* The platform includes an automated test suite of **94 unit and integration tests** running under `pytest`. Tests mock network queries to verify RFC check logic deterministically and test edge cases like dirty URLs, malformed domains, and CNAME loops. Furthermore, `run.sh` features self-healing virtual environment checks that automatically verify Python 3.11+ and rebuild corrupted environments.
+
+---
+
+## 9. Pro Tips to Impress Teachers & Evaluators
+
+1. **Demonstrate Headless CI/CD Capabilities with `curl`:**  
+   Open a second terminal and demonstrate that your system is a headless REST API ready for enterprise pipelines:
    ```bash
    curl -s -X POST http://127.0.0.1:8000/api/analyze \
      -H "Content-Type: application/json" \
-     -d '{"domain":"google.com"}' | python3 -m json.tool | head -40
+     -d '{"domain":"google.com"}' | python3 -m json.tool | head -35
    ```
-   *Demonstrates that your platform is a modular, headless backend that can integrate into CI/CD pipelines.*
-2. **Demonstrate Keyboard Shortcut (`/`):**
-   *Press `/` from anywhere on the webpage to instantly jump focus into the domain input.*
-3. **Open the Downloaded Offline HTML Report:**
-   *Show that all styles are embedded inline; it opens directly from the filesystem without any local server running.*
-4. **Compare against manual `dig`:**
-   *Mention that getting the same level of diagnostic data manually requires 9 `dig` queries, 2 recursive lookups, and manual cross-referencing against RFC documents.*
+2. **Demonstrate Mouse-Free Keyboard Navigation:**  
+   Press `/` to focus the search bar, enter a domain, press <kbd>Enter</kbd>, press `f` to cycle severity filters, and press `v` to switch between Card View and the CLI `dig` terminal.
+3. **Showcase the Standalone Offline Report:**  
+   Click **Download Report** and open the `.html` file directly from your local file browser (`file:///...`). Highlight that all styles are embedded inline and it functions without an internet connection or backend server.
+4. **Contrast with Traditional CLI `dig`:**  
+   Explain that gathering this breadth of information manually requires executing 10+ distinct `dig` commands, 3 recursive lookup trees, manual RFC arithmetic, and deep cryptographic validation.
 
 ---
 
-## 9. Closing Statement
+## 10. Closing Statement
 
-> *"DNS Analyzer v2 bridges the gap between low-level networking and security analysis. It delivers enterprise-grade diagnostics — from DNS zone integrity to email authentication — in a lightweight, accessible, zero-dependency package. Thank you. I would be happy to take any questions."*
+> *"DNS Analyzer v2 transforms complex, low-level networking protocols into clear, actionable security intelligence. By unifying concurrent DNS resolution, recursive SPF flattening, DMARC enforcement, DNSSEC validation, subdomain takeover defense, and an executive Bento Grid cockpit into a zero-dependency web platform, it provides both non-technical leaders and systems engineers with the exact insights needed to protect their digital perimeter. Thank you, and I look forward to your questions."*
 
 ---
 
-## 10. Quick Start
+## 11. Quick Start & Scripts
 
-```bash
-# Navigate to project
-cd ~/Desktop/dns-analyzer
-
-# One-command setup & launch:
-bash run.sh
-
-# Or run on custom port:
-bash run.sh 9000
-
-# Open in browser:
-# http://127.0.0.1:8000
-```
+| Script Command | Purpose |
+|:---|:---|
+| `bash run.sh` | **Recommended:** Auto-setup environment, verify dependencies, and launch server on `http://127.0.0.1:8000` |
+| `bash run.sh <port>` | Launch server on custom port (e.g. `bash run.sh 9000`) |
+| `bash run.sh --test` | Run the complete automated test suite (94 tests) |
+| `bash run.sh --setup-only` | Pre-install dependencies and prepare `venv/` without launching server |
+| `bash run.sh --help` | Display command usage and script flags |

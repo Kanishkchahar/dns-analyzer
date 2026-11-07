@@ -51,11 +51,26 @@ const remediationSection   = document.getElementById("remediation-section");
 const remediationList      = document.getElementById("remediation-list");
 const downloadZoneBtn      = document.getElementById("download-zone-btn");
 
+// Multi-format & View Mode DOM refs
+const clearInputBtn    = document.getElementById("clear-input-btn");
+const inputKbdHint     = document.getElementById("input-kbd-hint");
+const shareLinkBtn     = document.getElementById("share-link-btn");
+const copyMdBtn        = document.getElementById("copy-md-btn");
+const exportJsonBtn    = document.getElementById("export-json-btn");
+const viewCardsBtn     = document.getElementById("view-cards-btn");
+const viewDigBtn       = document.getElementById("view-dig-btn");
+const recordsDigContainer = document.getElementById("records-dig-container");
+const digDomainLabel   = document.getElementById("dig-domain-label");
+const digTerminalBody  = document.getElementById("dig-terminal-body");
+const copyDigBtn       = document.getElementById("copy-dig-btn");
+
 // ── State ─────────────────────────────────────────────────────
 let currentDomain = "";
 let currentFindings = [];
 let currentFilter = "all";
 let currentZoneSnippet = "";
+let currentScanData = null;
+let currentViewMode = "cards"; // "cards" | "dig"
 let loadingInterval = null;
 
 // ── Recent Searches (localStorage) ───────────────────────────
@@ -317,6 +332,38 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
+  // 'c' to copy shareable scan URL
+  if (!isInputFocused && (e.key === "c" || e.key === "C") && currentDomain && shareLinkBtn) {
+    e.preventDefault();
+    shareLinkBtn.click();
+    return;
+  }
+
+  // 'm' to copy Markdown summary
+  if (!isInputFocused && (e.key === "m" || e.key === "M") && currentScanData && copyMdBtn) {
+    e.preventDefault();
+    copyMdBtn.click();
+    return;
+  }
+
+  // 'j' to export JSON
+  if (!isInputFocused && (e.key === "j" || e.key === "J") && currentScanData && exportJsonBtn) {
+    e.preventDefault();
+    exportJsonBtn.click();
+    return;
+  }
+
+  // 'v' to toggle DNS records view (cards vs dig)
+  if (!isInputFocused && (e.key === "v" || e.key === "V") && currentDomain) {
+    e.preventDefault();
+    if (currentViewMode === "cards" && viewDigBtn) {
+      viewDigBtn.click();
+    } else if (viewCardsBtn) {
+      viewCardsBtn.click();
+    }
+    return;
+  }
+
   // 'z' to download BIND zone file
   if (!isInputFocused && (e.key === "z" || e.key === "Z") && currentZoneSnippet) {
     if (downloadZoneBtn) {
@@ -334,15 +381,18 @@ document.querySelectorAll(".filter-chip").forEach((btn) => {
   });
 });
 
-// Summary badges click toggles severity filters
+// Summary badges click switches to findings tab and applies filter
 badgeErrors.addEventListener("click", () => {
-  applyFindingsFilter(currentFilter === "error" ? "all" : "error");
+  switchSegmentTab("tab-findings");
+  applyFindingsFilter("error");
 });
 badgeWarnings.addEventListener("click", () => {
-  applyFindingsFilter(currentFilter === "warning" ? "all" : "warning");
+  switchSegmentTab("tab-findings");
+  applyFindingsFilter("warning");
 });
 badgeInfo.addEventListener("click", () => {
-  applyFindingsFilter(currentFilter === "info" ? "all" : "info");
+  switchSegmentTab("tab-findings");
+  applyFindingsFilter("info");
 });
 
 if (findingsSearch) {
@@ -474,17 +524,31 @@ function hideError() {
 
 function hideResults() {
   results.classList.remove("visible");
-  emailScoreSection.style.display = "none";
-  emailAuthSection.style.display = "none";
-  if (securitySuiteSection) securitySuiteSection.style.display = "none";
-  if (remediationSection) remediationSection.style.display = "none";
+  const panels = document.querySelectorAll(".results-tab-panel");
+  panels.forEach((p) => {
+    p.classList.remove("active");
+    p.style.display = "none";
+  });
 }
 
 // ── Render ────────────────────────────────────────────────────
 function renderResults(data) {
   currentDomain = data.domain;
+  currentScanData = data;
   resultDomain.textContent = data.domain;
   currentFindings = data.findings || [];
+
+  // Update URL search param for shareability
+  try {
+    const url = new URL(window.location);
+    url.searchParams.set("domain", data.domain);
+    window.history.replaceState({ domain: data.domain }, "", url);
+  } catch (_) {}
+
+  // Update dig domain label
+  if (digDomainLabel) {
+    digDomainLabel.textContent = data.domain;
+  }
 
   // Summary badges
   countErrors.textContent  = data.summary.errors;
@@ -494,8 +558,8 @@ function renderResults(data) {
   badgeWarnings.classList.toggle("zero", data.summary.warnings === 0);
   badgeInfo.classList.toggle("zero", data.summary.info === 0);
 
-  // Executive Posture Matrix
-  renderPostureMatrix(data);
+  // Bento Grid Security Posture Cockpit
+  renderBentoCockpit(data);
 
   // Reset findings search on new scan
   if (findingsSearch) {
@@ -521,6 +585,9 @@ function renderResults(data) {
     recordsCount.textContent = `${renderedRecordTypes} record type${renderedRecordTypes === 1 ? "" : "s"}`;
   }
 
+  // Render dig view terminal simulation if active
+  renderDigView();
+
   // Email Authentication
   renderEmailAuth(data.email_auth, data.domain);
 
@@ -530,77 +597,328 @@ function renderResults(data) {
   // 1-Click Remediation Fixes
   renderRemediation(data.remediation, data.bind_zone_snippet);
 
+  // Update Segmented Tab Badges and Overview Snapshots
+  updateTabBadges(data);
+
+  // Activate default or chosen tab
+  switchSegmentTab(activeSegmentTabId || "tab-overview");
+
   results.classList.add("visible");
   results.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-// ── Executive Posture Matrix ──────────────────────────────────
-function renderPostureMatrix(data) {
-  const routingEl = document.getElementById("posture-routing");
-  const redundancyEl = document.getElementById("posture-redundancy");
-  const emailEl = document.getElementById("posture-email");
-  const dnssecEl = document.getElementById("posture-dnssec");
+// ── Tab Badges & Overview Snapshots ───────────────────────────
+function updateTabBadges(data) {
+  // 1. Email badge & snapshot
+  const emailBadge = document.getElementById("tab-badge-email");
+  const emailPill = document.getElementById("overview-email-pill");
+  const emailDesc = document.getElementById("overview-email-desc");
+  const grade = data.email_auth?.score?.grade || "--";
+  const score = data.email_auth?.score?.score ?? 0;
 
-  if (!routingEl || !redundancyEl || !emailEl || !dnssecEl) return;
-
-  // 1. DNS Routing (A / AAAA)
-  const aRecs = data.records?.A?.records || [];
-  const aaaaRecs = data.records?.AAAA?.records || [];
-  if (aRecs.length > 0 && aaaaRecs.length > 0) {
-    routingEl.textContent = `Dual-Stack (${aRecs.length} IPv4, ${aaaaRecs.length} IPv6)`;
-    routingEl.className = "posture-val ok";
-  } else if (aRecs.length > 0) {
-    routingEl.textContent = `IPv4 Reachable (${aRecs.length} host${aRecs.length === 1 ? "" : "s"})`;
-    routingEl.className = "posture-val ok";
-  } else if (aaaaRecs.length > 0) {
-    routingEl.textContent = `IPv6 Only (${aaaaRecs.length} host${aaaaRecs.length === 1 ? "" : "s"})`;
-    routingEl.className = "posture-val ok";
-  } else {
-    routingEl.textContent = "Unresolvable (No A/AAAA)";
-    routingEl.className = "posture-val danger";
+  if (emailBadge) {
+    emailBadge.textContent = grade;
+    emailBadge.className = "tab-badge";
+    if (grade.startsWith("A")) emailBadge.classList.add("badge-green");
+    else if (grade === "B" || grade === "C") emailBadge.classList.add("badge-amber");
+    else emailBadge.classList.add("badge-red");
+  }
+  if (emailPill) {
+    emailPill.textContent = `Grade ${grade} (${score}/100)`;
+    emailPill.className = "snapshot-pill " + (grade.startsWith("A") ? "good" : grade === "B" ? "warn" : "danger");
+  }
+  if (emailDesc) {
+    const dmarcPol = data.email_auth?.dmarc?.policy;
+    emailDesc.textContent = `Email sender score is ${score}/100 (${grade}). ${dmarcPol ? "DMARC policy: " + dmarcPol : "DMARC policy missing"}.`;
   }
 
-  // 2. Nameserver Redundancy
-  const nsRecs = data.records?.NS?.records || [];
-  if (nsRecs.length >= 2) {
-    redundancyEl.textContent = `Fault-Tolerant (${nsRecs.length} NS hosts)`;
-    redundancyEl.className = "posture-val ok";
-  } else if (nsRecs.length === 1) {
-    redundancyEl.textContent = "Single NS (SPOF Risk)";
-    redundancyEl.className = "posture-val warn";
-  } else {
-    redundancyEl.textContent = "Missing Authoritative NS";
-    redundancyEl.className = "posture-val danger";
+  // 2. Threats badge & snapshot
+  const threatsBadge = document.getElementById("tab-badge-threats");
+  const threatsPill = document.getElementById("overview-threats-pill");
+  const threatsDesc = document.getElementById("overview-threats-desc");
+  const isTakeoverVuln = Boolean(data.security?.takeover?.vulnerable);
+  const isDnssecSecured = data.security?.dnssec?.status === "secured";
+
+  if (threatsBadge) {
+    threatsBadge.className = "tab-badge";
+    if (isTakeoverVuln) {
+      threatsBadge.textContent = "Alert";
+      threatsBadge.classList.add("badge-red");
+    } else if (isDnssecSecured) {
+      threatsBadge.textContent = "Secured";
+      threatsBadge.classList.add("badge-green");
+    } else {
+      threatsBadge.textContent = "Audit";
+    }
+  }
+  if (threatsPill) {
+    threatsPill.textContent = isTakeoverVuln ? "Critical Alert" : (isDnssecSecured ? "Cryptographically Secured" : "Unsigned");
+    threatsPill.className = "snapshot-pill " + (isTakeoverVuln ? "danger" : isDnssecSecured ? "good" : "warn");
+  }
+  if (threatsDesc) {
+    threatsDesc.textContent = isTakeoverVuln
+      ? "CRITICAL: Dangling CNAME detected pointing to unclaimed cloud endpoint!"
+      : (isDnssecSecured ? "DNSSEC validation active with parent DS delegation. Subdomain takeover safe." : "DNSSEC is not enabled for this zone. No dangling takeover vulnerabilities.");
   }
 
-  // 3. Email Authentication
-  const dmarc = data.email_auth?.dmarc;
-  const spf = data.email_auth?.spf;
-  if (dmarc && (dmarc.policy === "reject" || dmarc.policy === "quarantine")) {
-    emailEl.textContent = `Enforced (${dmarc.policy})`;
-    emailEl.className = "posture-val ok";
-  } else if (dmarc && dmarc.policy === "none") {
-    emailEl.textContent = "Audit Mode (p=none)";
-    emailEl.className = "posture-val warn";
-  } else if (spf) {
-    emailEl.textContent = "SPF Only (No DMARC)";
-    emailEl.className = "posture-val warn";
-  } else {
-    emailEl.textContent = "Unprotected (Spoof Risk)";
-    emailEl.className = "posture-val danger";
+  // 3. Fixes badge & snapshot
+  const fixesBadge = document.getElementById("tab-badge-fixes");
+  const fixPill = document.getElementById("overview-fix-pill");
+  const fixDesc = document.getElementById("overview-fix-desc");
+  const fixCount = (data.remediation || []).length;
+
+  if (fixesBadge) {
+    fixesBadge.textContent = `${fixCount} Fix${fixCount === 1 ? "" : "es"}`;
+  }
+  if (fixPill) {
+    fixPill.textContent = fixCount === 0 ? "Posture Optimal" : `${fixCount} Fix${fixCount === 1 ? "" : "es"} Ready`;
+    fixPill.className = "snapshot-pill " + (fixCount === 0 ? "good" : "warn");
+  }
+  if (fixDesc) {
+    fixDesc.textContent = fixCount === 0
+      ? "Zero configuration changes needed. Your DNS zone is fully hardened!"
+      : `${fixCount} actionable DNS change${fixCount === 1 ? "" : "s"} generated for Cloudflare, Route 53, and GoDaddy.`;
   }
 
-  // 4. DNSSEC
-  const dnssec = data.security?.dnssec;
-  if (dnssec && dnssec.status === "secured") {
-    dnssecEl.textContent = "Cryptographically Signed";
-    dnssecEl.className = "posture-val ok";
-  } else if (dnssec && dnssec.status === "incomplete_chain") {
-    dnssecEl.textContent = "Incomplete DS Chain";
-    dnssecEl.className = "posture-val warn";
+  // 4. Findings badge
+  const findingsBadge = document.getElementById("tab-badge-findings");
+  const errCount = data.summary?.errors || 0;
+  if (findingsBadge) {
+    findingsBadge.textContent = String((data.findings || []).length);
+    findingsBadge.className = "tab-badge " + (errCount > 0 ? "badge-red" : "badge-green");
+  }
+}
+
+// ── Bento Grid Security Posture Cockpit ───────────────────────
+function renderBentoCockpit(data) {
+  const hero = document.getElementById("bento-hero");
+  const bentoRingFg = document.getElementById("bento-ring-fg");
+  const bentoGrade = document.getElementById("bento-grade");
+  const bentoScoreNum = document.getElementById("bento-score-num");
+  const heroSubtitle = document.getElementById("bento-hero-subtitle");
+
+  if (!hero) return;
+
+  // ── Score Ring in Hero ──
+  const sc = data.email_auth?.score;
+  if (sc && bentoRingFg && bentoGrade && bentoScoreNum) {
+    const circumference = 2 * Math.PI * 60; // r=60
+    const offset = circumference - (circumference * sc.score / 100);
+
+    let ringColor = "var(--danger)";
+    hero.classList.remove("score-pass", "score-warn", "score-fail");
+    if (sc.score >= 85) {
+      ringColor = "var(--success)";
+      hero.classList.add("score-pass");
+    } else if (sc.score >= 55) {
+      ringColor = "var(--warning)";
+      hero.classList.add("score-warn");
+    } else {
+      hero.classList.add("score-fail");
+    }
+
+    bentoRingFg.style.stroke = ringColor;
+    bentoGrade.style.color = ringColor;
+    bentoRingFg.style.strokeDashoffset = circumference;
+    bentoGrade.textContent = sc.grade;
+    bentoScoreNum.textContent = `${sc.score}/100`;
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        bentoRingFg.style.strokeDashoffset = offset;
+      });
+    });
   } else {
-    dnssecEl.textContent = "Unsigned Zone";
-    dnssecEl.className = "posture-val warn";
+    if (bentoGrade) bentoGrade.textContent = "--";
+    if (bentoScoreNum) bentoScoreNum.textContent = "--/100";
+  }
+
+  // ── Hero Subtitle ──
+  if (heroSubtitle) {
+    const errs = data.summary?.errors || 0;
+    const warns = data.summary?.warnings || 0;
+    if (errs > 0) {
+      heroSubtitle.textContent = `${errs} Critical Issue${errs === 1 ? "" : "s"} Detected`;
+      heroSubtitle.style.color = "var(--danger)";
+    } else if (warns > 0) {
+      heroSubtitle.textContent = `${warns} Warning${warns === 1 ? "" : "s"} — Review Advised`;
+      heroSubtitle.style.color = "var(--warning)";
+    } else {
+      heroSubtitle.textContent = "All Systems Authenticated & Safe";
+      heroSubtitle.style.color = "var(--success)";
+    }
+  }
+
+  // ── DNS Infrastructure Card ──
+  const dnsHeadline = document.getElementById("bento-dns-headline");
+  const dnsBullets = document.getElementById("bento-dns-bullets");
+  const dnsStatusEl = document.getElementById("bento-dns-status");
+  const dnsCard = document.getElementById("bento-dns");
+
+  if (dnsHeadline && dnsBullets) {
+    const aRecs = data.records?.A?.records || [];
+    const aaaaRecs = data.records?.AAAA?.records || [];
+    const nsRecs = data.records?.NS?.records || [];
+    const soaOk = data.records?.SOA?.status === "ok";
+
+    let headline, statusClass = "ok", statusText = "Healthy";
+    if (aRecs.length > 0 && aaaaRecs.length > 0) {
+      headline = "Dual-Stack Reachable";
+    } else if (aRecs.length > 0) {
+      headline = "IPv4 Reachable";
+    } else if (aaaaRecs.length > 0) {
+      headline = "IPv6 Only";
+    } else {
+      headline = "Unresolvable";
+      statusClass = "danger";
+      statusText = "Critical";
+    }
+    if (nsRecs.length < 2 && nsRecs.length > 0 && statusClass !== "danger") {
+      statusClass = "warn";
+      statusText = "Warning";
+    }
+
+    dnsHeadline.textContent = headline;
+    dnsBullets.innerHTML = `
+      <li><span class="bullet-label">IPv4:</span> <span class="bullet-val ${aRecs.length > 0 ? 'ok' : 'warn'}">${aRecs.length} Address${aRecs.length === 1 ? "" : "es"} Resolved</span></li>
+      <li><span class="bullet-label">IPv6:</span> <span class="bullet-val ${aaaaRecs.length > 0 ? 'ok' : 'warn'}">${aaaaRecs.length} Address${aaaaRecs.length === 1 ? "" : "es"} Resolved</span></li>
+      <li><span class="bullet-label">NS:</span> <span class="bullet-val ${nsRecs.length >= 2 ? 'ok' : 'warn'}">${nsRecs.length} Redundant Server${nsRecs.length === 1 ? "" : "s"}</span></li>
+      <li><span class="bullet-label">SOA:</span> <span class="bullet-val ${soaOk ? 'ok' : 'warn'}">${soaOk ? "Valid Zone Authority" : "Missing"}</span></li>
+    `;
+    if (dnsStatusEl) dnsStatusEl.textContent = `Status: ${statusText}`;
+    const dnsDot = dnsCard?.querySelector(".bento-status-dot");
+    if (dnsDot) dnsDot.className = `bento-status-dot ${statusClass}`;
+  }
+
+  // ── Email Authentication Card ──
+  const emailHeadline = document.getElementById("bento-email-headline");
+  const emailBullets = document.getElementById("bento-email-bullets");
+  const emailStatusEl = document.getElementById("bento-email-status");
+  const emailCard = document.getElementById("bento-email");
+
+  if (emailHeadline && emailBullets) {
+    const dmarc = data.email_auth?.dmarc;
+    const spf = data.email_auth?.spf;
+    const dkim = data.email_auth?.dkim;
+
+    let spfText = "Missing", spfClass = "danger";
+    if (spf) {
+      if (spf.all_mechanism === "-all") { spfText = "Valid (-all policy)"; spfClass = "ok"; }
+      else if (spf.all_mechanism === "~all") { spfText = "Soft Fail (~all)"; spfClass = "warn"; }
+      else { spfText = `Found (${spf.all_mechanism || "no qualifier"})`; spfClass = "warn"; }
+    }
+
+    let dmarcText = "Missing", dmarcClass = "danger";
+    if (dmarc) {
+      if (dmarc.policy === "reject") { dmarcText = "Strict (p=reject)"; dmarcClass = "ok"; }
+      else if (dmarc.policy === "quarantine") { dmarcText = "Moderate (p=quarantine)"; dmarcClass = "ok"; }
+      else { dmarcText = "Audit Only (p=none)"; dmarcClass = "warn"; }
+    }
+
+    let dkimText = "Not Found", dkimClass = "warn";
+    if (dkim?.has_dkim) {
+      const selCount = dkim.selectors_found?.length || 0;
+      dkimText = `${selCount} Verified Selector${selCount === 1 ? "" : "s"}`;
+      dkimClass = "ok";
+    }
+
+    let headline, statusClass = "ok", statusText = "Enforced";
+    if (dmarc && (dmarc.policy === "reject" || dmarc.policy === "quarantine") && spf) {
+      headline = "Phishing Immune";
+    } else if (dmarc?.policy === "none") {
+      headline = "Audit Mode"; statusClass = "warn"; statusText = "Monitor Only";
+    } else if (spf && !dmarc) {
+      headline = "SPF Only — No DMARC"; statusClass = "warn"; statusText = "Partial";
+    } else {
+      headline = "Unprotected"; statusClass = "danger"; statusText = "Vulnerable";
+    }
+
+    emailHeadline.textContent = headline;
+    emailBullets.innerHTML = `
+      <li><span class="bullet-label">SPF:</span> <span class="bullet-val ${spfClass}">${escapeHtml(spfText)}</span></li>
+      <li><span class="bullet-label">DMARC:</span> <span class="bullet-val ${dmarcClass}">${escapeHtml(dmarcText)}</span></li>
+      <li><span class="bullet-label">DKIM:</span> <span class="bullet-val ${dkimClass}">${escapeHtml(dkimText)}</span></li>
+    `;
+    if (emailStatusEl) emailStatusEl.textContent = `Status: ${statusText}`;
+    const emailDot = emailCard?.querySelector(".bento-status-dot");
+    if (emailDot) emailDot.className = `bento-status-dot ${statusClass}`;
+  }
+
+  // ── Cryptography & Takeover Card ──
+  const cryptoHeadline = document.getElementById("bento-crypto-headline");
+  const cryptoBullets = document.getElementById("bento-crypto-bullets");
+  const cryptoStatusEl = document.getElementById("bento-crypto-status");
+  const cryptoCard = document.getElementById("bento-crypto");
+
+  if (cryptoHeadline && cryptoBullets) {
+    const dnssec = data.security?.dnssec;
+    const takeover = data.security?.takeover;
+
+    let dnssecText = "Unsigned Zone", dnssecClass = "warn";
+    if (dnssec?.status === "secured") {
+      const algo = dnssec.keys?.[0]?.algorithm || "Standard";
+      dnssecText = `Signed (${algo})`; dnssecClass = "ok";
+    } else if (dnssec?.status === "incomplete_chain") {
+      dnssecText = "Incomplete DS Chain"; dnssecClass = "warn";
+    } else if (dnssec?.status === "bogus") {
+      dnssecText = "Bogus — Failed"; dnssecClass = "danger";
+    }
+
+    let dsText = "No DS Records", dsClass = "warn";
+    if (dnssec?.ds_count > 0) {
+      dsText = `Valid (${dnssec.ds_count} DS)`; dsClass = "ok";
+    }
+
+    let takeoverText = "Zero Dangling CNAMEs", takeoverClass = "ok";
+    if (takeover?.vulnerable) {
+      takeoverText = `CRITICAL: → ${takeover.provider || "Unknown"}`; takeoverClass = "danger";
+    }
+
+    let headline, statusClass = "ok", statusText = "Secured";
+    if (takeover?.vulnerable) {
+      headline = "Takeover Risk Detected"; statusClass = "danger"; statusText = "Vulnerable";
+    } else if (dnssec?.status === "secured") {
+      headline = "Hardened Against Hijacking";
+    } else {
+      headline = "Partially Protected"; statusClass = "warn"; statusText = "Unsigned";
+    }
+
+    cryptoHeadline.textContent = headline;
+    cryptoBullets.innerHTML = `
+      <li><span class="bullet-label">DNSSEC:</span> <span class="bullet-val ${dnssecClass}">${escapeHtml(dnssecText)}</span></li>
+      <li><span class="bullet-label">DS Chain:</span> <span class="bullet-val ${dsClass}">${escapeHtml(dsText)}</span></li>
+      <li><span class="bullet-label">Takeover:</span> <span class="bullet-val ${takeoverClass}">${escapeHtml(takeoverText)}</span></li>
+    `;
+    if (cryptoStatusEl) cryptoStatusEl.textContent = `Status: ${statusText}`;
+    const cryptoDot = cryptoCard?.querySelector(".bento-status-dot");
+    if (cryptoDot) cryptoDot.className = `bento-status-dot ${statusClass}`;
+  }
+
+  // ── Remediation Card ──
+  const fixesHeadline = document.getElementById("bento-fixes-headline");
+  const fixesBullets = document.getElementById("bento-fixes-bullets");
+  const fixesStatusEl = document.getElementById("bento-fixes-status");
+  const fixesDot = document.getElementById("bento-fixes-dot");
+
+  if (fixesHeadline && fixesBullets) {
+    const fixCount = (data.remediation || []).length;
+    if (fixCount === 0) {
+      fixesHeadline.textContent = "Fully Hardened";
+      fixesBullets.innerHTML = `
+        <li><span class="bullet-label">Critical Fixes:</span> <span class="bullet-val ok">0 Needed</span></li>
+        <li><span class="bullet-label">Posture:</span> <span class="bullet-val ok">Optimal A+ Configuration</span></li>
+      `;
+      if (fixesStatusEl) fixesStatusEl.textContent = "Status: Optimal";
+      if (fixesDot) fixesDot.className = "bento-status-dot ok";
+    } else {
+      fixesHeadline.textContent = "Actionable Fixes Available";
+      fixesBullets.innerHTML = `
+        <li><span class="bullet-label">Fixes Ready:</span> <span class="bullet-val warn">${fixCount} Copy-Paste Record${fixCount === 1 ? "" : "s"}</span></li>
+        <li><span class="bullet-label">Posture:</span> <span class="bullet-val warn">Hardening Required</span></li>
+      `;
+      if (fixesStatusEl) fixesStatusEl.textContent = `Status: ${fixCount} Action${fixCount === 1 ? "" : "s"}`;
+      if (fixesDot) fixesDot.className = "bento-status-dot warn";
+    }
   }
 }
 
@@ -1292,72 +1610,301 @@ function escapeHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
-// ── Jump Nav Scroll-Spy (IntersectionObserver) ────────────────
-function initJumpNav() {
-  const nav = document.getElementById("jump-nav");
-  if (!nav) return;
+// ── Segmented Tab Controller ──────────────────────────────────
+let activeSegmentTabId = "tab-overview";
 
-  const pills = nav.querySelectorAll(".jump-pill");
-  if (!pills.length) return;
+function switchSegmentTab(targetTabId) {
+  const tabs = document.querySelectorAll(".segment-tab");
+  const panels = document.querySelectorAll(".results-tab-panel");
+  const resultsEl = document.getElementById("results");
+  if (!tabs.length || !panels.length) return;
 
-  // Build a map from section id → pill element
-  const pillMap = new Map();
-  pills.forEach((pill) => {
-    const href = pill.getAttribute("href");
-    if (href && href.startsWith("#")) {
-      pillMap.set(href.slice(1), pill);
-    }
+  const targetTab = document.getElementById(targetTabId);
+  if (!targetTab) return;
+
+  const targetPanelId = targetTab.getAttribute("data-target"); // e.g. "panel-overview" or "all"
+  activeSegmentTabId = targetTabId;
+
+  tabs.forEach((t) => {
+    t.classList.remove("active");
+    t.setAttribute("aria-selected", "false");
   });
+  targetTab.classList.add("active");
+  targetTab.setAttribute("aria-selected", "true");
 
-  // Track which sections are currently intersecting
-  const visibleSections = new Set();
-
-  const observer = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        if (entry.isIntersecting) {
-          visibleSections.add(entry.target.id);
-        } else {
-          visibleSections.delete(entry.target.id);
-        }
+  if (targetPanelId === "all") {
+    resultsEl?.classList.add("all-mode");
+    panels.forEach((p) => {
+      p.classList.add("active");
+      p.style.display = "block";
+    });
+  } else {
+    resultsEl?.classList.remove("all-mode");
+    panels.forEach((p) => {
+      if (p.id === targetPanelId) {
+        p.classList.add("active");
+        p.style.display = "block";
+      } else {
+        p.classList.remove("active");
+        p.style.display = "none";
       }
-
-      // Activate the first visible section (in DOM order)
-      for (const [id, pill] of pillMap) {
-        if (visibleSections.has(id)) {
-          pills.forEach((p) => p.classList.remove("active"));
-          pill.classList.add("active");
-          break;
-        }
-      }
-    },
-    {
-      rootMargin: "-80px 0px -40% 0px",
-      threshold: 0.1,
-    }
-  );
-
-  // Observe each target section
-  for (const id of pillMap.keys()) {
-    const section = document.getElementById(id);
-    if (section) observer.observe(section);
+    });
   }
 
-  // Smooth scroll + active state on click
-  pills.forEach((pill) => {
-    pill.addEventListener("click", (e) => {
-      e.preventDefault();
-      const targetId = pill.getAttribute("href")?.slice(1);
-      const target = targetId && document.getElementById(targetId);
-      if (target) {
-        pills.forEach((p) => p.classList.remove("active"));
-        pill.classList.add("active");
-        target.scrollIntoView({ behavior: "smooth", block: "start" });
+  // Smoothly align with the segment nav if page has scrolled far below
+  const nav = document.getElementById("segment-nav");
+  if (nav) {
+    const navRect = nav.getBoundingClientRect();
+    if (navRect.top < 50) {
+      nav.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+}
+
+function initSegmentedTabs() {
+  const nav = document.getElementById("segment-nav");
+  if (!nav) return;
+
+  const tabs = nav.querySelectorAll(".segment-tab");
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      switchSegmentTab(tab.id);
+    });
+  });
+
+  // Snapshot card links (data-switch="tab-email", etc.)
+  document.querySelectorAll("[data-switch]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const targetTabId = btn.getAttribute("data-switch");
+      if (targetTabId) {
+        switchSegmentTab(targetTabId);
       }
     });
   });
 }
 
+// ── CLI / dig & Markdown Generation Helpers ───────────────────
+function generateDigOutput(domain, records) {
+  const ts = new Date().toUTCString();
+  let lines = [
+    `; <<>> DiG 9.18.28-1ubuntu0.24.04.1-Ubuntu <<>> ${domain} ANY`,
+    `;; global options: +cmd +noall +answer`,
+    `;; Got answer:`,
+    `;; ->>HEADER<<- opcode: QUERY, status: NOERROR`,
+    "",
+  ];
+  if (!records) return lines.join("\n");
+
+  const rtypes = ["A", "AAAA", "CNAME", "MX", "NS", "SOA", "TXT"];
+  let hasAny = false;
+  for (const rtype of rtypes) {
+    const entry = records[rtype];
+    if (!entry || entry.status !== "ok" || !entry.records) continue;
+    const ttl = entry.ttl || 3600;
+
+    if (rtype === "A" || rtype === "AAAA") {
+      entry.records.forEach((ip) => {
+        hasAny = true;
+        lines.push(`${domain}.\t\t${ttl}\tIN\t${rtype}\t${ip}`);
+      });
+    } else if (rtype === "MX") {
+      entry.records.forEach((mx) => {
+        hasAny = true;
+        const host = typeof mx === "object" ? mx.host : mx;
+        const prio = typeof mx === "object" ? mx.priority : 10;
+        lines.push(`${domain}.\t\t${ttl}\tIN\tMX\t${prio} ${host}.`);
+      });
+    } else if (rtype === "NS") {
+      entry.records.forEach((ns) => {
+        hasAny = true;
+        const host = typeof ns === "object" ? ns.host : ns;
+        lines.push(`${domain}.\t\t${ttl}\tIN\tNS\t${host}.`);
+      });
+    } else if (rtype === "CNAME") {
+      entry.records.forEach((c) => {
+        hasAny = true;
+        lines.push(`${domain}.\t\t${ttl}\tIN\tCNAME\t${c}.`);
+      });
+    } else if (rtype === "TXT") {
+      entry.records.forEach((t) => {
+        hasAny = true;
+        lines.push(`${domain}.\t\t${ttl}\tIN\tTXT\t"${t}"`);
+      });
+    } else if (rtype === "SOA") {
+      const s = entry.records;
+      if (typeof s === "object") {
+        hasAny = true;
+        lines.push(`${domain}.\t\t${ttl}\tIN\tSOA\t${s.mname}. ${s.rname}. ${s.serial} ${s.refresh} ${s.retry} ${s.expire} ${s.minimum}`);
+      }
+    }
+  }
+
+  if (!hasAny) {
+    lines.push(`;; No authoritative answer records found for ${domain}`);
+  }
+
+  lines.push("");
+  lines.push(`;; Query time: ~120 msec`);
+  lines.push(`;; SERVER: 1.1.1.1#53(1.1.1.1) (UDP)`);
+  lines.push(`;; WHEN: ${ts}`);
+  lines.push(`;; MSG SIZE rcvd: 480`);
+  return lines.join("\n");
+}
+
+function renderDigView() {
+  if (!digTerminalBody || !currentScanData) return;
+  digTerminalBody.textContent = generateDigOutput(
+    currentScanData.domain,
+    currentScanData.records
+  );
+}
+
+function generateMarkdownSummary(data) {
+  const d = data.domain;
+  const grade = data.email_auth?.score?.grade || "N/A";
+  const score = data.email_auth?.score?.score ?? "N/A";
+  const errs = data.summary?.errors ?? 0;
+  const warns = data.summary?.warnings ?? 0;
+  const info = data.summary?.info ?? 0;
+  const dnssec = data.security?.dnssec?.status || "unknown";
+  const takeover = data.security?.takeover?.status || "safe";
+
+  let md = [
+    `# 🛡️ DNS Security Audit: ${d}`,
+    `**Scan Timestamp:** ${data.scan_timestamp || new Date().toISOString()}`,
+    `**Email Health Grade:** ${grade} (${score}/100) | **DNSSEC:** ${dnssec} | **Takeover:** ${takeover}`,
+    "",
+    `### Diagnostic Summary`,
+    `| Severity | Count |`,
+    `|---|---|`,
+    `| 🔴 Errors | ${errs} |`,
+    `| 🟡 Warnings | ${warns} |`,
+    `| 🔵 Info | ${info} |`,
+    "",
+    `### Key Findings`,
+  ];
+
+  if (data.findings && data.findings.length > 0) {
+    data.findings.slice(0, 10).forEach((f) => {
+      const emoji = f.severity === "error" ? "🔴" : f.severity === "warning" ? "🟡" : "ℹ️";
+      md.push(`- ${emoji} **[${f.record_type}]** ${f.message}`);
+    });
+    if (data.findings.length > 10) {
+      md.push(`- *...and ${data.findings.length - 10} additional findings.*`);
+    }
+  } else {
+    md.push(`*No misconfigurations detected.*`);
+  }
+
+  md.push("");
+  md.push(`*Analyzed by [DNS Analyzer](http://127.0.0.1:8000/?domain=${encodeURIComponent(d)})*`);
+  return md.join("\n");
+}
+
+// ── Multi-Format Action Handlers ──────────────────────────────
+if (shareLinkBtn) {
+  shareLinkBtn.addEventListener("click", () => {
+    if (!currentDomain) return;
+    const url = new URL(window.location);
+    url.searchParams.set("domain", currentDomain);
+    copyToClipboard(url.toString(), "Shareable scan link copied to clipboard!");
+  });
+}
+
+if (copyMdBtn) {
+  copyMdBtn.addEventListener("click", () => {
+    if (!currentScanData) return;
+    const md = generateMarkdownSummary(currentScanData);
+    copyToClipboard(md, "Markdown summary copied to clipboard!");
+  });
+}
+
+if (exportJsonBtn) {
+  exportJsonBtn.addEventListener("click", () => {
+    if (!currentScanData) return;
+    const blob = new Blob([JSON.stringify(currentScanData, null, 2)], {
+      type: "application/json",
+    });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `dns-scan-${currentDomain}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast("Scan JSON exported successfully!");
+  });
+}
+
+// View toggle handlers (Cards vs CLI dig)
+if (viewCardsBtn && viewDigBtn && recordsGrid && recordsDigContainer) {
+  viewCardsBtn.addEventListener("click", () => {
+    currentViewMode = "cards";
+    viewCardsBtn.classList.add("active");
+    viewCardsBtn.setAttribute("aria-pressed", "true");
+    viewDigBtn.classList.remove("active");
+    viewDigBtn.setAttribute("aria-pressed", "false");
+    recordsGrid.style.display = "grid";
+    recordsDigContainer.style.display = "none";
+  });
+
+  viewDigBtn.addEventListener("click", () => {
+    currentViewMode = "dig";
+    viewDigBtn.classList.add("active");
+    viewDigBtn.setAttribute("aria-pressed", "true");
+    viewCardsBtn.classList.remove("active");
+    viewCardsBtn.setAttribute("aria-pressed", "false");
+    recordsGrid.style.display = "none";
+    recordsDigContainer.style.display = "block";
+    renderDigView();
+  });
+}
+
+if (copyDigBtn && digTerminalBody) {
+  copyDigBtn.addEventListener("click", () => {
+    copyToClipboard(digTerminalBody.textContent, "CLI dig output copied to clipboard!");
+  });
+}
+
+// Clear input button handler
+if (domainInput) {
+  domainInput.addEventListener("input", () => {
+    const hasText = domainInput.value.trim().length > 0;
+    if (clearInputBtn) clearInputBtn.style.display = hasText ? "flex" : "none";
+    if (inputKbdHint) inputKbdHint.style.display = hasText ? "none" : "inline-block";
+  });
+}
+if (clearInputBtn) {
+  clearInputBtn.addEventListener("click", () => {
+    domainInput.value = "";
+    clearInputBtn.style.display = "none";
+    if (inputKbdHint) inputKbdHint.style.display = "inline-block";
+    domainInput.focus();
+  });
+}
+
+// ── URL Search Param Auto-Scan ────────────────────────────────
+function checkUrlParams() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const domain = params.get("domain");
+    if (domain) {
+      domainInput.value = domain;
+      if (clearInputBtn) clearInputBtn.style.display = "flex";
+      if (inputKbdHint) inputKbdHint.style.display = "none";
+      runAnalysis();
+    }
+  } catch (_) {}
+}
+
+// ── Network Connectivity Listeners ────────────────────────────
+window.addEventListener("offline", () => {
+  showToast("Network disconnected — offline mode active.");
+});
+window.addEventListener("online", () => {
+  showToast("Internet connection restored.");
+});
+
 // ── Initialize ─────────────────────────────────────────────────
 renderRecentChips();
-initJumpNav();
+initSegmentedTabs();
+checkUrlParams();
