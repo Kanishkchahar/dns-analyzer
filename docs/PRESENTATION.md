@@ -54,7 +54,7 @@ bash run.sh
 1. ⚡ **Asynchronous Concurrency**: *"Independent DNS and security checks run concurrently with bounded timeouts. Results can vary with DNS, CT, and target response times."*
 2. 🍱 **Bento Grid Dashboard**: *"The score uses seven weighted factors. Open the score breakdown for points, incomplete checks, excluded factors, and caps."*
 3. 🛡️ **Takeover Fingerprint Checks**: *"Checks known CNAME service patterns. DNS-only evidence is a candidate unless an entry is explicitly verified and opts into NXDOMAIN confirmation. Page matches on the currently unverified catalog are candidates, not confirmed findings."*
-4. 🔐 **DNSSEC Chain Validation**: *"Validates DNSKEY, DS and SOA signatures from the IANA root trust anchor through the zone; reports insecure denial as unvalidated when the parent has no DS."*
+4. 🔐 **DNSSEC Inspection**: *"By default, compares observed DNSKEY and DS records only. The opt-in chain validator reports separate evidence and does not affect the score."*
 5. 📈 **SPF 10-Lookup Recursion Meter & Flattener**: *"Visual bar tracking lookups against the strict RFC 7208 limit of 10, with an automatic CIDR flattener that optimizes over-limit records to 0 lookups."*
 6. ✨ **BIMI Brand Inbox Validation**: *"Audits whether the domain publishes a verified SVG logo and satisfies strict DMARC criteria for official avatar display in Gmail and Apple Mail."*
 7. 🔧 **Copy-Paste Fix Drafts & BIND Export**: *"Generates draft record values, provider-specific guidance, and a BIND snippet. You review and apply suggested changes yourself."*
@@ -282,10 +282,10 @@ The main analysis runs the checks below. Common web path checks and active port 
 * **What It Tells You**: DNS-only evidence is a `candidate` by default. A bounded page-text match is also a candidate while the catalog entry is unverified. Only a verified entry can produce a confirmed page match, and only an explicitly opted-in verified NXDOMAIN rule can produce a confirmed DNS result; neither proves claimability.
 * **Limit**: All 10 shipped entries are marked unverified and have NXDOMAIN confirmation disabled. The scanner uses a small heuristic fingerprint catalog; it does not provide CVE-based threat hunting.
 
-#### 19. DNSSEC Chain Validation (RFC 4033, 4034, 4035)
-* **What It Does**: Queries DNSKEY and DS records, reports key algorithms, and checks whether a parent DS digest matches a published DNSKEY.
-* **What It Tells You**: Shows whether the observed delegation records match. It does not validate RRSIGs or construct the complete root-to-domain trust chain.
-* **Why It Is Important**: The current validator checks DNSKEY, DS and SOA signatures from IANA root anchors. An unsigned delegation is labeled `insecure (denial not validated)` because authenticated NSEC/NSEC3 denial is not implemented.
+#### 19. DNSSEC Inspection (RFC 4033, 4034, 4035)
+* **Default behavior**: `ENABLE_DNSSEC_CHAIN_VALIDATION` is off. The live scan compares observed DNSKEY and DS records only. DNSKEY without parent DS is `incomplete_chain`; absent DNSKEY is `unsigned`; lookup or uncomparable DS data is `inconclusive`.
+* **Opt-in behavior**: With the flag enabled, the response includes separate chain evidence in `chain_status` (`secure`, `insecure`, `bogus`, or `inconclusive`). The public `status` and score input remain the legacy result; chain results are informational and cannot change score, grade, or caps.
+* **Limit**: The default legacy comparison does not validate RRSIGs or construct the complete root-to-domain trust chain. The opt-in chain engine remains disabled by default and its scoring rules await approval.
 
 #### 20. BIMI (Brand Indicators for Message Identification) Check (RFC 8617)
 * **What It Does**: Queries `default._bimi.{domain}` for a BIMI TXT record and checks whether the DMARC policy meets the configured eligibility criteria (`p=quarantine` or `p=reject` with `pct=100`).
@@ -405,7 +405,7 @@ DNS queries go to the recursive resolver configured on the application host. CT 
 * **Q: What is a subdomain takeover and what does this scanner establish?**
   *Answer:* A risk can arise when a CNAME points to a third-party resource that is no longer controlled by the domain owner and can be claimed by another account. All current catalog entries are unverified, so their page-text matches and default DNS-only evidence remain candidates. Confirmation requires a verified entry and its configured confirmation method; even then, the scanner does not prove provider-side claimability.
 * **Q: What does the current DNSSEC check validate?**
-  *Answer:* It requests DNSSEC records with DO and validates DNSKEY, DS, and SOA signatures from an IANA root anchor through the zone. DS denial is not authenticated yet, so a no-DS result is explicitly labeled `insecure (denial not validated)`.
+  *Answer:* By default it compares DNSKEY and DS records without signature validation. The opt-in chain engine returns its state as informational `chain_status`; scoring still uses the legacy delegation result. DS denial is not authenticated yet.
 
 ---
 

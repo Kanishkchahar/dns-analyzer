@@ -405,15 +405,57 @@ class TestEmailScore:
         assert bogus["score"] == 39
         assert "BOGUS_DNSSEC" in [cap["code"] for cap in bogus["score_breakdown"]["caps_applied"]]
 
-    def test_unproven_chain_bogus_dnssec_does_not_trigger_cap(self):
+    def test_chain_dnssec_states_are_informational_for_score_and_caps(self):
         records = {"A": {"status": "ok", "records": ["192.0.2.10"]}, "NS": {"status": "ok", "records": ["ns.example.com"]}}
-        common = (records, [], {"score": 90}, {"status": "inconclusive", "validator": "chain"}, {"status": "safe", "has_cname": False})
-        baseline = compute_domain_score(*common)
-        unproven_bogus = compute_domain_score(records, [], {"score": 90}, {"status": "bogus", "validator": "chain"}, {"status": "safe", "has_cname": False})
-        assert "BOGUS_DNSSEC" not in [cap["code"] for cap in unproven_bogus["score_breakdown"]["caps_applied"]]
-        # The factor currently deducts points for bogus regardless of validator; 3c
-        # must decide whether/how chain-validator states participate in the score.
-        assert unproven_bogus["score"] < baseline["score"]
+        baseline = compute_domain_score(
+            records, [], {"score": 90}, {"status": "unsigned", "validator": "legacy"},
+            {"status": "safe", "has_cname": False},
+        )
+        chain_states = ("secure", "insecure", "bogus", "inconclusive")
+        for state in chain_states:
+            candidate = compute_domain_score(
+                records, [], {"score": 90}, {"status": state, "validator": "chain", "legacy_score_status": "unsigned"},
+                {"status": "safe", "has_cname": False},
+            )
+            factor = candidate["score_breakdown"]["factors"]["dnssec"]
+            assert factor["status"] == "inconclusive"
+            assert factor["score"] == baseline["score_breakdown"]["factors"]["dnssec"]["score"]
+            assert factor["checks_completed"] == 1
+            assert "informational" in factor["summary"]
+            assert candidate["score"] == baseline["score"]
+            assert candidate["grade"] == baseline["grade"]
+            assert candidate["score_breakdown"]["caps_applied"] == baseline["score_breakdown"]["caps_applied"]
+            assert "BOGUS_DNSSEC" not in [cap["code"] for cap in candidate["score_breakdown"]["caps_applied"]]
+
+    def test_every_dnssec_engine_state_has_the_expected_scoring_treatment(self):
+        records = {"A": {"status": "ok", "records": ["192.0.2.10"]}, "NS": {"status": "ok", "records": ["ns.example.com"]}}
+        takeover = {"status": "safe", "has_cname": False}
+        email_score = {"score": 90}
+        legacy_states = {
+            "delegation_match_verified": "scored",
+            "incomplete_chain": "scored",
+            "unsigned": "scored",
+            "inconclusive": "excluded",
+            "bogus": "capped",
+        }
+        chain_states = {"secure", "insecure", "bogus", "inconclusive"}
+        for status, treatment in legacy_states.items():
+            result = compute_domain_score(records, [], email_score, {"status": status, "validator": "legacy"}, takeover)
+            dnssec_factor = result["score_breakdown"]["factors"]["dnssec"]
+            if treatment == "scored":
+                assert dnssec_factor["checks_completed"] == 1
+                assert dnssec_factor["score"] is not None
+            elif treatment == "excluded":
+                assert dnssec_factor["checks_completed"] == 0
+                assert dnssec_factor["score"] is None
+            else:
+                assert "BOGUS_DNSSEC" in [cap["code"] for cap in result["score_breakdown"]["caps_applied"]]
+        for status in chain_states:
+            result = compute_domain_score(records, [], email_score, {"status": status, "validator": "chain", "legacy_score_status": "inconclusive"}, takeover)
+            dnssec_factor = result["score_breakdown"]["factors"]["dnssec"]
+            assert dnssec_factor["checks_completed"] == 0
+            assert dnssec_factor["score"] is None
+            assert not result["score_breakdown"]["caps_applied"]
 
     def test_breakdown_has_points_status_checks_codes_and_cap_reason(self):
         from app.models import Finding

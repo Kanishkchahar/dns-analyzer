@@ -537,14 +537,21 @@ def compute_domain_score(
     factors["email_auth"] = make_factor("email_auth", "Email Authentication", "SPF, DMARC, and DKIM findings", email_checks, all_email_findings)
 
     dnssec_status = (dnssec_data or {}).get("status", "inconclusive")
+    chain_result_is_informational = (dnssec_data or {}).get("validator") == "chain"
+    scored_dnssec_status = (dnssec_data or {}).get("legacy_score_status", "inconclusive") if chain_result_is_informational else dnssec_status
     dnssec_scores = {"delegation_match_verified": 1.0, "incomplete_chain": 0.5, "unsigned": 0.5, "bogus": 0.0}
     dnssec_checks = [
-        check_value("Observed DS / DNSKEY status", dnssec_scores.get(dnssec_status)),
+        check_value("Observed DS / DNSKEY status", dnssec_scores.get(scored_dnssec_status)),
         check_value("RRSIG and root-chain validation", None),
     ]
+    dnssec_summary = (
+        f"Chain validator reported {dnssec_status}; this opt-in result is informational. Scoring uses the legacy delegation result."
+        if chain_result_is_informational
+        else f"Observed DNSSEC state: {dnssec_status}; full signature chain is not validated."
+    )
     factors["dnssec"] = make_factor(
-        "dnssec", "DNSSEC", f"Observed DNSSEC state: {dnssec_status}; full signature chain is not validated.",
-        dnssec_checks, findings_by_type.get("DNSSEC", []),
+        "dnssec", "DNSSEC", dnssec_summary,
+        dnssec_checks, [] if chain_result_is_informational else findings_by_type.get("DNSSEC", []),
     )
 
     subdomains = (subdomains_data or {}).get("subdomains", [])
@@ -640,7 +647,10 @@ def compute_domain_score(
     takeover_confirmed = any(state == "confirmed" for state in takeover_statuses)
     # The new chain validator remains opt-in until its signed-zone matrix passes;
     # do not let its unproven bogus result trigger the domain score cap.
-    dnssec_bogus = dnssec_status == "bogus" and (dnssec_data or {}).get("validator", "legacy") == "legacy"
+    dnssec_bogus = (
+        (scored_dnssec_status == "bogus" if chain_result_is_informational else dnssec_status == "bogus")
+        and (dnssec_data or {}).get("validator", "legacy") in ("legacy", "chain")
+    )
     cap_checks = ((axfr_confirmed, DOMAIN_SCORE_CAPS[0]), (takeover_confirmed, DOMAIN_SCORE_CAPS[1]), (dnssec_bogus, DOMAIN_SCORE_CAPS[2]))
     total_score = round(raw_score)
     for applies, cap in cap_checks:

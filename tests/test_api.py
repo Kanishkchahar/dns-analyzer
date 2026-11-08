@@ -201,7 +201,7 @@ class TestAPIEndpoints:
         assert "caps_applied" in data["score_breakdown"]
         assert "infrastructure" in data["domain_score"]["factors"]
         assert data["email_auth"]["score"]["grade"] in ("A+", "A")
-        assert data["security"]["dnssec"]["status"] == "inconclusive"
+        assert data["security"]["dnssec"]["status"] in ("secured", "delegation_match_verified")
 
     async def test_post_analyze_sanitized_error_handling(self):
         with patch("app.main.run_full_scan", side_effect=RuntimeError("Secret database connection failed")):

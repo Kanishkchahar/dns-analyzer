@@ -36,6 +36,10 @@ def _legacy_resolver(mode="match"):
         ds = dns.dnssec.make_ds(ZONE, other, "SHA256")
     if mode == "missing_digest":
         ds = MockRR(key_tag=dns.dnssec.key_id(key), algorithm=key.algorithm, digest_type=2)
+    if mode == "unsupported_digest":
+        ds = MockRR(key_tag=dns.dnssec.key_id(key), algorithm=key.algorithm, digest_type=250, digest="ABCD")
+    if mode == "unsupported_algorithm":
+        ds = MockRR(key_tag=dns.dnssec.key_id(key), algorithm=250, digest_type=2, digest="AB" * 32)
     replies = {("example.test", "DNSKEY"): MockAnswer([key]), ("example.test", "DS"): MockAnswer([ds])}
     if mode == "missing_ds":
         replies.pop(("example.test", "DS"))
@@ -58,10 +62,8 @@ async def test_dnssec_delegation_match_status():
 
 @pytest.mark.asyncio
 async def test_dnssec_incomplete_chain():
-    # The legacy implementation classifies a missing DS as unsigned rather than
-    # retaining its former incomplete_chain label; assert the live-path equivalent.
     result, _ = await _legacy_delegation_check("example.test", _legacy_resolver("missing_ds"), None)
-    assert result["status"] == "unsigned"
+    assert result["status"] == "incomplete_chain"
 
 
 @pytest.mark.asyncio
@@ -73,10 +75,15 @@ async def test_dnssec_bogus_status():
 
 @pytest.mark.asyncio
 async def test_dnssec_ds_without_digest_is_inconclusive():
-    # Closest legacy behavior: the old incomplete-digest branch is not in the
-    # live helper; malformed DS data cannot match and is reported bogus.
     result, _ = await _legacy_delegation_check("example.test", _legacy_resolver("missing_digest"), None)
-    assert result["status"] == "bogus"
+    assert result["status"] == "inconclusive"
+
+
+@pytest.mark.parametrize("mode", ["unsupported_digest", "unsupported_algorithm"])
+@pytest.mark.asyncio
+async def test_dnssec_uncomparable_ds_is_inconclusive(mode):
+    result, _ = await _legacy_delegation_check("example.test", _legacy_resolver(mode), None)
+    assert result["status"] == "inconclusive"
 
 
 @pytest.mark.asyncio
@@ -111,6 +118,21 @@ async def test_unset_chain_validation_flag_uses_legacy_and_never_calls_chain(mon
     assert result["validator"] == "legacy"
 
 
+@pytest.mark.asyncio
+async def test_enabled_chain_result_keeps_legacy_score_input(monkeypatch):
+    monkeypatch.setenv("ENABLE_DNSSEC_CHAIN_VALIDATION", "true")
+
+    async def fake_chain(domain, resolver, apex):
+        return ({"status": "bogus", "validator": "chain", "cryptographically_verified": False}, [])
+
+    monkeypatch.setattr("app.dnssec.validate_dnssec_chain", fake_chain)
+    result, _ = await check_dnssec("example.test", _legacy_resolver())
+    assert result["status"] == "delegation_match_verified"
+    assert result["chain_status"] == "bogus"
+    assert result["validator"] == "chain"
+    assert result["legacy_score_status"] == "delegation_match_verified"
+
+
 
 def test_anchor_loader_accepts_multiple_current_anchors(tmp_path):
     path = write_anchor_file(tmp_path, [anchor(1), anchor(2)])
@@ -136,7 +158,7 @@ def test_anchor_loader_fails_clearly_on_malformed_file(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dnssec_network_failure_is_indeterminate():
+async def test_dnssec_network_failure_is_inconclusive():
     class FailedResolver:
         async def resolve(self, name, rdtype, **kwargs):
             raise dns.exception.Timeout

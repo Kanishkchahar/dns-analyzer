@@ -2,6 +2,9 @@
 
 ## 2.2.0
 
+- Repair the live DNSSEC delegation check: uncomparable DS data is inconclusive and DNSKEY without parent DS is incomplete chain. The opt-in chain validator reports `chain_status` informationally; the legacy status remains compatible and controls scoring.
+- Standardize unavailable DNSSEC outcomes on `inconclusive`; opt-in chain results do not change score, grade, or caps.
+
 - Security hardening: maintain exact `httpx==0.28.1` and `httpcore==1.0.9` pins; sitemap XML parsing uses `defusedxml` and rejects entity payloads.
 - Share a 500-DNS-query / 25-HTTP-fetch budget across full scans and optional network scan routes. Exhausted checks are reported as inconclusive.
 - Add a configurable scanner User-Agent (`DNS_ANALYZER_DOCUMENTATION_URL`, defaulting to the editable placeholder URL).
