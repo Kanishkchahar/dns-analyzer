@@ -591,12 +591,12 @@ function renderResults(data, recheckContext = null) {
   countErrors.textContent  = data.summary.errors;
   countWarnings.textContent= data.summary.warnings;
   countInfo.textContent    = data.summary.info;
-  const inconclusiveFindings = currentFindings.filter((finding) => finding.severity === "inconclusive").length;
-  countInconclusive.textContent = inconclusiveFindings;
+  const inconclusiveCount = Number.isInteger(data.summary.inconclusive) ? data.summary.inconclusive : 0;
+  countInconclusive.textContent = inconclusiveCount;
   badgeErrors.classList.toggle("zero", data.summary.errors === 0);
   badgeWarnings.classList.toggle("zero", data.summary.warnings === 0);
   badgeInfo.classList.toggle("zero", data.summary.info === 0);
-  badgeInconclusive.classList.toggle("zero", inconclusiveFindings === 0);
+  badgeInconclusive.classList.toggle("zero", inconclusiveCount === 0);
 
   // Bento Grid Security Posture Cockpit
   renderBentoCockpit(data, recheckContext?.previousScore ?? null);
@@ -937,14 +937,18 @@ function renderBentoCockpit(data, previousScore = null) {
       const tbody = document.createElement("tbody");
       Object.values(breakdown.factors).forEach(factor => {
         const row = document.createElement("tr");
+        const pointsEarned = factor.points_earned ?? factor.score;
+        const pointsMaximum = factor.maximum ?? factor.max_score;
+        const statusText = String(factor.status ?? "unknown").replace(/_/g, " ");
         const cells = [
           factor.category,
-          `${factor.points_earned ?? factor.score}/${factor.maximum ?? factor.max_score}`,
-          factor.status,
-          `${factor.checks_completed}/${factor.checks_total}`,
+          pointsEarned == null ? "N/A" : `${pointsEarned}/${pointsMaximum ?? "?"}`,
+          statusText,
+          `${factor.checks_completed ?? 0}/${factor.checks_total ?? 0}`,
         ];
-        cells.forEach(value => {
+        cells.forEach((value, index) => {
           const cell = document.createElement("td");
+          cell.dataset.label = ["Factor", "Points", "Status", "Checks"][index];
           cell.textContent = String(value ?? "—");
           row.appendChild(cell);
         });
@@ -2852,7 +2856,7 @@ if (btnRunPathScan && listScanInput && networkPathResults) {
           <div class="audit-card-header">
             <div>
               <span class="audit-card-title">Website Paths <span class="audit-card-target">${escapeHtml(target.target)}</span></span>
-              <div class="path-scan-summary">${counts.found || 0} available · ${counts.redirect || 0} redirects · ${counts.restricted || 0} restricted</div>
+              <div class="path-scan-summary">Checks completed · ${counts.found || 0} available · ${counts.redirect || 0} redirects · ${counts.restricted || 0} restricted</div>
             </div>
             <span class="pill ${pillClass}">${target.status === "complete" ? "Complete" : target.status === "blocked" ? "Blocked" : "Partial"}</span>
           </div>
@@ -2877,7 +2881,7 @@ if (btnRunPathScan && listScanInput && networkPathResults) {
           <path d="M2 3h12v10H2zM2 6h12M5 3v3" stroke-linejoin="round"/>
           <path d="M5 9h2m2 0h2m-6 2h2" stroke-linecap="round"/>
         </svg>
-        <span>Check Common Web Paths</span>`;
+        <span>Check website paths</span>`;
     }
   });
 }
@@ -2896,6 +2900,11 @@ if (btnRunListScan && listScanInput && networkResults) {
       return;
     }
     const targets = raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    if (targets.length > 50) {
+      showToast("Target resolution supports up to 50 targets per run.");
+      listScanInput.focus();
+      return;
+    }
     btnRunListScan.disabled = true;
     btnRunListScan.textContent = "Resolving Scope...";
 
@@ -3017,7 +3026,7 @@ if (btnRunListScan && listScanInput && networkResults) {
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
           <path d="M2 4h12M2 8h12M2 12h8" stroke-linecap="round"/>
         </svg>
-        <span>Run List Scan (Resolve Scope Only)</span>
+        <span>Resolve targets</span>
       `;
     }
   });
@@ -3126,6 +3135,8 @@ if (btnRunPortScan && listScanInput && networkResults) {
             </div>
           </div>
 
+          <p class="port-scan-result-note">An open port means a TCP connection was accepted; it does not by itself prove a vulnerability. Filtered ports may not reveal whether a service is running.</p>
+
           <div class="records-table-container">
             <table class="records-table">
               <thead>
@@ -3179,7 +3190,7 @@ if (btnRunPortScan && listScanInput && networkResults) {
           <circle cx="7" cy="7" r="5"/>
           <path d="M11 11l3.5 3.5" stroke-linecap="round"/>
         </svg>
-        <span>Verify Standard Ports</span>
+        <span>Verify ports</span>
       `;
     }
   });

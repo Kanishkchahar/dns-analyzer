@@ -32,6 +32,12 @@ def test_dashboard_displays_incomplete_grade_marker():
     assert "Grade is provisional (incomplete)" in source
 
 
+def test_dashboard_uses_canonical_inconclusive_check_count():
+    source = (Path(__file__).parents[1] / "static" / "app.js").read_text(encoding="utf-8")
+    assert "Number.isInteger(data.summary.inconclusive)" in source
+    assert 'currentFindings.filter((finding) => finding.severity === "inconclusive")' not in source
+
+
 @pytest.mark.asyncio
 async def test_custom_dkim_cache_is_keyed_by_normalized_domain_and_selector_set(monkeypatch):
     _CUSTOM_DKIM_CACHE.clear()
