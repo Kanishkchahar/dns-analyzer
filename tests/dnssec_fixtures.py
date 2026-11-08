@@ -46,6 +46,8 @@ def _signed_rrset(owner, kind, text, private, key, now, mode=None):
         inception, expiration = now - timedelta(days=4), now - timedelta(days=1)
     elif mode == "not_yet_valid":
         inception, expiration = now + timedelta(days=1), now + timedelta(days=20)
+    elif mode == "expires_soon":
+        expiration = now + timedelta(days=2)
     sig = dns.dnssec.sign(rrset, private, owner, key, inception=inception, expiration=expiration)
     if mode == "bad_signature":
         altered = text.replace(" 1 3600 ", " 2 3600 ")
@@ -73,6 +75,7 @@ class FakeDNSSECResolver:
         self.ednsflags = 0
         self.flags = 0
         self.calls = []
+        self.nsec3_iterations = 0
 
     def use_edns(self, edns=0, ednsflags=0):
         self.ednsflags = ednsflags
@@ -89,17 +92,28 @@ class FakeDNSSECResolver:
             from app.work_budget import ScanBudgetExhausted
             raise ScanBudgetExhausted("test budget exhausted")
         truncated = self.mode == "truncated_response" and not tcp
-        if truncated:
-            # The recursive resolver retries the identical question over TCP.
-            return await self.resolve(name, kind, tcp=True, **kwargs)
         rrset, sigset = self.hierarchy.get((name, kind), (None, None))
         if not (self.ednsflags & dns.flags.DO):
             sigset = None
-        if self.mode == "dnskey_stripped" and kind == dns.rdatatype.DNSKEY:
+        if self.mode == "dnskey_stripped" and name == ZONE and kind == dns.rdatatype.DNSKEY:
             rrset = sigset = None
         if self.mode == "missing_ds" and kind == dns.rdatatype.DS:
             rrset = sigset = None
-        message = type("Response", (), {"flags": 0, "answer": [x for x in (rrset, sigset) if x is not None], "authority": []})()
+        if self.mode == "missing_ds_tld" and name == TLD and kind == dns.rdatatype.DS:
+            rrset = sigset = None
+        if self.mode == "truncated_unrecoverable" or truncated:
+            message = type("Response", (), {"flags": dns.flags.TC, "answer": [], "authority": []})()
+            return Answer(None, message)
+        signature_rrset = dns.rrset.from_rdata(name, 300, sigset) if sigset is not None else None
+        authority = []
+        if kind == dns.rdatatype.SOA and name == ZONE and self.mode in ("nsec3_opt_out", "nsec3_over_limit"):
+            iterations = 1 if self.mode == "nsec3_over_limit" else 0
+            nsec3 = dns.rrset.from_text(
+                "00000000000000000000000000000000.example.test.", 300, "IN", "NSEC3",
+                f"1 1 {iterations} - 00000000000000000000000000000000 A NS SOA MX TXT AAAA RRSIG DNSKEY NSEC3PARAM",
+            )
+            authority.append(nsec3)
+        message = type("Response", (), {"flags": 0, "answer": [x for x in (rrset, signature_rrset) if x is not None], "authority": authority})()
         return Answer(rrset, message)
 
 
@@ -138,13 +152,17 @@ def make_signed_hierarchy(now: datetime | None = None, algorithm: int = 8, mode:
             ds = dns.rdata.from_text("IN", "DS", f"{(ds.key_tag + 1) % 65536} {ds.algorithm} {ds.digest_type} {ds.digest.hex()}")
         dsrr = dns.rrset.from_rdata(child, 300, ds)
         dssig = dns.dnssec.sign(dsrr, private_keys[parent], parent, dnskeys[parent], inception=now-timedelta(minutes=2), expiration=now+timedelta(days=30))
+        if mode == "ds_bad_signature" and child == ZONE:
+            dsrr = dns.rrset.from_text(child, 300, "IN", "DS", f"{(ds.key_tag + 1) % 65536} {ds.algorithm} {ds.digest_type} {ds.digest.hex()}")
+        if mode == "ds_no_signature" and child == ZONE:
+            dssig = None
         hierarchy[(child, dns.rdatatype.DS)] = (dsrr, dssig)
     if mode == "missing_ds":
         hierarchy.pop((ZONE, dns.rdatatype.DS), None)
     if mode == "dnskey_stripped":
         hierarchy[(ZONE, dns.rdatatype.DNSKEY)] = (None, None)
     # Signature-time and data-tampering modes affect only the target SOA.
-    if mode in ("expired", "not_yet_valid", "bad_signature"):
+    if mode in ("expired", "not_yet_valid", "bad_signature", "expires_soon"):
         hierarchy[(ZONE, dns.rdatatype.SOA)] = _signed_rrset(ZONE, "SOA", "ns.example.test. hostmaster.example.test. 1 3600 600 86400 300", private_keys[ZONE], dnskeys[ZONE], now, mode)
     anchor = dns.dnssec.make_ds(ROOT, dnskeys[ROOT], "SHA256")
     if mode == "ds_mismatch":

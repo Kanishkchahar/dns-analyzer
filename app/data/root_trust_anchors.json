@@ -2,6 +2,13 @@
   "source_url": "https://data.iana.org/root-anchors/root-anchors.xml",
   "retrieved_utc": "2026-11-08",
   "xml_sha256": "3ccaab38830025ee0a0f6c1f25769427544f81ea2865aa860468f3ef5278b908",
+  "signature_verification": {
+    "verified": true,
+    "signature_url": "https://data.iana.org/root-anchors/root-anchors.p7s",
+    "certificate_bundle_url": "https://data.iana.org/root-anchors/icannbundle.pem",
+    "method": "openssl smime -verify -inform DER",
+    "certificate_subject": "O=ICANN, OU=ICANN Certification Authority, CN=ICANN Root CA, C=US"
+  },
   "anchors": [
     {
       "id": "Kjqmt7v",

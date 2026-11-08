@@ -86,13 +86,14 @@ async def test_fake_resolver_udp_truncation_retries_tcp_and_preserves_do_cd():
     resolver = fixture["resolver"]
     resolver.use_edns(ednsflags=dns.flags.DO)
     resolver.flags |= dns.flags.CD
-    await resolver.resolve(ZONE, "DNSKEY", tcp=False)
+    udp = await resolver.resolve(ZONE, "DNSKEY", tcp=False)
+    assert udp.response.flags & dns.flags.TC
+    tcp = await resolver.resolve(ZONE, "DNSKEY", tcp=True)
     assert any(call[2] is False for call in resolver.calls)
     assert any(call[2] is True for call in resolver.calls)
     assert all(call[3] & dns.flags.DO for call in resolver.calls)
     assert all(call[4] & dns.flags.CD for call in resolver.calls)
-    answer = await resolver.resolve(ZONE, "DNSKEY", tcp=True)
-    assert answer.rrset == fixture["hierarchy"][(ZONE, dns.rdatatype.DNSKEY)][0]
+    assert tcp.rrset == fixture["hierarchy"][(ZONE, dns.rdatatype.DNSKEY)][0]
 
 
 @pytest.mark.asyncio

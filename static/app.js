@@ -2492,6 +2492,10 @@ function initSegmentedTabs() {
       }
     });
   });
+
+  // Apply roving tabindex and the initial panel visibility before keyboard
+  // users reach the report navigation.
+  switchSegmentTab(activeSegmentTabId);
 }
 
 // ── CLI / dig & Markdown Generation Helpers ───────────────────

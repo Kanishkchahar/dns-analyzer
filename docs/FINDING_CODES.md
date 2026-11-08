@@ -64,6 +64,11 @@ Each row is a condition rule used to assign a finding code. Legacy alias is the 
 | DNSSEC | `no ds delegation record` | `DNSSEC-006` | `DNSSEC-001` |
 | DNSSEC | `not enabled` | `DNSSEC-007` | `DNSSEC-001` |
 | DNSSEC | `ds record matches zone dnskey` | `DNSSEC-008` | `DNSSEC-001` |
+| DNSSEC | `uses a sha-1 ds digest type` | `DNSSEC-009` | `DNSSEC-001` |
+| DNSSEC | `uses a deprecated algorithm` | `DNSSEC-010` | `DNSSEC-001` |
+| DNSSEC | `signature expires soon` | `DNSSEC-011` | `DNSSEC-001` |
+| DNSSEC | `signature expired` | `DNSSEC-012` | `DNSSEC-001` |
+| DNSSEC | `signature is not yet valid` | `DNSSEC-013` | `DNSSEC-001` |
 | TAKEOVER | `potential dangling cname` | `TAKEOVER-002` | `TAKEOVER-001` |
 | TAKEOVER | `unclaimed-service response fingerprint matched` | `TAKEOVER-003` | `TAKEOVER-001` |
 | TAKEOVER | `could not be verified` | `TAKEOVER-004` | `TAKEOVER-001` |
