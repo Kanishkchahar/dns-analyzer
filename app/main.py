@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -48,13 +49,18 @@ from app.spf import analyze_spf, count_spf_lookups, flatten_spf, parse_spf
 from app.subdomains import discover_passive_subdomains
 from app.takeover import check_subdomain_takeover
 from app.tls_check import audit_tls_and_https
-from app.work_budget import BudgetedResolver, ScanWorkBudget
-from app.http_config import outbound_http_headers
+from app.work_budget import ScanWorkBudget
+from app.http_config import outbound_http_headers, warn_if_placeholder_documentation_url
 
 logger = logging.getLogger("dns_analyzer")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 app = FastAPI(title="DNS Analyzer", version="2.2.0")
+
+
+@app.on_event("startup")
+async def warn_about_placeholder_documentation_url() -> None:
+    warn_if_placeholder_documentation_url()
 
 # Concurrency & runtime throttle budgets
 SCAN_SEMAPHORE = asyncio.Semaphore(8)
@@ -297,8 +303,9 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
     """Execute end-to-end DNS, security, and email authentication audit for a domain."""
     import dns.asyncresolver
     work_budget = ScanWorkBudget()
-    resolver = BudgetedResolver(dns.asyncresolver.Resolver(), work_budget)
-    records = await resolve_domain(domain, resolver=resolver)
+    base_resolver = dns.asyncresolver.Resolver()
+    records_resolver = work_budget.resolver_for(base_resolver, "records")
+    records = await resolve_domain(domain, resolver=records_resolver)
     findings = analyze(domain, records)
 
     zone_meta = records.get("zone_metadata", {})
@@ -313,9 +320,10 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
     spf_flat_data = None
     spf_scan_findings: list[Finding] = []
     if spf_data:
+        spf_resolver = work_budget.resolver_for(base_resolver, "spf")
         lookup_result, flatten_result = await asyncio.gather(
-            asyncio.wait_for(count_spf_lookups(domain, resolver), timeout=SPF_CHECK_TIMEOUT_SECONDS),
-            asyncio.wait_for(flatten_spf(domain, resolver), timeout=SPF_CHECK_TIMEOUT_SECONDS),
+            asyncio.wait_for(count_spf_lookups(domain, spf_resolver), timeout=SPF_CHECK_TIMEOUT_SECONDS),
+            asyncio.wait_for(flatten_spf(domain, spf_resolver), timeout=SPF_CHECK_TIMEOUT_SECONDS),
             return_exceptions=True,
         )
         if isinstance(lookup_result, BaseException):
@@ -351,16 +359,16 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         (wildcard_data, wildcard_findings),
         (ns_consistency_data, ns_consistency_findings),
     ) = await asyncio.gather(
-        _isolated_data_check("DMARC", fetch_dmarc(domain, resolver, apex=zone_apex), {"status": "inconclusive", "policy": None, "reason": "DMARC lookup failed."}),
-        _isolated_data_check("DKIM", check_dkim_selectors(domain, resolver), {"status": "inconclusive", "selectors_found": [], "selectors_checked": [], "has_dkim": False}),
-        _isolated_pair_check("DNSSEC", check_dnssec(domain, work_budget.dnssec_resolver(resolver)), {"status": "inconclusive", "enabled": False, "delegation_verified": False, "reason": "DNSSEC queries failed."}),
-        _isolated_pair_check("TAKEOVER", check_subdomain_takeover(domain, records, resolver, budget=work_budget), {"scanned": False, "vulnerable": False, "status": "could_not_verify", "details": "Takeover check did not complete."}),
-        _isolated_pair_check("TLS", audit_tls_and_https(domain, resolver=resolver, work_budget=work_budget), {"scanned": False, "status": "error", "reason": "TLS audit did not complete."}),
-        _isolated_pair_check("SUBDOMAINS", discover_passive_subdomains(zone_apex, resolver, work_budget=work_budget), {"domain": zone_apex, "source": "Certificate Transparency (crt.sh)", "status": "unavailable", "reason": "Subdomain inventory did not complete.", "discovered_count": 0, "subdomains": []}),
-        _isolated_pair_check("MAIL TRANSPORT", check_mail_transport(domain, resolver, work_budget=work_budget), {"mta_sts": {"status": "inconclusive", "reason": "Check did not complete."}, "tls_rpt": {"status": "inconclusive", "reason": "Check did not complete."}}),
-        _isolated_pair_check("AXFR", check_zone_transfers(zone_apex, ns_hosts, resolver, work_budget=work_budget), {"zone": zone_apex, "status": "inconclusive", "nameservers_checked": 0, "servers": []}),
-        _isolated_pair_check("WILDCARD DNS", check_wildcard_dns(zone_apex, resolver), {"status": "inconclusive", "addresses": [], "records": {"A": [], "AAAA": []}}),
-        _isolated_pair_check("NS CONSISTENCY", check_nameserver_consistency(zone_apex, ns_hosts, resolver, work_budget=work_budget), {"status": "inconclusive", "observations": [], "serials_match": None, "ns_sets_match": None}),
+        _isolated_data_check("DMARC", fetch_dmarc(domain, work_budget.resolver_for(base_resolver, "dmarc"), apex=zone_apex), {"status": "inconclusive", "policy": None, "reason": "DMARC lookup failed."}),
+        _isolated_data_check("DKIM", check_dkim_selectors(domain, work_budget.resolver_for(base_resolver, "dkim")), {"status": "inconclusive", "selectors_found": [], "selectors_checked": [], "has_dkim": False}),
+        _isolated_pair_check("DNSSEC", check_dnssec(domain, work_budget.resolver_for(base_resolver, "dnssec")), {"status": "inconclusive", "enabled": False, "delegation_verified": False, "reason": "DNSSEC queries failed."}),
+        _isolated_pair_check("TAKEOVER", check_subdomain_takeover(domain, records, work_budget.resolver_for(base_resolver, "takeover"), budget=work_budget), {"scanned": False, "vulnerable": False, "status": "could_not_verify", "details": "Takeover check did not complete."}),
+        _isolated_pair_check("TLS", audit_tls_and_https(domain, resolver=work_budget.resolver_for(base_resolver, "tls"), work_budget=work_budget), {"scanned": False, "status": "error", "reason": "TLS audit did not complete."}),
+        _isolated_pair_check("SUBDOMAINS", discover_passive_subdomains(zone_apex, work_budget.resolver_for(base_resolver, "subdomains"), work_budget=work_budget), {"domain": zone_apex, "source": "Certificate Transparency (crt.sh)", "status": "unavailable", "reason": "Subdomain inventory did not complete.", "discovered_count": 0, "subdomains": []}),
+        _isolated_pair_check("MAIL TRANSPORT", check_mail_transport(domain, work_budget.resolver_for(base_resolver, "mail_transport"), work_budget=work_budget), {"mta_sts": {"status": "inconclusive", "reason": "Check did not complete."}, "tls_rpt": {"status": "inconclusive", "reason": "Check did not complete."}}),
+        _isolated_pair_check("AXFR", check_zone_transfers(zone_apex, ns_hosts, work_budget.resolver_for(base_resolver, "dns_posture"), work_budget=work_budget), {"zone": zone_apex, "status": "inconclusive", "nameservers_checked": 0, "servers": []}),
+        _isolated_pair_check("WILDCARD DNS", check_wildcard_dns(zone_apex, work_budget.resolver_for(base_resolver, "dns_posture")), {"status": "inconclusive", "addresses": [], "records": {"A": [], "AAAA": []}}),
+        _isolated_pair_check("NS CONSISTENCY", check_nameserver_consistency(zone_apex, ns_hosts, work_budget.resolver_for(base_resolver, "dns_posture"), work_budget=work_budget), {"status": "inconclusive", "observations": [], "serials_match": None, "ns_sets_match": None}),
     )
     wildcard_ips = set(wildcard_data.get("addresses", []))
     if wildcard_data.get("status") == "detected" and sub_data.get("subdomains"):
@@ -379,7 +387,7 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
 
     # BIMI check (needs parsed DMARC)
     bimi_data, bimi_scan_findings = await _isolated_pair_check(
-        "BIMI", check_bimi(domain, dmarc_data, resolver),
+        "BIMI", check_bimi(domain, dmarc_data, work_budget.resolver_for(base_resolver, "bimi")),
         {"status": "inconclusive", "has_bimi": False, "dmarc_eligible": False, "error": "BIMI lookup failed."},
     )
     bimi_findings = bimi_scan_findings
@@ -523,8 +531,8 @@ async def api_network_list_scan(req: ListScanRequest, request: Request) -> dict[
     if not req.targets or len(req.targets) > 50:
         raise HTTPException(status_code=400, detail="Provide between 1 and 50 target hostnames or IPs.")
     import dns.asyncresolver
-    budget = ScanWorkBudget()
-    resolver = BudgetedResolver(dns.asyncresolver.Resolver(), budget)
+    budget = ScanWorkBudget(profile="network_scan")
+    resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
     return await run_list_scan(req.targets, resolver=resolver, work_budget=budget)
 
 
@@ -536,8 +544,8 @@ async def api_network_path_scan(req: PathScanRequest, request: Request) -> dict[
         raise HTTPException(status_code=400, detail="Provide between 1 and 5 target hostnames or public IPs.")
     try:
         import dns.asyncresolver
-        budget = ScanWorkBudget()
-        resolver = BudgetedResolver(dns.asyncresolver.Resolver(), budget)
+        budget = ScanWorkBudget(profile="network_scan")
+        resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
         result = await asyncio.wait_for(run_common_path_scan(req.targets, resolver=resolver, work_budget=budget), timeout=30.0)
         _store_path_scan_results(result)
         return result
@@ -551,7 +559,7 @@ async def api_dkim_selector_check(req: DkimSelectorRequest, request: Request) ->
     _enforce_rate_limit(request)
     import dns.asyncresolver
     budget = ScanWorkBudget()
-    resolver = BudgetedResolver(dns.asyncresolver.Resolver(), budget)
+    resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "dkim")
     try:
         result = await asyncio.wait_for(
             check_dkim_selectors(req.domain, resolver, custom_selectors=req.selectors),
@@ -576,8 +584,8 @@ async def api_network_port_scan(req: PortScanRequest, request: Request) -> dict[
         if not auth_header:
             auth_header = f"Bearer {auth_token}"
     import dns.asyncresolver
-    budget = ScanWorkBudget()
-    resolver = BudgetedResolver(dns.asyncresolver.Resolver(), budget)
+    budget = ScanWorkBudget(profile="network_scan")
+    resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
     return await run_port_scan(
         req.target,
         ports=req.ports,
@@ -599,7 +607,7 @@ async def api_subdomains(domain: str, request: Request) -> dict[str, Any]:
     try:
         import dns.asyncresolver
         budget = ScanWorkBudget()
-        resolver = BudgetedResolver(dns.asyncresolver.Resolver(), budget)
+        resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "subdomains")
         data, _ = await asyncio.wait_for(
             discover_passive_subdomains(req.domain, resolver, work_budget=budget),
             timeout=10.0,
@@ -743,6 +751,12 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
         status_code=500,
         content={"detail": "An unexpected server error occurred. Please try again later."},
     )
+
+
+@app.exception_handler(RequestValidationError)
+async def sanitized_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Do not echo rejected request values, which may contain credentials."""
+    return JSONResponse(status_code=422, content={"detail": "Invalid request."})
 
 
 # ---------------------------------------------------------------------------

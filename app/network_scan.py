@@ -6,6 +6,7 @@ and opt-in Port & Service checks against explicitly approved public targets.
 
 import asyncio
 import ipaddress
+import hmac
 import os
 import re
 import socket
@@ -19,7 +20,7 @@ import httpx
 from app.models import Finding
 from app.tls_check import PinnedIPTransport, is_safe_ip, resolve_and_verify_all_ips
 from app.http_config import outbound_http_headers
-from app.work_budget import BudgetedResolver, ScanBudgetExhausted, ScanWorkBudget
+from app.work_budget import ScanBudgetExhausted, ScanWorkBudget
 
 # Curated, safe default ports for standard public infrastructure auditing
 STANDARD_PORTS: dict[int, str] = {
@@ -157,7 +158,7 @@ def verify_port_scan_authorization(
                 provided = auth_header[7:].strip()
             else:
                 provided = auth_header.strip()
-        if not provided or provided != expected_key:
+        if not provided or not hmac.compare_digest(provided, expected_key):
             return (
                 False,
                 "Access denied: Valid server authorization token (PORT_SCAN_API_KEY) required to run active probes.",
@@ -183,8 +184,8 @@ async def run_list_scan(
 ) -> dict[str, Any]:
     """Resolve user-approved target scope without probing ports (bounded concurrency & input validation)."""
     clean_targets = [t.strip() for t in targets if t.strip()]
-    budget = work_budget or ScanWorkBudget()
-    resolver = resolver or BudgetedResolver(dns.asyncresolver.Resolver(), budget)
+    budget = work_budget or ScanWorkBudget(profile="network_scan")
+    resolver = resolver or budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
     list_semaphore = asyncio.Semaphore(10)
 
     async def _resolve_target(target: str) -> dict[str, Any]:
@@ -266,8 +267,8 @@ async def run_common_path_scan(
         raise ValueError("Provide between 1 and 5 target hostnames or public IPs.")
 
     target_semaphore = asyncio.Semaphore(5)
-    budget = work_budget or ScanWorkBudget()
-    resolver = resolver or BudgetedResolver(dns.asyncresolver.Resolver(), budget)
+    budget = work_budget or ScanWorkBudget(profile="network_scan")
+    resolver = resolver or budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
 
     async def _scan_target(target: str) -> dict[str, Any]:
         if len(target) > 253 or not TARGET_SYNTAX_REGEX.fullmatch(target):
@@ -315,7 +316,7 @@ async def run_common_path_scan(
                     errors: list[str] = []
                     for candidate_ip in resolved_ips:
                         try:
-                            if not await budget.reserve_http():
+                            if not await budget.reserve_http("network_scan"):
                                 return {"path": path, "status_code": None, "state": "inconclusive", "location": None, "error": "HTTP request budget exhausted."}
                             transport = PinnedIPTransport(candidate_ip, verify=True)
                             async with httpx.AsyncClient(
@@ -335,7 +336,7 @@ async def run_common_path_scan(
                                         redirect_url = urljoin(request_url, location)
                                         if _same_origin_https_url(redirect_url, target_host):
                                             try:
-                                                if not await budget.reserve_http():
+                                                if not await budget.reserve_http("network_scan"):
                                                     return {"path": path, "status_code": status_code, "state": "inconclusive", "location": location, "error": "HTTP request budget exhausted."}
                                                 # Re-resolve and apply the same public-IP filter before one same-origin hop.
                                                 redirect_safe, redirect_ips, redirect_reason = await resolve_and_verify_all_ips(target_host, port=443, resolver=resolver)

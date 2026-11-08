@@ -39,7 +39,7 @@ async def test_ct_discovered_takeover_fetches_share_scan_http_budget(monkeypatch
 
     async def fake_page_fetch(_host, _addresses, _expected, budget):
         nonlocal reserved
-        if await budget.reserve_http():
+        if await budget.reserve_http("takeover"):
             reserved += 1
             return False, "fetch_failed"
         return False, "budget_exhausted"
@@ -62,7 +62,10 @@ async def test_ct_discovered_takeover_fetches_share_scan_http_budget(monkeypatch
                 return MockAnswer([])
             raise dns.resolver.NXDOMAIN()
 
-    budget = ScanWorkBudget(http_requests=2)  # one CT request plus one fingerprint fetch
+    budget = ScanWorkBudget(
+        http_requests=2,
+        http_shares={"ct": 1, "takeover": 1},
+    )  # one CT request plus one fingerprint fetch
     data, _ = await discover_passive_subdomains("example.com", CTResolver(), work_budget=budget)
 
     assert data["discovered_count"] == 2

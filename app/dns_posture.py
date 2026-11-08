@@ -91,7 +91,7 @@ async def check_zone_transfers(
         server_result = {"nameserver": host, "status": "refused_or_unavailable", "records_exposed": 0}
         for address in addresses:
             try:
-                if not await budget.reserve_dns():
+                if not await budget.reserve_dns("dns_posture"):
                     server_result["status"] = "budget_exhausted"
                     break
                 count = await _attempt_transfer_record_count(address, zone, timeout)
@@ -183,7 +183,7 @@ async def _direct_authority_observation(
     budget: ScanWorkBudget,
 ) -> dict[str, Any]:
     async def query_type(rdtype: str) -> tuple[str, list[Any] | None, str | None]:
-        if not await budget.reserve_dns():
+        if not await budget.reserve_dns("dns_posture"):
             return rdtype, None, "budget_exhausted"
         try:
             response = await asyncio.wait_for(

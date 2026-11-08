@@ -309,7 +309,7 @@ The application is configured via environment variables:
 | Variable | Default | Purpose / Security Guard |
 |:---|:---|:---|
 | `ENABLE_ACTIVE_PORT_SCAN` | `false` | Master toggle for active TCP port probes. Requires explicit server policy (`PORT_SCAN_API_KEY` and/or `PORT_SCAN_ALLOWED_DOMAINS`) before probes are permitted. |
-| `PORT_SCAN_API_KEY` | *(unset)* | Shared secret token accepted through `Authorization: Bearer <key>`. The JSON `auth_token` field remains temporarily supported for one release and logs a deprecation warning; migrate to the header. |
+| `PORT_SCAN_API_KEY` | *(unset)* | Shared secret token accepted through `Authorization: Bearer <key>`. The JSON `auth_token` field remains temporarily supported with a deprecation warning in 2.2.0 and is scheduled for removal in 2.3.0; migrate to the header. |
 | `PORT_SCAN_ALLOWED_DOMAINS`| *(unset)* | Comma-separated list of approved target domains/hostnames for active port scans (e.g. `example.com, target.org`). |
 | `DNS_ANALYZER_DOCUMENTATION_URL` | `https://example.com/dns-analyzer-scanner` | Documentation link included in the User-Agent sent on outbound HTTP requests. |
 | `TRUST_REVERSE_PROXY` | `false` | Inspects `X-Forwarded-For` for client rate limiting. **Security Notice**: Only enable this behind an upstream reverse proxy (e.g. Nginx, Cloudflare) that strips or overwrites untrusted incoming `X-Forwarded-For` headers from external clients to prevent identity spoofing. |
@@ -328,8 +328,8 @@ docker build --target test -t dns-analyzer-test .
 ### Privacy and acceptable use
 
 - The scanner is intended for domains and hosts you own or are authorized to assess. Active TCP port scanning is disabled by default and has a configured server-side authorization/allowlist gate.
-- The application configures Python logging to its default stream (normally stderr); it does not configure a log file, external log service, or log-retention period. Host/container logging may capture that stream; its destination and retention are **not configured by the application**. Error detail is written to server logs while API error responses use generic messages.
-- Application logs include failed scan domains and exception diagnostics. The configured INFO level can also include `httpx` request logs with outbound URLs. The port-scan deprecation warning records field use but never the token value.
+- The application configures Python logging to its default stream (normally stderr); it does not configure a log file, external log service, or log-retention period. Host/container logging may capture that stream; its destination and retention are **not configured by the application**. Error detail is written to server logs while API error responses use generic messages, including validation errors.
+- Uvicorn access logging is enabled by default in both `run.sh` and the Docker command. Access entries include the client IP, HTTP method, request target/path (including domains in `/api/subdomains/{domain}`, `/api/report/{domain}`, and `/api/badge/{domain}`), and response status. Python application log calls include analysis failures with domain and traceback; failed module checks with module name and traceback; subdomain/report failures with domain and traceback; unhandled errors with URL path and exception; TLS certificate verification failures with domain and verification message; TLS handshake tracebacks; DNS lookup type and exception class; takeover/CT failure exception class; unknown finding code; placeholder-URL startup warning; and port-scan body-token deprecation use. The deprecation log never includes the token. `httpx` may also log outbound request URLs at INFO level. Client IPs are held in the in-memory rate limiter but are not explicitly written by application logger calls.
 - Scan results are cached in process memory: the main scan cache is 60 seconds (up to 128 domains), common-path results 15 minutes (up to 128 targets), custom DKIM results 15 minutes (up to 128 domain/selector-set entries), and badge SVG data only while the associated scan is fresh (up to 256 badge entries). No database or server-side persistent scan store is configured.
 - The in-memory rate limiter stores client IP keys and request timestamps for a rolling 60-second window, with at most 2,048 tracked client entries; exact key lifetime depends on cleanup/eviction. This is process memory, not persistent storage.
 - Browser history is stored in that browser profile's local storage: recent domains (up to 5) and up to 60 scan snapshots (up to 5 per domain). It has no application-configured expiry and can be cleared in the dashboard or browser.
@@ -338,7 +338,7 @@ docker build --target test -t dns-analyzer-test .
 
 ### Per-scan work limits
 
-The default scan budget is 500 DNS queries and 25 outbound HTTP fetches, shared by modules in a scan. When a budget is exhausted, affected checks are inconclusive. These defaults preserve the limits already used by the primary scan while applying them to optional scan routes as well.
+The default scan budget is 500 DNS queries and 25 outbound HTTP fetches. The full scan reserves DNS shares of records 60, SPF 70, DKIM 45, DMARC 15, BIMI 5, DNSSEC 70, subdomains 120, takeover 20, TLS 25, mail transport 15, DNS posture 25, network scan 10, and shared helpers 20. HTTP shares are CT 1, takeover 16, TLS 4, mail transport 1, network scan 2, and shared helpers 1. Unused shares are not borrowed, so one module cannot consume another module's allocation. Standalone list/path/port diagnostics use a network-scan profile with the full per-request cap. When a module's share is exhausted, its affected checks are inconclusive.
 
 | RFC | Specification | Diagnostic Scope |
 |:---|:---|:---|

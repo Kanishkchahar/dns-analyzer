@@ -2,7 +2,7 @@
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 import base64
 from pathlib import Path
 import dns.dnssec
@@ -124,6 +124,44 @@ def mock_external_network_calls():
 
 @pytest.mark.asyncio
 class TestAPIEndpoints:
+    @pytest.mark.parametrize(
+        ("method", "path", "payload", "patch_target"),
+        [
+            ("post", "/api/analyze", {"domain": "example.com"}, "app.main.run_full_scan"),
+            ("get", "/api/subdomains/example.com", None, "app.main.discover_passive_subdomains"),
+            ("post", "/api/email/dkim-selectors", {"domain": "example.com", "selectors": ["custom"]}, "app.main.check_dkim_selectors"),
+            ("get", "/api/report/example.com", None, "app.main.run_full_scan"),
+            ("post", "/api/network/list-scan", {"targets": ["example.com"]}, "app.main.run_list_scan"),
+            ("post", "/api/network/path-scan", {"targets": ["example.com"]}, "app.main.run_common_path_scan"),
+            ("post", "/api/network/port-scan", {"target": "example.com"}, "app.main.run_port_scan"),
+            ("get", "/api/badge/example.com", None, "app.main._get_cached_scan"),
+        ],
+    )
+    async def test_endpoint_errors_do_not_expose_exception_details(
+        self, method, path, payload, patch_target, monkeypatch,
+    ):
+        error_text = "ENDPOINT_ERROR_SECRET_SENTINEL"
+        mock = Mock(side_effect=RuntimeError(error_text)) if patch_target.endswith("_get_cached_scan") else AsyncMock(side_effect=RuntimeError(error_text))
+        monkeypatch.setattr(patch_target, mock)
+        transport = ASGITransport(app=app, raise_app_exceptions=False)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await getattr(client, method)(path, json=payload) if payload is not None else await getattr(client, method)(path)
+        assert response.status_code == 500
+        assert error_text not in response.text
+        assert response.json().get("detail")
+
+    async def test_port_scan_validation_does_not_echo_or_log_auth_token(self, caplog):
+        token = "AUTH_TOKEN_VALIDATION_SENTINEL"
+        transport = ASGITransport(app=app, raise_app_exceptions=False)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/network/port-scan",
+                json={"target": "example.com", "auth_token": [token]},
+            )
+        assert response.status_code == 422
+        assert token not in response.text
+        assert token not in caplog.text
+
     async def test_network_path_scan_endpoint(self):
         result = {"scan_mode": "Common Web Paths + Public Robots/Sitemap (No Crawling)", "path_count": 7, "targets": []}
         with patch("app.main.run_common_path_scan", return_value=result) as mocked:

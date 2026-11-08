@@ -429,7 +429,7 @@ async def audit_tls_and_https(
     # 4. Check HTTP (Port 80) -> HTTPS (Port 443) Redirection with strict redirect validation & pinned IP
     redirect_ok = False
     try:
-        if not await budget.reserve_http():
+        if not await budget.reserve_http("tls"):
             raise ScanBudgetExhausted("per-scan outbound request budget exhausted")
         http_transport = PinnedIPTransport(target_ip)
         async with httpx.AsyncClient(transport=http_transport, timeout=3.0, follow_redirects=False, headers=outbound_http_headers()) as client:
@@ -479,7 +479,7 @@ async def audit_tls_and_https(
 
     # 5. Check HTTPS Web Security Headers (Strict TLS verification, pinned IP, stream headers without body download)
     try:
-        if not await budget.reserve_http():
+        if not await budget.reserve_http("tls"):
             raise ScanBudgetExhausted("per-scan outbound request budget exhausted")
         https_transport = PinnedIPTransport(target_ip, verify=True)
         async with httpx.AsyncClient(transport=https_transport, timeout=3.0, follow_redirects=False, headers=outbound_http_headers()) as client:
@@ -562,7 +562,7 @@ async def audit_tls_and_https(
 
     # OPTIONS only reports the server's advertised methods; no write method is sent.
     try:
-        if not await budget.reserve_http():
+        if not await budget.reserve_http("tls"):
             raise ScanBudgetExhausted("per-scan outbound request budget exhausted")
         options_transport = PinnedIPTransport(target_ip, verify=True)
         async with httpx.AsyncClient(transport=options_transport, timeout=3.0, follow_redirects=False, headers=outbound_http_headers()) as client:
@@ -589,7 +589,7 @@ async def audit_tls_and_https(
     # body and validate the required Contact field without following redirects.
     security_txt: dict[str, Any] = {"status": "missing", "url": f"https://{norm_domain}/.well-known/security.txt"}
     try:
-        if not await budget.reserve_http():
+        if not await budget.reserve_http("tls"):
             raise ScanBudgetExhausted("request_budget_exhausted")
         security_transport = PinnedIPTransport(target_ip, verify=True)
         async with httpx.AsyncClient(transport=security_transport, timeout=3.0, follow_redirects=False, headers=outbound_http_headers()) as client:

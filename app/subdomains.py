@@ -46,7 +46,7 @@ async def discover_passive_subdomains(
     budget = work_budget or ScanWorkBudget()
 
     try:
-        if not await budget.reserve_http():
+        if not await budget.reserve_http("ct"):
             raise ScanBudgetExhausted("outbound request budget exhausted")
         url = f"https://crt.sh/?q=%25.{norm_domain}&output=json"
         async with httpx.AsyncClient(timeout=timeout, verify=True, headers=outbound_http_headers()) as client:
@@ -171,7 +171,7 @@ async def discover_passive_subdomains(
                 takeover_data, _ = await check_subdomain_takeover(
                     sub,
                     {"CNAME": {"status": "ok", "records": cnames}},
-                    resolver,
+                    budget.resolver_for(resolver, "takeover"),
                     budget=budget,
                 )
             return {

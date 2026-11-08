@@ -14,6 +14,18 @@ from app.network_scan import (
 
 @pytest.mark.asyncio
 class TestNetworkScan:
+    async def test_port_scan_token_uses_constant_time_comparison(self, monkeypatch):
+        import hmac
+        from unittest.mock import patch
+        from app.network_scan import verify_port_scan_authorization
+
+        monkeypatch.setenv("PORT_SCAN_API_KEY", "expected-token")
+        monkeypatch.setenv("PORT_SCAN_ALLOWED_DOMAINS", "example.com")
+        with patch("app.network_scan.hmac.compare_digest", wraps=hmac.compare_digest) as compare:
+            allowed, _ = verify_port_scan_authorization("Bearer expected-token", "example.com")
+        assert allowed is True
+        compare.assert_called_once_with("expected-token", "expected-token")
+
     def test_sitemap_parser_rejects_entity_expansion_payloads(self):
         payload = b'<!DOCTYPE foo [<!ENTITY x "expanded">]><urlset><url><loc>https://example.com/&x;</loc></url></urlset>'
         assert _parse_sitemap(payload, "example.com") == []

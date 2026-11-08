@@ -76,7 +76,7 @@ async def check_mail_transport(
             policy_status_code = None
             for address in ips:
                 try:
-                    if not await budget.reserve_http():
+                    if not await budget.reserve_http("mail_transport"):
                         policy_errors.append("budget_exhausted")
                         break
                     transport = PinnedIPTransport(address, verify=True)

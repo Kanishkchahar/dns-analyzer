@@ -6,7 +6,7 @@ Baseline before Phase 1: `./venv/bin/pytest -q` — **223 passed** (DNSSEC chain
 |---|---|---:|---|
 | 0. Baseline and WIP checkpoint | DONE | 223 | Checkpoint includes the pre-existing `app/dns_posture.py` and `app/tls_check.py` changes. |
 | 1. Repair the live DNSSEC path (review gate) | DONE | 227 off / 227 on | Restored legacy status semantics, standardized unknown outcomes as “inconclusive”, and retained legacy score input with opt-in chain evidence in `chain_status`. Review gate reached. |
-| 2. Finish Stage 2 follow-up | TODO | — | Budget accounting, error leakage, token and privacy follow-up. |
+| 2. Finish Stage 2 follow-up | DONE | 242 off / 242 on | Protected per-module shares use one budget mechanism; error/token controls, startup warning, deprecation version, privacy docs, and tests are complete. No existing test expectations changed in this phase. |
 | 3. Complete DNSSEC engine (review gate) | TODO | — | Parent DS handling, query flags, NSEC3, findings, anchors, cache, comparison script. |
 | 4. DNSSEC score, response and UI (review gate) | TODO | — | Wait for score-rule approval before changing scoring. |
 | 5. Frontend pass | TODO | — | Dashboard honesty, hierarchy, states and accessibility. |

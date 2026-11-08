@@ -47,7 +47,7 @@ async def _read_fingerprint_page(
     """Try bounded HTTPS then HTTP requests over validated pinned public IPs."""
     for address in addresses[:2]:
         for scheme, verify in (("https", True), ("http", False)):
-            if not await budget.reserve_http():
+            if not await budget.reserve_http("takeover"):
                 return False, "budget_exhausted"
             try:
                 transport = PinnedIPTransport(address, verify=verify)
