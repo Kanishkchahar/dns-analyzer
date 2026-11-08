@@ -2,7 +2,7 @@
 
 ## Safe defaults
 
-- `bash run.sh` binds to `127.0.0.1:8000`. Use `DNS_ANALYZER_HOST` to change the bind address.
+- `bash run.sh` binds to `127.0.0.1:8000`. Use `DNS_ANALYZER_HOST` to change the bind address. The Docker image listens on `0.0.0.0` inside its network namespace; use the published port mapping to control host exposure.
 - Public deployments should sit behind an authenticated, rate-limited reverse proxy. The application does not provide user accounts or authentication for general scan endpoints.
 - Active TCP port scanning is disabled by default. Enable it only when you have an authorization policy and approved target scope.
 - The DNS, CT, and HTTP checks make outbound requests. Use the tool only for domains and hosts you are authorized to assess.
@@ -15,7 +15,7 @@
 | `ENABLE_ACTIVE_PORT_SCAN` | `false` | Master switch for active TCP port checks. |
 | `PORT_SCAN_API_KEY` | unset | Bearer token required by the port-scan policy. |
 | `PORT_SCAN_ALLOWED_DOMAINS` | unset | Comma-separated approved target domains. |
-| `TRUST_REVERSE_PROXY` | `false` | Read `X-Forwarded-For` for client IPs. Enable only when a trusted proxy overwrites the header. |
+| `TRUST_REVERSE_PROXY` | `false` | Use the rightmost valid `X-Forwarded-For` address for rate limiting. Enable only behind a proxy that appends the observed client address or replaces incoming values. When disabled behind a proxy, requests share the proxy's rate-limit bucket. |
 | `DNS_ANALYZER_DOCUMENTATION_URL` | placeholder URL | Contact/documentation link placed in the scanner User-Agent. |
 | `ENABLE_DNSSEC_CHAIN_VALIDATION` | `false` | Enable additional informational DNSSEC chain evidence. It does not affect the score. |
 

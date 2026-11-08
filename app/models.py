@@ -16,7 +16,10 @@ DOMAIN_RE = re.compile(
     r"^(?:[a-zA-Z0-9]"
     r"(?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?"
     r"\.)+"
-    r"[a-zA-Z]{2,}$"
+    # IDNA encodes internationalized TLDs as xn--... labels. The IDNA codec
+    # validates the Unicode input; allow its ASCII encoding here.
+    r"(?:[a-zA-Z]{2,}|xn--[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,57}[a-zA-Z0-9])?)$",
+    re.IGNORECASE,
 )
 
 

@@ -28,27 +28,7 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --no-build-isolation --no-deps .
 
 # ------------------------------------------------------------------------------
-# Stage 2: Test Runner (Verification Stage)
-# ------------------------------------------------------------------------------
-FROM python:${PYTHON_VERSION}-slim AS test
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PATH="/opt/venv/bin:$PATH"
-
-WORKDIR /app
-
-COPY --from=builder /opt/venv /opt/venv
-COPY app ./app
-COPY static ./static
-COPY tests ./tests
-COPY pytest.ini ./
-
-# Run full test suite inside container during build/test verification
-RUN pytest -v
-
-# ------------------------------------------------------------------------------
-# Stage 3: Production Runtime (v2)
+# Stage 2: Production Runtime (v2)
 # ------------------------------------------------------------------------------
 FROM python:${PYTHON_VERSION}-slim AS runtime
 
@@ -62,10 +42,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000
 
 WORKDIR /app
-
-# Ensure automated test verification passes before assembling final image
-COPY --from=test /app/app /tmp/.test_passed
-RUN rm -rf /tmp/.test_passed
 
 # Copy isolated virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv

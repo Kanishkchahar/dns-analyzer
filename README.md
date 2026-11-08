@@ -23,7 +23,7 @@ docker build -t dns-analyzer .
 docker run --rm -p 8000:8000 dns-analyzer
 ```
 
-The default server binds to `127.0.0.1`. For network or public deployment, review [deployment and privacy notes](docs/DEPLOYMENT.md) and put an authenticated, rate-limited proxy in front of the app.
+The local runner binds to `127.0.0.1`. The Docker image listens on `0.0.0.0` inside the container; Docker's published port controls host exposure. For network or public deployment, review [deployment and privacy notes](docs/DEPLOYMENT.md) and put an authenticated, rate-limited proxy in front of the app.
 
 ## What it checks
 

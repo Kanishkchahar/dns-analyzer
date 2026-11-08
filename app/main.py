@@ -109,7 +109,7 @@ def _get_cached_scan(domain: str) -> AnalyzeResponse | None:
     if domain in _SCAN_CACHE:
         cached_time, response = _SCAN_CACHE[domain]
         if now - cached_time < _SCAN_CACHE_TTL:
-            return response
+            return response.model_copy(deep=True)
         del _SCAN_CACHE[domain]
     return None
 
@@ -119,7 +119,7 @@ def _store_cached_scan(domain: str, response: AnalyzeResponse) -> None:
     if len(_SCAN_CACHE) >= 128:
         oldest_key = min(_SCAN_CACHE.keys(), key=lambda k: _SCAN_CACHE[k][0])
         del _SCAN_CACHE[oldest_key]
-    _SCAN_CACHE[domain] = (now, response)
+    _SCAN_CACHE[domain] = (now, response.model_copy(deep=True))
     _BADGE_CACHE.pop(domain, None)
 
 
@@ -178,23 +178,27 @@ def _extract_client_ip(request: Request) -> str:
     """Extract client IP, inspecting X-Forwarded-For only if proxy trust is enabled.
 
     WARNING: Only enable TRUST_REVERSE_PROXY=true when running behind an upstream reverse
-    proxy that strips or overwrites untrusted incoming X-Forwarded-For headers from external
-    clients. If enabled on an exposed direct host, callers may spoof their rate-limiting IP.
+    proxy that appends the connecting client address to X-Forwarded-For (or replaces the
+    header). If enabled on an exposed direct host, callers may spoof their rate-limiting IP.
     """
     trust_proxy = os.environ.get("TRUST_REVERSE_PROXY", "false").strip().lower() in ("true", "1", "yes")
     if trust_proxy and "x-forwarded-for" in request.headers:
+        # Proxies commonly append the address they observed. The rightmost value
+        # is therefore the one supplied by the nearest trusted proxy, not by the
+        # original client. Ignore malformed values and fall back to the peer.
         forwarded = request.headers["x-forwarded-for"].split(",")
         if forwarded:
-            return forwarded[0].strip()
+            candidate = forwarded[-1].strip()
+            try:
+                import ipaddress
+                return str(ipaddress.ip_address(candidate))
+            except ValueError:
+                pass
     return request.client.host if request.client else "unknown"
 
 
 def _enforce_rate_limit(request: Request) -> None:
     client_ip = _extract_client_ip(request)
-    # Unit tests bypass artificial rate limit
-    if os.environ.get("TESTING") == "true" or client_ip == "testclient":
-        return
-
     now = asyncio.get_running_loop().time()
     cutoff = now - _RATE_WINDOW
 
@@ -221,6 +225,22 @@ def _enforce_rate_limit(request: Request) -> None:
             detail="Rate limit exceeded. Please wait a moment before sending additional requests.",
         )
     _CLIENT_REQUESTS[client_ip].append(now)
+
+
+@asynccontextmanager
+async def _scan_slot():
+    """Acquire a bounded slot for any endpoint that performs outbound scan work."""
+    try:
+        await asyncio.wait_for(SCAN_SEMAPHORE.acquire(), timeout=SEMAPHORE_WAIT_TIMEOUT)
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Server is experiencing high scan volume. Please retry shortly.",
+        ) from exc
+    try:
+        yield
+    finally:
+        SCAN_SEMAPHORE.release()
 
 
 
@@ -550,32 +570,22 @@ async def api_analyze(req: AnalyzeRequest, request: Request) -> AnalyzeResponse:
         if cached:
             return cached
 
-    # Bound concurrency queue wait
-    try:
-        await asyncio.wait_for(SCAN_SEMAPHORE.acquire(), timeout=SEMAPHORE_WAIT_TIMEOUT)
-    except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=503,
-            detail="Server is experiencing high scan volume. Please retry shortly.",
-        )
-
-    try:
-        res = await asyncio.wait_for(run_full_scan(req.domain), timeout=SCAN_TIMEOUT_SECONDS)
-        _store_cached_scan(req.domain, res)
-        return res
-    except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=504,
-            detail=f"DNS and security audit timed out after {SCAN_TIMEOUT_SECONDS:g} seconds. Please try again.",
-        )
-    except Exception as exc:
-        logger.exception("Analysis failed for domain: %s", req.domain)
-        raise HTTPException(
-            status_code=500,
-            detail="An error occurred during DNS analysis. Please check the domain and try again.",
-        ) from exc
-    finally:
-        SCAN_SEMAPHORE.release()
+    async with _scan_slot():
+        try:
+            res = await asyncio.wait_for(run_full_scan(req.domain), timeout=SCAN_TIMEOUT_SECONDS)
+            _store_cached_scan(req.domain, res)
+            return res
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail=f"DNS and security audit timed out after {SCAN_TIMEOUT_SECONDS:g} seconds. Please try again.",
+            )
+        except Exception as exc:
+            logger.exception("Analysis failed for domain: %s", req.domain)
+            raise HTTPException(
+                status_code=500,
+                detail="An error occurred during DNS analysis. Please check the domain and try again.",
+            ) from exc
 
 
 @app.post("/api/network/list-scan")
@@ -584,10 +594,11 @@ async def api_network_list_scan(req: ListScanRequest, request: Request) -> dict[
     _enforce_rate_limit(request)
     if not req.targets or len(req.targets) > 50:
         raise HTTPException(status_code=400, detail="Provide between 1 and 50 target hostnames or IPs.")
-    import dns.asyncresolver
-    budget = ScanWorkBudget(profile="network_scan")
-    resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
-    return await run_list_scan(req.targets, resolver=resolver, work_budget=budget)
+    async with _scan_slot():
+        import dns.asyncresolver
+        budget = ScanWorkBudget(profile="network_scan")
+        resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
+        return await run_list_scan(req.targets, resolver=resolver, work_budget=budget)
 
 
 @app.post("/api/network/path-scan")
@@ -596,33 +607,35 @@ async def api_network_path_scan(req: PathScanRequest, request: Request) -> dict[
     _enforce_rate_limit(request)
     if not req.targets or len(req.targets) > 5:
         raise HTTPException(status_code=400, detail="Provide between 1 and 5 target hostnames or public IPs.")
-    try:
-        import dns.asyncresolver
-        budget = ScanWorkBudget(profile="network_scan")
-        resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
-        result = await asyncio.wait_for(run_common_path_scan(req.targets, resolver=resolver, work_budget=budget), timeout=30.0)
-        _store_path_scan_results(result)
-        return result
-    except asyncio.TimeoutError as exc:
-        raise HTTPException(status_code=504, detail="Common web path checks timed out. Retry with fewer targets.") from exc
+    async with _scan_slot():
+        try:
+            import dns.asyncresolver
+            budget = ScanWorkBudget(profile="network_scan")
+            resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
+            result = await asyncio.wait_for(run_common_path_scan(req.targets, resolver=resolver, work_budget=budget), timeout=30.0)
+            _store_path_scan_results(result)
+            return result
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="Common web path checks timed out. Retry with fewer targets.") from exc
 
 
 @app.post("/api/email/dkim-selectors")
 async def api_dkim_selector_check(req: DkimSelectorRequest, request: Request) -> dict[str, Any]:
     """Check user-supplied DKIM selectors for the analyzed domain."""
     _enforce_rate_limit(request)
-    import dns.asyncresolver
-    budget = ScanWorkBudget()
-    resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "dkim")
-    try:
-        result = await asyncio.wait_for(
-            check_dkim_selectors(req.domain, resolver, custom_selectors=req.selectors),
-            timeout=12.0,
-        )
-        _store_custom_dkim(req.domain, req.selectors, result)
-        return result
-    except asyncio.TimeoutError as exc:
-        raise HTTPException(status_code=504, detail="DKIM selector checks timed out.") from exc
+    async with _scan_slot():
+        import dns.asyncresolver
+        budget = ScanWorkBudget()
+        resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "dkim")
+        try:
+            result = await asyncio.wait_for(
+                check_dkim_selectors(req.domain, resolver, custom_selectors=req.selectors),
+                timeout=12.0,
+            )
+            _store_custom_dkim(req.domain, req.selectors, result)
+            return result
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="DKIM selector checks timed out.") from exc
 
 
 @app.post("/api/network/port-scan")
@@ -637,16 +650,17 @@ async def api_network_port_scan(req: PortScanRequest, request: Request) -> dict[
         logger.warning("Deprecated port-scan auth_token body field used; use Authorization header")
         if not auth_header:
             auth_header = f"Bearer {auth_token}"
-    import dns.asyncresolver
-    budget = ScanWorkBudget(profile="network_scan")
-    resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
-    return await run_port_scan(
-        req.target,
-        ports=req.ports,
-        confirmed=req.confirmed,
-        auth_header=auth_header,
-        resolver=resolver,
-    )
+    async with _scan_slot():
+        import dns.asyncresolver
+        budget = ScanWorkBudget(profile="network_scan")
+        resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
+        return await run_port_scan(
+            req.target,
+            ports=req.ports,
+            confirmed=req.confirmed,
+            auth_header=auth_header,
+            resolver=resolver,
+        )
 
 
 @app.get("/api/subdomains/{domain}")
@@ -658,20 +672,21 @@ async def api_subdomains(domain: str, request: Request) -> dict[str, Any]:
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    try:
-        import dns.asyncresolver
-        budget = ScanWorkBudget()
-        resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "subdomains")
-        data, _ = await asyncio.wait_for(
-            discover_passive_subdomains(req.domain, resolver, work_budget=budget),
-            timeout=10.0,
-        )
-        return data
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Subdomain discovery timed out.")
-    except Exception as exc:
-        logger.exception("Subdomain discovery failed for domain: %s", req.domain)
-        raise HTTPException(status_code=500, detail="Failed to retrieve subdomain records.") from exc
+    async with _scan_slot():
+        try:
+            import dns.asyncresolver
+            budget = ScanWorkBudget()
+            resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "subdomains")
+            data, _ = await asyncio.wait_for(
+                discover_passive_subdomains(req.domain, resolver, work_budget=budget),
+                timeout=10.0,
+            )
+            return data
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Subdomain discovery timed out.")
+        except Exception as exc:
+            logger.exception("Subdomain discovery failed for domain: %s", req.domain)
+            raise HTTPException(status_code=500, detail="Failed to retrieve subdomain records.") from exc
 
 
 @app.get("/api/badge/{domain}", response_class=Response)
