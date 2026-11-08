@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 
@@ -268,17 +269,24 @@ def condition_catalog() -> list[dict[str, str]]:
 
 def render_condition_catalog_markdown() -> str:
     """Render the checked-in condition table directly from the runtime catalog."""
+    def code_span(value: str) -> str:
+        longest = max((len(match.group(0)) for match in re.finditer(r"`+", value)), default=0)
+        delimiter = "`" * (longest + 1)
+        padding = " " if value.startswith("`") or value.endswith("`") else ""
+        return f"{delimiter}{padding}{value}{padding}{delimiter}"
+
     lines = [
-        "# Finding condition codes", "",
-        "Each row is a condition rule used to assign a finding code. Legacy alias is the earlier broad record-type code retained for existing consumers; `—` means no earlier distinct code existed.", "",
+        "# Finding codes", "",
+        "The scanner assigns a stable code to each recognized finding condition. Legacy aliases preserve compatibility with earlier broad record-type codes. A dash means no earlier code existed.", "",
         "| Module/type | Condition marker | Stable code | Legacy alias |",
         "|---|---|---|---|",
     ]
-    for row in condition_catalog():
-        lines.append("| {} | `{}` | `{}` | `{}` |".format(
-            row["module"], row["condition"], row["code"], row["legacy_alias"] or "—",
-        ))
     rows = condition_catalog()
+    for row in rows:
+        lines.append("| {} | {} | `{}` | {} |".format(
+            row["module"], code_span(row["condition"]), row["code"],
+            code_span(row["legacy_alias"]) if row["legacy_alias"] else "—",
+        ))
     primary_codes = {row["code"] for row in rows} | {"GEN-001"}
     alias_codes = {row["legacy_alias"] for row in rows if row["legacy_alias"]}
     alias_only = sorted(alias_codes - primary_codes)

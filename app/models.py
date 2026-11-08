@@ -57,7 +57,7 @@ class AnalyzeRequest(BaseModel):
 
 
 class Finding(BaseModel):
-    severity: str  # "error" | "warning" | "info"
+    severity: str  # "error" | "warning" | "info" | "inconclusive"
     record_type: str
     message: str
     code: str = "GEN-001"
@@ -97,6 +97,7 @@ class EmailScore(BaseModel):
     score: int
     grade: str
     label: str
+    inconclusive_count: int = 0
 
 
 class EmailAuth(BaseModel):

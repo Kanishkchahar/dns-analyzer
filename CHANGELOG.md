@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Score address resolution once: an A or AAAA record is enough, so IPv4-only and IPv6-only domains are not penalized for lacking the other family.
+- Treat failed or timed-out DNS checks as inconclusive instead of reporting records as missing; the SPF card and email grade also show when TXT lookup did not complete.
+- Display inconclusive findings across the dashboard, CLI, and HTML report, and add SARIF 2.1.0 CLI output for CI integrations.
+- Require provider fingerprints to have a verification date within the last year before they can produce confirmed takeover results. Stale, undated, and unverified fingerprints remain candidates.
+
 ## 2.2.0
 
 - Repair the live DNSSEC delegation check: uncomparable DS data is inconclusive and DNSKEY without parent DS is incomplete chain. The opt-in chain validator reports `chain_status` informationally; the legacy status remains compatible and controls scoring.

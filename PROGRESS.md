@@ -1,17 +1,19 @@
-# Improvement Program Progress
+# Project status
 
-Baseline before Phase 1: `./venv/bin/pytest -q` — **223 passed** (DNSSEC chain flag unset).
+This snapshot reflects the current 2.2.0 codebase and its reviewed behavior. Run `./venv/bin/pytest -q` for the current test count; counts are intentionally not treated as a release promise.
 
-| Phase | Status | Test count | Note |
-|---|---|---:|---|
-| 0. Baseline and WIP checkpoint | DONE | 223 | Checkpoint includes the pre-existing `app/dns_posture.py` and `app/tls_check.py` changes. |
-| 1. Repair the live DNSSEC path (review gate) | DONE | 227 off / 227 on | Restored legacy status semantics, standardized unknown outcomes as “inconclusive”, and retained legacy score input with opt-in chain evidence in `chain_status`. Review gate reached. |
-| 2. Finish Stage 2 follow-up | DONE | 242 off / 242 on | Protected per-module shares use one budget mechanism; error/token controls, startup warning, deprecation version, privacy docs, and tests are complete. No existing test expectations changed in this phase. |
-| 3. Complete DNSSEC engine (review gate) | TODO | — | Parent DS handling, query flags, NSEC3, findings, anchors, cache, comparison script. |
-| 4. DNSSEC score, response and UI (review gate) | TODO | — | Wait for score-rule approval before changing scoring. |
-| 5. Frontend pass | TODO | — | Dashboard honesty, hierarchy, states and accessibility. |
-| 6. Delegation, lifecycle and web checks | TODO | — | New informational checks with budgets, findings and tests. |
-| 7. Storage, permanent reports, bulk (review gate) | TODO | — | Ask before selecting a retention default. |
-| 8. Monitoring | TODO | — | Watches, scheduler, notifications and certificate inventory. |
-| 9. Packaging and quality | TODO | — | CI, packaging, documentation, accuracy set and final verification. |
+## Implemented
 
+- Browser dashboard, FastAPI routes, shared Python scan pipeline, and CLI.
+- DNS, email-authentication, selected DNSSEC, TLS/web, CT inventory, takeover, and authoritative-posture checks.
+- Per-scan work budgets, bounded network diagnostics, coverage states, finding codes, remediation drafts, and JSON/SARIF/offline report exports.
+- Inconclusive handling for failed lookups, provisional score reporting, and browser-local scan comparisons.
+
+## Known gaps
+
+- The DNSSEC chain validator is opt-in and does not fully validate authenticated denial proofs.
+- Scan history, caches, and rate limits are local to the browser or server process. There is no built-in scheduled monitoring, alert delivery, or account system.
+- The API has no bulk full-analysis endpoint, and the package does not expose a separately documented SDK/config-driven audit interface.
+- RDAP expiry and dangling-nameserver registration checks are not implemented.
+
+See [design decisions](DECISIONS.md), the [scan guide](docs/scan.md), and [deployment notes](docs/DEPLOYMENT.md) for current behavior and limits.

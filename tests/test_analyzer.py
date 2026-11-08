@@ -24,8 +24,17 @@ class TestAnalyzerChecks:
         assert check_domain_resolves(sample_resolver_data) == []
 
         # Only AAAA
-        data_aaaa = {"A": {"status": "not_found"}, "AAAA": {"status": "ok"}}
+        data_aaaa = {"A": {"status": "not_found"}, "AAAA": {"status": "ok", "records": ["2001:db8::1"]}}
         assert check_domain_resolves(data_aaaa) == []
+
+    def test_address_timeout_is_inconclusive_not_a_false_no_resolution_error(self):
+        findings = check_domain_resolves({
+            "A": {"status": "timeout", "records": []},
+            "AAAA": {"status": "no_answer", "records": []},
+        })
+        assert len(findings) == 1
+        assert findings[0].severity == "inconclusive"
+        assert "did not complete" in findings[0].message
 
     def test_check_domain_resolves_fails_when_no_ip(self):
         data = {"A": {"status": "not_found"}, "AAAA": {"status": "not_found"}}
@@ -43,6 +52,9 @@ class TestAnalyzerChecks:
         assert len(findings) == 1
         assert findings[0].severity == "error"
         assert findings[0].record_type == "NS"
+
+        timeout = check_ns_exists({"NS": {"status": "timeout"}})
+        assert timeout[0].severity == "inconclusive"
 
     def test_check_ns_redundancy(self):
         # Multiple NS - good
@@ -92,6 +104,9 @@ class TestAnalyzerChecks:
         assert findings[0].severity == "info"
         assert "No MX records found" in findings[0].message
 
+        timeout = check_mx_exists({"MX": {"status": "timeout"}})
+        assert timeout[0].severity == "inconclusive"
+
     def test_check_mx_resolves(self):
         data_bad = {
             "MX": {
@@ -130,6 +145,9 @@ class TestAnalyzerChecks:
         findings = check_soa_sanity({"SOA": {"status": "not_found"}})
         assert len(findings) == 1
         assert findings[0].severity == "error"
+
+        timeout = check_soa_sanity({"SOA": {"status": "timeout"}})
+        assert timeout[0].severity == "inconclusive"
 
         # Healthy SOA
         healthy = {

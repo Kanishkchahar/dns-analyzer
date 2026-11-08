@@ -8,10 +8,15 @@ from app.models import Finding
 _MIN_SOA_EXPIRE = 172_800
 # Maximum TTL considered reasonable (7 days in seconds)
 _MAX_TTL = 604_800
+_DEFINITE_ABSENCE_STATUSES = {"no_answer", "nxdomain", "not_found"}
 
 
 def _finding(severity: str, record_type: str, message: str) -> Finding:
     return Finding(severity=severity, record_type=record_type, message=message)
+
+
+def _lookup_is_definitively_absent(entry: dict[str, Any]) -> bool:
+    return entry.get("status") in _DEFINITE_ABSENCE_STATUSES
 
 
 # ---------------------------------------------------------------------------
@@ -20,9 +25,13 @@ def _finding(severity: str, record_type: str, message: str) -> Finding:
 
 def check_domain_resolves(data: dict[str, Any], domain: str | None = None) -> list[Finding]:
     """Check 1: Domain must resolve to at least one IP address."""
-    a_ok = data.get("A", {}).get("status") == "ok"
-    aaaa_ok = data.get("AAAA", {}).get("status") == "ok"
+    a_record = data.get("A", {})
+    aaaa_record = data.get("AAAA", {})
+    a_ok = a_record.get("status") == "ok" and bool(a_record.get("records"))
+    aaaa_ok = aaaa_record.get("status") == "ok" and bool(aaaa_record.get("records"))
     if not a_ok and not aaaa_ok:
+        if not all(_lookup_is_definitively_absent(entry) for entry in (a_record, aaaa_record)):
+            return [_finding("inconclusive", "GENERAL", "Could not verify whether the domain resolves because an address lookup did not complete.")]
         subject = f" `{domain}`" if domain else ""
         return [_finding("error", "GENERAL", f"Domain{subject} does not resolve to any IP address.")]
     return []
@@ -31,8 +40,10 @@ def check_domain_resolves(data: dict[str, Any], domain: str | None = None) -> li
 def check_ns_exists(data: dict[str, Any]) -> list[Finding]:
     """Check 2: NS records must exist (or be delegated to authoritative zone apex)."""
     ns = data.get("NS", {})
-    if ns.get("status") != "ok":
+    if ns.get("status") != "ok" and _lookup_is_definitively_absent(ns):
         return [_finding("error", "NS", "No nameservers found for this domain.")]
+    if ns.get("status") != "ok":
+        return [_finding("inconclusive", "NS", "Could not verify nameserver records because the DNS lookup did not complete.")]
     inherited = ns.get("inherited_from")
     if inherited:
         return [_finding(
@@ -69,8 +80,11 @@ def check_ns_resolves(data: dict[str, Any]) -> list[Finding]:
 
 def check_mx_exists(data: dict[str, Any]) -> list[Finding]:
     """Check 5: MX records not found is informational (not an error)."""
-    if data.get("MX", {}).get("status") != "ok":
+    mx = data.get("MX", {})
+    if _lookup_is_definitively_absent(mx):
         return [_finding("info", "MX", "No MX records found — domain may not accept email.")]
+    if mx.get("status") != "ok":
+        return [_finding("inconclusive", "MX", "Could not verify MX records because the DNS lookup did not complete.")]
     return []
 
 
@@ -108,8 +122,11 @@ def check_soa_sanity(data: dict[str, Any]) -> list[Finding]:
     """Check 8: SOA record sanity checks."""
     findings: list[Finding] = []
     soa = data.get("SOA", {})
-    if soa.get("status") != "ok":
+    if soa.get("status") != "ok" and _lookup_is_definitively_absent(soa):
         findings.append(_finding("error", "SOA", "No SOA record found."))
+        return findings
+    if soa.get("status") != "ok":
+        findings.append(_finding("inconclusive", "SOA", "Could not verify the SOA record because the DNS lookup did not complete."))
         return findings
 
     rec = soa.get("records", {})

@@ -128,6 +128,33 @@ class TestDKIM:
 
 
 class TestEmailScore:
+    def test_address_resolution_score_does_not_require_both_ip_families(self):
+        for records in (
+            {"A": {"status": "ok", "records": ["192.0.2.10"]}, "AAAA": {"status": "no_answer", "records": []}},
+            {"A": {"status": "no_answer", "records": []}, "AAAA": {"status": "ok", "records": ["2001:db8::10"]}},
+        ):
+            result = compute_domain_score(
+                records, [], {"score": 100}, {"status": "unsigned"}, {"status": "safe"},
+            )
+            address_check = next(
+                check for check in result["factors"]["infrastructure"]["checks"]
+                if check["check"] == "Address resolution (A or AAAA)"
+            )
+            assert address_check["points_earned"] == 1
+
+    def test_address_resolution_is_zero_only_when_both_families_are_definitely_absent(self):
+        result = compute_domain_score(
+            {
+                "A": {"status": "no_answer", "records": []},
+                "AAAA": {"status": "nxdomain", "records": []},
+            }, [], {"score": 100}, {"status": "unsigned"}, {"status": "safe"},
+        )
+        address_check = next(
+            check for check in result["factors"]["infrastructure"]["checks"]
+            if check["check"] == "Address resolution (A or AAAA)"
+        )
+        assert address_check["points_earned"] == 0
+
     def test_email_score_high_grade(self):
         spf_findings = [Finding(severity="info", record_type="SPF", message="OK")]
         dmarc_findings = [

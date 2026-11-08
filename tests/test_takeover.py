@@ -8,6 +8,19 @@ from tests.conftest import MockAnswer, MockResolver, MockRR
 
 @pytest.mark.asyncio
 class TestSubdomainTakeover:
+    def test_fingerprint_confirmation_requires_recent_verification_date(self):
+        from datetime import datetime, timedelta, timezone
+
+        from app.takeover import _fingerprint_is_currently_verified
+
+        recent = (datetime.now(timezone.utc).date() - timedelta(days=30)).isoformat()
+        stale = (datetime.now(timezone.utc).date() - timedelta(days=366)).isoformat()
+        tomorrow = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
+        assert _fingerprint_is_currently_verified({"verification": "verified", "last_verified": recent})
+        assert not _fingerprint_is_currently_verified({"verification": "verified", "last_verified": stale})
+        assert not _fingerprint_is_currently_verified({"verification": "verified", "last_verified": tomorrow})
+        assert not _fingerprint_is_currently_verified({"verification": "verified", "last_verified": None})
+
     def test_catalog_entries_have_required_fields_and_dns_confirmation_defaults_off(self):
         from app.takeover import TAKEOVER_SIGNATURES
 
@@ -163,10 +176,12 @@ class TestSubdomainTakeover:
         assert len(findings) == 1 and findings[0].severity == "warning"
 
     async def test_verified_http_fingerprint_can_confirm(self, monkeypatch):
+        from datetime import datetime, timezone
         from app.takeover import TAKEOVER_SIGNATURES
 
         provider = next(item for item in TAKEOVER_SIGNATURES if item["provider"] == "GitHub Pages")
         monkeypatch.setitem(provider, "verification", "verified")
+        monkeypatch.setitem(provider, "last_verified", datetime.now(timezone.utc).date().isoformat())
 
         async def match(*args, **kwargs):
             return True, "https_body_match"
@@ -201,14 +216,16 @@ class TestSubdomainTakeover:
         assert data["evidence_state"] == "unverified_page_match"
         assert data["cname_target"] == "unclaimed.github.io"
         assert findings[0].severity == "warning"
-        assert "unverified signature" in findings[0].message
+        assert "current verification date" in findings[0].message
 
     async def test_verified_nxdomain_rule_requires_two_real_nxdomain_answers(self, monkeypatch):
+        from datetime import datetime, timezone
         import dns.resolver
         from app.takeover import TAKEOVER_SIGNATURES
 
         provider = next(item for item in TAKEOVER_SIGNATURES if item["provider"] == "Microsoft Azure App Service")
         monkeypatch.setitem(provider, "verification", "verified")
+        monkeypatch.setitem(provider, "last_verified", datetime.now(timezone.utc).date().isoformat())
         monkeypatch.setitem(provider, "nxdomain_confirms", True)
 
         class CountingResolver(MockResolver):

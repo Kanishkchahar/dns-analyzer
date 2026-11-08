@@ -232,6 +232,10 @@
                 <span class="count" id="count-info">0</span>
                 <span class="label">Info</span>
               </div>
+              <div class="badge badge-inconclusive" id="badge-inconclusive">
+                <span class="count" id="count-inconclusive">0</span>
+                <span class="label">Could not verify</span>
+              </div>
             </div>
           </div>
 
@@ -525,6 +529,7 @@
                 <button class="filter-chip active" type="button" data-filter="all" aria-pressed="true">All</button>
                 <button class="filter-chip" type="button" data-filter="error" aria-pressed="false">Errors</button>
                 <button class="filter-chip" type="button" data-filter="warning" aria-pressed="false">Warnings</button>
+                <button class="filter-chip" type="button" data-filter="inconclusive" aria-pressed="false">Could not verify</button>
                 <button class="filter-chip" type="button" data-filter="info" aria-pressed="false">Info</button>
               </div>
             </div>
@@ -604,7 +609,7 @@
           <div class="shortcut-row"><kbd>/</kbd> <span>Focus domain search bar from anywhere</span></div>
           <div class="shortcut-row"><kbd>Enter</kbd> <span>Run concurrent DNS analysis</span></div>
           <div class="shortcut-row"><kbd>1</kbd> – <kbd>4</kbd> <span>Instantly analyze sample domains</span></div>
-          <div class="shortcut-row"><kbd>f</kbd> <span>Cycle findings filter (All → Errors → Warnings → Info)</span></div>
+          <div class="shortcut-row"><kbd>f</kbd> <span>Cycle findings filter (All → Errors → Warnings → Could not verify → Info)</span></div>
           <div class="shortcut-row"><kbd>v</kbd> <span>Toggle DNS records view (Cards vs CLI dig)</span></div>
           <div class="shortcut-row"><kbd>c</kbd> <span>Copy shareable scan URL</span></div>
           <div class="shortcut-row"><kbd>m</kbd> <span>Copy Markdown summary for Slack/GitHub</span></div>

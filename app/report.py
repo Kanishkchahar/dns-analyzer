@@ -62,6 +62,7 @@ _TEMPLATE = """<!DOCTYPE html>
   .finding.error { border-color: var(--danger); }
   .finding.warning { border-color: var(--warning); }
   .finding.info { border-color: var(--accent); }
+  .finding.inconclusive { border-color: var(--warning); }
   .severity-tag {
     font-size: 10px; font-weight: 700; text-transform: uppercase;
     letter-spacing: 0.08em; padding: 2px 6px; border-radius: 3px;
@@ -70,6 +71,7 @@ _TEMPLATE = """<!DOCTYPE html>
   .error .severity-tag { background: rgba(227,109,109,0.15); color: var(--danger); }
   .warning .severity-tag { background: rgba(224,164,88,0.15); color: var(--warning); }
   .info .severity-tag { background: rgba(101,185,232,0.15); color: var(--accent); }
+  .inconclusive .severity-tag { background: rgba(224,164,88,0.15); color: var(--warning); }
   .finding-rtype { font-family: 'Geist Mono', monospace; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
   .finding-msg { color: var(--text-primary); font-size: 14px; line-height: 1.5; }
   .finding-code { color: var(--accent); font: 10px 'Geist Mono', monospace; margin-left: 8px; }
@@ -169,7 +171,7 @@ _TEMPLATE = """<!DOCTYPE html>
     </div>
     <div class="score-details">
       <h3>Email Health: {{ sc.label }}</h3>
-      <p>Based on SPF, DMARC, and DKIM analysis for {{ domain }}</p>
+      <p>Based on SPF, DMARC, and DKIM analysis for {{ domain }}{% if sc.inconclusive_count %}; {{ sc.inconclusive_count }} check(s) could not be verified{% endif %}</p>
     </div>
   </div>
   {% endif %}
@@ -188,10 +190,13 @@ _TEMPLATE = """<!DOCTYPE html>
   {# SPF #}
   <div class="auth-card">
     <div class="auth-card-title">
-      {% if email_auth.spf %}<span class="pill pill-ok">Found</span>{% else %}<span class="pill pill-fail">Missing</span>{% endif %}
+      {% if email_auth.spf and email_auth.spf.status == 'inconclusive' %}<span class="pill pill-warn">Could Not Verify</span>
+      {% elif email_auth.spf %}<span class="pill pill-ok">Found</span>{% else %}<span class="pill pill-fail">Missing</span>{% endif %}
       SPF (Sender Policy Framework)
     </div>
-    {% if email_auth.spf %}
+    {% if email_auth.spf and email_auth.spf.status == 'inconclusive' %}
+    <p style="color:var(--text-muted);font-size:13px;">{{ email_auth.spf.reason }}</p>
+    {% elif email_auth.spf %}
     <div class="copy-block">{{ email_auth.spf.raw }}</div>
     {% if email_auth.spf_lookups %}
     <div class="auth-card-row">

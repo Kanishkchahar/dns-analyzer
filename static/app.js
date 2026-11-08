@@ -18,9 +18,11 @@ const recordsCount = document.getElementById("records-count");
 const countErrors  = document.getElementById("count-errors");
 const countWarnings= document.getElementById("count-warnings");
 const countInfo    = document.getElementById("count-info");
+const countInconclusive = document.getElementById("count-inconclusive");
 const badgeErrors  = document.getElementById("badge-errors");
 const badgeWarnings= document.getElementById("badge-warnings");
 const badgeInfo    = document.getElementById("badge-info");
+const badgeInconclusive = document.getElementById("badge-inconclusive");
 const findingsSearch = document.getElementById("findings-search");
 let findingsSearchQuery = "";
 
@@ -324,10 +326,10 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
-  // 'f' to cycle findings filters: all -> error -> warning -> info -> all
+  // 'f' cycles all findings filters, including checks that could not be verified.
   if (!isInputFocused && (e.key === "f" || e.key === "F")) {
     e.preventDefault();
-    const filters = ["all", "error", "warning", "info"];
+    const filters = ["all", "error", "warning", "inconclusive", "info"];
     const nextIdx = (filters.indexOf(currentFilter) + 1) % filters.length;
     applyFindingsFilter(filters[nextIdx]);
     showToast(`Filter: ${filters[nextIdx].toUpperCase()}`);
@@ -402,6 +404,10 @@ badgeWarnings.addEventListener("click", () => {
 badgeInfo.addEventListener("click", () => {
   switchSegmentTab("tab-findings");
   applyFindingsFilter("info");
+});
+badgeInconclusive.addEventListener("click", () => {
+  switchSegmentTab("tab-findings");
+  applyFindingsFilter("inconclusive");
 });
 
 if (findingsSearch) {
@@ -585,9 +591,12 @@ function renderResults(data, recheckContext = null) {
   countErrors.textContent  = data.summary.errors;
   countWarnings.textContent= data.summary.warnings;
   countInfo.textContent    = data.summary.info;
+  const inconclusiveFindings = currentFindings.filter((finding) => finding.severity === "inconclusive").length;
+  countInconclusive.textContent = inconclusiveFindings;
   badgeErrors.classList.toggle("zero", data.summary.errors === 0);
   badgeWarnings.classList.toggle("zero", data.summary.warnings === 0);
   badgeInfo.classList.toggle("zero", data.summary.info === 0);
+  badgeInconclusive.classList.toggle("zero", inconclusiveFindings === 0);
 
   // Bento Grid Security Posture Cockpit
   renderBentoCockpit(data, recheckContext?.previousScore ?? null);
@@ -1193,6 +1202,7 @@ function applyFindingsFilter(filter) {
   badgeErrors.classList.toggle("active-filter", filter === "error");
   badgeWarnings.classList.toggle("active-filter", filter === "warning");
   badgeInfo.classList.toggle("active-filter", filter === "info");
+  badgeInconclusive.classList.toggle("active-filter", filter === "inconclusive");
 
   renderFindingsList();
 }
@@ -1214,7 +1224,7 @@ function renderFindingsList() {
   if (filtered.length === 0) {
     let emptyMsg = currentFilter === "all"
       ? "No issues found — DNS configuration looks healthy."
-      : `No ${currentFilter} findings detected.`;
+      : currentFilter === "inconclusive" ? "No checks were inconclusive." : `No ${currentFilter} findings detected.`;
     if (findingsSearchQuery) {
       emptyMsg = `No findings match "${findingsSearchQuery}".`;
     }
@@ -1508,7 +1518,9 @@ function renderEmailAuth(emailAuth, domain) {
     scoreGrade.textContent = sc.grade.replace(/ \(incomplete\)$/, "");
     scoreNum.textContent = `${sc.score}/100`;
     scoreLabel.textContent = `Email Health: ${sc.label}`;
-    scoreDesc.textContent = `DNS and email posture score for ${domain}. TLS, mail transport, and BIMI are reported separately.`;
+    scoreDesc.textContent = sc.inconclusive_count
+      ? `DNS and email posture score for ${domain}. ${sc.inconclusive_count} check(s) could not be verified; TLS, mail transport, and BIMI are reported separately.`
+      : `DNS and email posture score for ${domain}. TLS, mail transport, and BIMI are reported separately.`;
 
     emailScoreSection.style.display = "flex";
 
@@ -1569,15 +1581,16 @@ function renderSpfCard(emailAuth) {
   card.className = "auth-card";
 
   const spf = emailAuth.spf;
-  const hasSpf = !!spf;
-  const pill = hasSpf
-    ? `<span class="pill pill-ok">Found</span>`
-    : `<span class="pill pill-fail">Missing</span>`;
+  const isInconclusive = spf?.status === "inconclusive";
+  const hasSpf = !!spf && !isInconclusive;
+  const pill = isInconclusive
+    ? `<span class="pill pill-warn">Could Not Verify</span>`
+    : hasSpf ? `<span class="pill pill-ok">Found</span>` : `<span class="pill pill-fail">Missing</span>`;
 
   card.innerHTML = `<div class="auth-card-title">${pill} SPF (Sender Policy Framework) <span class="info-badge" title="Specifies authorized mail servers allowed to send email for this domain.">?</span></div>`;
 
   if (!hasSpf) {
-    card.innerHTML += `<p class="auth-empty">No SPF record found in TXT records.</p>`;
+    card.innerHTML += `<p class="auth-empty">${escapeHtml(isInconclusive ? spf.reason || "The TXT lookup did not complete." : "No SPF record found in TXT records.")}</p>`;
     return card;
   }
 

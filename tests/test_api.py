@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import base64
 from pathlib import Path
 import dns.dnssec
+import dns.exception
 import dns.name
 import dns.rdata
 import dns.rdataclass
@@ -239,6 +240,19 @@ class TestAPIEndpoints:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             expired = await client.get("/api/badge/example.com")
         assert expired.status_code == 404
+
+    async def test_txt_timeout_does_not_report_spf_missing_or_complete_email_score(self, mock_dns_system):
+        from app.main import run_full_scan
+
+        mock_dns_system.responses[("example.com", "TXT")] = dns.exception.Timeout()
+        with patch("dns.asyncresolver.Resolver", return_value=mock_dns_system):
+            scan = await run_full_scan("example.com")
+
+        assert scan.email_auth.spf["status"] == "inconclusive"
+        spf_failures = [finding for finding in scan.findings if finding.record_type == "SPF"]
+        assert spf_failures
+        assert all(finding.severity == "inconclusive" for finding in spf_failures)
+        assert "(incomplete)" in scan.email_auth.score.grade
 
     async def test_post_analyze_valid_domain(self, mock_dns_system):
         with patch("dns.asyncresolver.Resolver", return_value=mock_dns_system):

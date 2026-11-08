@@ -365,6 +365,9 @@ def compute_email_score(
     """
     score = 100
     all_findings = [*spf_findings, *dmarc_findings, *dkim_findings]
+    inconclusive_count = sum(
+        1 for finding in all_findings if finding.severity in ("inconclusive", "unverified")
+    )
 
     for f in all_findings:
         if f.severity == "error":
@@ -382,10 +385,15 @@ def compute_email_score(
             label = lbl
             break
 
+    if inconclusive_count:
+        grade = f"{grade} (incomplete)"
+        label = f"{label}; {inconclusive_count} check(s) could not be verified"
+
     return {
         "score": score,
         "grade": grade,
         "label": label,
+        "inconclusive_count": inconclusive_count,
     }
 
 
@@ -506,9 +514,18 @@ def compute_domain_score(
     ns_rec, soa_rec = records.get("NS", {}), records.get("SOA", {})
     ns_count = len(ns_rec.get("records", [])) if ns_rec.get("status") == "ok" else 0
     core_dns_statuses = [entry.get("status") for entry in (a_rec, aaaa_rec, ns_rec, soa_rec)]
+    address_statuses = (a_rec.get("status"), aaaa_rec.get("status"))
+    if any(
+        entry.get("status") == "ok" and bool(entry.get("records"))
+        for entry in (a_rec, aaaa_rec)
+    ):
+        address_value = 1.0
+    elif all(status in ("no_answer", "nxdomain") for status in address_statuses):
+        address_value = 0.0
+    else:
+        address_value = None
     dns_checks = [
-        records_component("A", 1),
-        records_component("AAAA", 1),
+        check_value("Address resolution (A or AAAA)", address_value),
         check_value("NS redundancy", (1.0 if ns_count >= 2 else 0.5 if ns_count == 1 else 0.0) if ns_rec.get("status") in ("ok", "no_answer", "nxdomain") else None, 1),
         records_component("SOA", 1),
         check_value("DNS finding review", penalty_value(dns_findings) if all(s in ("ok", "no_answer", "nxdomain") for s in core_dns_statuses) else None, 1),

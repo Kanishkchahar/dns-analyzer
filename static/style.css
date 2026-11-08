@@ -494,6 +494,10 @@ main {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(101, 185, 232, 0.4);
 }
+.badge-inconclusive.active-filter {
+  border-color: var(--warning);
+  box-shadow: 0 0 0 2px rgba(224, 164, 88, 0.4);
+}
 .badge .count {
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 28px;
@@ -511,6 +515,7 @@ main {
 .badge-errors   .count { color: var(--danger); }
 .badge-warnings .count { color: var(--warning); }
 .badge-info     .count { color: var(--accent); }
+.badge-inconclusive .count { color: var(--warning); }
 .badge.zero     .count { color: var(--text-muted); }
 
 /* ── Bento Grid Security Posture Cockpit ── */
@@ -909,6 +914,7 @@ main {
 .finding-item.error   { border-left-color: var(--danger); }
 .finding-item.warning { border-left-color: var(--warning); }
 .finding-item.info    { border-left-color: var(--accent); }
+.finding-item.inconclusive { border-left-color: var(--warning); }
 
 .finding-meta {
   display: flex;
@@ -930,6 +936,7 @@ main {
 .finding-item.error   .severity-tag { background: rgba(227,109,109,0.15); color: var(--danger);  }
 .finding-item.warning .severity-tag { background: rgba(224,164,88,0.15);  color: var(--warning); }
 .finding-item.info    .severity-tag { background: rgba(101,185,232,0.12); color: var(--accent);  }
+.finding-item.inconclusive .severity-tag { background: rgba(224,164,88,0.15); color: var(--warning); }
 
 .finding-rtype {
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;

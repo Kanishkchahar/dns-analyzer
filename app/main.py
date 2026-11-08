@@ -298,7 +298,7 @@ def _build_scan_coverage(
 def _check_failure(name: str, exc: Exception) -> Finding:
     logger.error("%s check failed", name, exc_info=(type(exc), exc, exc.__traceback__))
     return Finding(
-        severity="info",
+        severity="inconclusive",
         record_type=name,
         message=f"{name} check could not complete. Other scan results are still available.",
     )
@@ -334,11 +334,27 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
 
     # SPF
     txt_records = records.get("TXT", {}).get("records", [])
+    txt_status = records.get("TXT", {}).get("status")
     spf_data = parse_spf(txt_records)
     spf_lookup_data = None
     spf_flat_data = None
     spf_scan_findings: list[Finding] = []
-    if spf_data:
+    spf_query_complete = txt_status in ("ok", "no_answer", "nxdomain")
+    if not spf_query_complete:
+        reason = "SPF could not be verified because the TXT lookup did not complete."
+        spf_data = {"status": "inconclusive", "reason": reason}
+        spf_lookup_data = {
+            "status": "inconclusive", "total_lookups": 0, "limit": 10,
+            "over_limit": False, "lookup_tree": [], "reason": reason,
+        }
+        spf_flat_data = {
+            "can_flatten": False, "flattened_record": None, "reason": reason,
+            "ip4_ranges": [], "ip6_ranges": [], "original_lookups": 0, "flattened_lookups": 0,
+        }
+        spf_findings = [Finding(severity="inconclusive", record_type="SPF", message=reason)]
+    else:
+        spf_findings = []
+    if spf_query_complete and spf_data:
         spf_resolver = work_budget.resolver_for(base_resolver, "spf")
         lookup_result, flatten_result = await asyncio.gather(
             asyncio.wait_for(count_spf_lookups(domain, spf_resolver), timeout=SPF_CHECK_TIMEOUT_SECONDS),
@@ -362,7 +378,8 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
             spf_scan_findings.append(_check_failure("SPF Flattening", flatten_result if isinstance(flatten_result, Exception) else RuntimeError(type(flatten_result).__name__)))
         else:
             spf_flat_data = flatten_result
-    spf_findings = analyze_spf(spf_data, spf_lookup_data, txt_records=txt_records)
+    if spf_query_complete:
+        spf_findings = analyze_spf(spf_data, spf_lookup_data, txt_records=txt_records)
     spf_findings.extend(spf_scan_findings)
 
     # DMARC & DKIM & DNSSEC & Subdomain Takeover & TLS & Passive CT Recon (run concurrently)

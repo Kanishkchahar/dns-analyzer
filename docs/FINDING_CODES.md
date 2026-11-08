@@ -1,6 +1,6 @@
-# Finding condition codes
+# Finding codes
 
-Each row is a condition rule used to assign a finding code. Legacy alias is the earlier broad record-type code retained for existing consumers; `—` means no earlier distinct code existed.
+The scanner assigns a stable code to each recognized finding condition. Legacy aliases preserve compatibility with earlier broad record-type codes. A dash means no earlier code existed.
 
 | Module/type | Condition marker | Stable code | Legacy alias |
 |---|---|---|---|
@@ -26,14 +26,14 @@ Each row is a condition rule used to assign a finding code. Legacy alias is the 
 | TXT | `ttl of 0` | `DNS-TTL-001` | `DNS-007` |
 | CAA | `ttl of 0` | `DNS-TTL-001` | `CERT-001` |
 | SOA | `ttl of 0` | `DNS-TTL-001` | `DNS-006` |
-| A | `ttl on `a` record is unusually high` | `DNS-TTL-002` | `DNS-002` |
-| AAAA | `ttl on `aaaa` record is unusually high` | `DNS-TTL-002` | `DNS-003` |
-| MX | `ttl on `mx` record is unusually high` | `DNS-TTL-002` | `MAIL-001` |
-| NS | `ttl on `ns` record is unusually high` | `DNS-TTL-002` | `DNS-004` |
-| CNAME | `ttl on `cname` record is unusually high` | `DNS-TTL-002` | `DNS-005` |
-| TXT | `ttl on `txt` record is unusually high` | `DNS-TTL-002` | `DNS-007` |
-| CAA | `ttl on `caa` record is unusually high` | `DNS-TTL-002` | `CERT-001` |
-| SOA | `ttl on `soa` record is unusually high` | `DNS-TTL-002` | `DNS-006` |
+| A | ``ttl on `a` record is unusually high`` | `DNS-TTL-002` | `DNS-002` |
+| AAAA | ``ttl on `aaaa` record is unusually high`` | `DNS-TTL-002` | `DNS-003` |
+| MX | ``ttl on `mx` record is unusually high`` | `DNS-TTL-002` | `MAIL-001` |
+| NS | ``ttl on `ns` record is unusually high`` | `DNS-TTL-002` | `DNS-004` |
+| CNAME | ``ttl on `cname` record is unusually high`` | `DNS-TTL-002` | `DNS-005` |
+| TXT | ``ttl on `txt` record is unusually high`` | `DNS-TTL-002` | `DNS-007` |
+| CAA | ``ttl on `caa` record is unusually high`` | `DNS-TTL-002` | `CERT-001` |
+| SOA | ``ttl on `soa` record is unusually high`` | `DNS-TTL-002` | `DNS-006` |
 | SPF | `no spf record found` | `MAIL-SPF-001` | `MAIL-002` |
 | SPF | `multiple spf records found` | `MAIL-SPF-002` | `MAIL-002` |
 | SPF | `exceeding the rfc 7208` | `MAIL-SPF-003` | `MAIL-002` |

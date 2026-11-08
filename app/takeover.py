@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date, datetime, timezone
 import ipaddress
 import json
 import logging
@@ -22,10 +23,23 @@ from app.http_config import outbound_http_headers
 logger = logging.getLogger(__name__)
 MAX_FINGERPRINT_BODY = 16 * 1024
 MAX_CNAME_DEPTH = 10
+FINGERPRINT_MAX_AGE_DAYS = 365
 TAKEOVER_DATA_PATH = Path(__file__).resolve().parent / "data" / "takeover_fingerprints.json"
 with TAKEOVER_DATA_PATH.open(encoding="utf-8") as stream:
     _TAKEOVER_DATA = json.load(stream)
 TAKEOVER_SIGNATURES: list[dict[str, Any]] = _TAKEOVER_DATA["services"]
+
+
+def _fingerprint_is_currently_verified(provider: dict[str, Any] | None) -> bool:
+    """Only let recently rechecked fingerprints produce confirmed results."""
+    if not provider or provider.get("verification") != "verified":
+        return False
+    try:
+        verified_on = date.fromisoformat(str(provider.get("last_verified", "")))
+    except ValueError:
+        return False
+    age_days = (datetime.now(timezone.utc).date() - verified_on).days
+    return 0 <= age_days <= FINGERPRINT_MAX_AGE_DAYS
 
 
 def _match_provider(cname_target: str) -> dict[str, Any] | None:
@@ -173,11 +187,12 @@ def _finding_result(
         "remediation": remediation,
         "last_verified": provider.get("last_verified") if provider else None,
         "verification": provider.get("verification", "unverified") if provider else "unverified",
+        "fingerprint_verified_current": _fingerprint_is_currently_verified(provider),
         "nxdomain_confirms": bool(provider and provider.get("nxdomain_confirms") is True),
     }
     if status == "candidate":
         explanation = (
-            "The page matches an unverified signature; this is only a candidate."
+            "The page matches an unverified signature or one without a current verification date; this is only a candidate."
             if evidence == "unverified_page_match"
             else "DNS evidence is a candidate, not proof of claimability."
         )
@@ -239,7 +254,7 @@ async def check_subdomain_takeover(
                 continue
             matched, page_state = await _read_fingerprint_page(target, addresses, expected, work_budget)
             if matched:
-                if provider.get("verification") == "verified":
+                if _fingerprint_is_currently_verified(provider):
                     return _finding_result(
                         domain, target, provider, "confirmed", page_state,
                         "The bounded HTTP response contained the verified stored provider text; claimability still requires provider confirmation.",
@@ -266,7 +281,7 @@ async def check_subdomain_takeover(
             and provider
             and provider.get("detection_method") == "nxdomain"
             and provider.get("nxdomain_confirms") is True
-            and provider.get("verification") == "verified"
+            and _fingerprint_is_currently_verified(provider)
         ):
             return _finding_result(
                 domain, target, provider, "confirmed", "verified_nxdomain_rule",

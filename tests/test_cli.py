@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import json
 
 from app import cli
 
@@ -9,7 +10,7 @@ def _scan(*, score=70, grade="C", errors=0):
         domain="example.com",
         scan_timestamp="2026-11-07 00:00:00 UTC",
         domain_score=SimpleNamespace(score=score, grade=grade),
-        summary=SimpleNamespace(errors=errors, warnings=0, info=0),
+        summary=SimpleNamespace(errors=errors, warnings=0, info=0, inconclusive=0),
         findings=findings,
         model_dump=lambda **_: {"domain": "example.com", "score": score, "grade": grade},
     )
@@ -79,3 +80,27 @@ def test_cli_json_keeps_incomplete_grade_suffix(monkeypatch, capsys):
     monkeypatch.setattr(cli, "_scan", fake_scan)
     assert cli.main(["example.com", "--json"]) == 0
     assert '"grade": "B (incomplete)"' in capsys.readouterr().out
+
+
+def test_cli_sarif_output_preserves_finding_codes_and_marks_inconclusive_for_review(monkeypatch, capsys):
+    finding = SimpleNamespace(
+        severity="inconclusive",
+        record_type="TLS",
+        code="SCAN-TLS-001",
+        message="TLS check could not complete.",
+        explanation={"title": "TLS check incomplete"},
+        legacy_codes=[],
+    )
+    scan = _scan()
+    scan.findings = [finding]
+    async def fake_scan(_):
+        return scan
+    monkeypatch.setattr(cli, "_scan", fake_scan)
+
+    assert cli.main(["example.com", "--sarif"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    result = report["runs"][0]["results"][0]
+    assert report["version"] == "2.1.0"
+    assert result["ruleId"] == "SCAN-TLS-001"
+    assert result["level"] == "none"
+    assert result["kind"] == "review"

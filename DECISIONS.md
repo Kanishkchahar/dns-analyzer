@@ -1,24 +1,20 @@
-# Decisions
+# Design decisions
 
-## Phase 0
+This file records current behavior that affects scan results or deployment. Check the linked guides for implementation details.
 
-- The starting worktree contains extensive uncommitted project changes. Per the requested workflow, preserve all of it in the `work/dns-analyzer-improvements` WIP checkpoint before editing Phase 1.
-- Baseline suite count is 223 passing tests with `ENABLE_DNSSEC_CHAIN_VALIDATION` unset.
+## Evidence and scoring
 
-## Phase 1
+- A DNS failure is not treated as an empty answer. Failed lookups are reported as inconclusive; `no_answer` and `nxdomain` are definitive DNS responses.
+- A or AAAA resolution is sufficient for the address-resolution score. A domain is not penalized solely for lacking the other address family.
+- The overall grade uses documented weighted factors. Not-applicable and wholly unobserved factors are excluded; partial factors show their incomplete checks and scoring treatment.
+- Default DNSSEC status is a DS-to-DNSKEY comparison. Optional chain validation remains informational until denial-proof handling and scoring rules are complete.
+- Takeover evidence remains a candidate unless its fingerprint is explicitly verified, has a verification date within the last year, and meets the evidence rule. Confirmation still does not prove provider-side claimability.
 
-- DNSSEC states use `inconclusive` for unavailable or unprovable results. Chain-validator states remain informational until score rules are approved; legacy delegation observations retain their existing scoring behavior except where the restored classifications require safe handling.
-- Legacy DS comparison is `bogus` only if at least one supported DS can actually be compared and all comparable DS records mismatch. If none can be compared, return `inconclusive`.
-- A present DNSKEY RRset with no DS answer is reported as `incomplete_chain`; absence of both is `unsigned`.
-- Stage 3 changed the live helper from independent DNSKEY/DS lookups to one combined try/except. It classified `NoAnswer` from either lookup as `unsigned`, and collapsed “no DS/DNSKEY match” into `bogus`. That erased the Stage 2 incomplete-chain and inconclusive outcomes. The fix separates lookup results and distinguishes comparable DS data from absent or unsupported data.
-- With chain validation enabled, the response preserves the legacy `status` and adds `chain_status` for the new engine. The legacy delegation status is also retained as the score input. This keeps the opt-in validator informational and makes its state unable to change score, grade, or caps; it can still show its evidence in the response.
-- Restored historical expectations in `test_dnssec_incomplete_chain`, `test_dnssec_ds_without_digest_is_inconclusive`, and `test_post_analyze_valid_domain`. Updated the former provisional chain-score regression to assert score/grade/caps are identical across chain states, as explicitly required; renamed it `test_chain_dnssec_states_are_informational_for_score_and_caps`.
-- Added `test_dnssec_uncomparable_ds_is_inconclusive`, `test_enabled_chain_result_keeps_legacy_score_input`, and `test_every_dnssec_engine_state_has_the_expected_scoring_treatment`.
-- Other expectation changes since the Stage 2 baseline were reviewed and retained because they correspond to already-approved behavior: `tests/test_api.py::test_network_path_scan_endpoint` checks injected resolver/budget kwargs; `::test_grade_badge_requires_a_recent_scan_and_serves_svg_after_scan` checks TTL-based expiry and incomplete-grade badges; `::test_post_analyze_valid_domain` accepts provisional grade suffixes and checks score breakdown (its DNSSEC assertion was restored); `::test_post_network_port_scan_accepts_token_only_in_authorization_header` was renamed to `test_post_network_port_scan_body_token_is_deprecated_and_header_works` for the approved one-release compatibility behavior. `tests/test_email_auth.py::test_compute_domain_score_comprehensive`, `::test_compute_domain_score_threat_deduction`, `::test_compute_domain_score_dnssec_delegation_match_scored_separately`, `::test_compute_domain_score_inconclusive_dnssec_gets_no_dnssec_points`, and `::test_compute_domain_score_axfr_caps_grade` reflect approved weights, factor completion, takeover semantics, and the AXFR cap of 54. In `tests/test_takeover.py`, the resolving-provider case changed from `cloud_hosted` to `safe`, the timeout case from `could_not_verify`/`timeout` to `inconclusive`/`lookup_or_fetch_failed`, and `test_exact_http_fingerprint_confirms_takeover` became `test_unverified_http_fingerprint_is_candidate` because shipped signatures are unverified. These behavior changes were separately approved, so they were not reverted.
+## Runtime and safety
 
-## Phase 2
+- Full scans use a shared cap of 500 DNS queries and 25 outbound HTTP requests with reserved module shares. Unused shares are not borrowed.
+- Active TCP port checks are disabled by default and require explicit server policy and authorization. Non-public targets are blocked.
+- Target HTTP requests use bounded timeouts and response sizes. Scans report partial results instead of treating a failed optional check as a pass.
+- Browser history is local to the browser profile. Server caches and rate limits are process-local and are not a persistent monitoring system.
 
-- Keep the existing hard limits at 500 DNS queries and 25 HTTP fetches. The DNS limit bounds SPF recursion, selector discovery, CT host checks and delegated posture work; the HTTP limit caps aggregate CT, takeover, TLS/web, policy-file and diagnostic fetches. A typical two-label scan with one MX and two single-address NS hosts uses roughly 11 record queries, 15 DKIM queries, one DMARC query, two default-mode DNSSEC queries, about two TLS address queries, two to four MTA-STS/TLS-RPT queries, and about 20 posture queries. SPF adds zero for `-all` but varies with mechanisms. Forty CT names add 120 A/AAAA/CNAME checks before CNAME-target checks; each takeover chain is bounded at depth 10, and the shared total halts work at 500 DNS / 25 HTTP.
-- DNS full-scan reservations are records 60, SPF 70, DKIM 45, DMARC 15, BIMI 5, DNSSEC 70, subdomains 120, takeover 20, TLS 25, mail transport 15, DNS posture 25, network scan 10, and shared helpers 20. HTTP shares are CT 1, takeover 16, TLS 4, mail transport 1, network scan 2, shared helpers 1. Reservations are isolated, not borrowed. This ensures an exhausted CT/takeover module cannot consume DNSSEC, email, or TLS capacity. Standalone network routes use a network-only profile and receive their full per-request cap.
-- Preserve the port-scan JSON token field through 2.2.0 for the previously approved compatibility period, and remove it in 2.3.0. Compare header tokens with `hmac.compare_digest`; sanitize validation response values so malformed token inputs cannot be echoed.
-
+See [deployment and privacy](docs/DEPLOYMENT.md) for configuration and [the scan guide](docs/scan.md) for result interpretation.
