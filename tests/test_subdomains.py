@@ -1,6 +1,7 @@
 """CT inventory tests use a fake HTTP response and fake DNS resolver only."""
 
 import dns.resolver
+import httpx
 import pytest
 
 from app.subdomains import discover_passive_subdomains
@@ -72,3 +73,71 @@ async def test_ct_discovered_takeover_fetches_share_scan_http_budget(monkeypatch
     assert reserved == 1
     assert budget.http_remaining == 0
     assert all(item["takeover"]["status"] == "inconclusive" for item in data["subdomains"])
+
+
+@pytest.mark.asyncio
+async def test_ct_successful_empty_response_is_distinct_from_source_failure(monkeypatch):
+    class EmptyResponse(_CTResponse):
+        async def aiter_bytes(self):
+            yield b"[]"
+
+    class EmptyClient(_CTClient):
+        def stream(self, *_args, **_kwargs):
+            return EmptyResponse()
+
+    monkeypatch.setattr("app.subdomains.httpx.AsyncClient", lambda **_kwargs: EmptyClient())
+    data, _ = await discover_passive_subdomains("example.com", MockResolver())
+
+    assert data["status"] == "complete"
+    assert data["state"] == "NO_RESULTS"
+    assert data["attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ct_retries_provider_error_and_preserves_per_host_source(monkeypatch):
+    responses = iter([
+        (503, b"unavailable"),
+        (200, b'[{"name_value":"one.example.com"}]'),
+    ])
+    attempts = 0
+
+    class SequenceResponse(_CTResponse):
+        def __init__(self, status_code, body):
+            self.status_code = status_code
+            self.body = body
+
+        async def aiter_bytes(self):
+            yield self.body
+
+    class SequenceClient(_CTClient):
+        def stream(self, *_args, **_kwargs):
+            nonlocal attempts
+            attempts += 1
+            return SequenceResponse(*next(responses))
+
+    monkeypatch.setattr("app.subdomains.httpx.AsyncClient", lambda **_kwargs: SequenceClient())
+    budget = ScanWorkBudget(http_requests=2, http_shares={"ct": 2})
+    data, _ = await discover_passive_subdomains("example.com", MockResolver(), work_budget=budget)
+
+    assert attempts == data["attempts"] == 2
+    assert data["state"] == "DISCOVERY_COMPLETED"
+    assert data["subdomains"][0]["source"] == "crt.sh"
+
+
+@pytest.mark.asyncio
+async def test_ct_timeout_is_reported_as_timeout_after_bounded_retries(monkeypatch):
+    attempts = 0
+
+    class TimeoutClient(_CTClient):
+        def stream(self, *_args, **_kwargs):
+            nonlocal attempts
+            attempts += 1
+            raise httpx.TimeoutException("timed out")
+
+    monkeypatch.setattr("app.subdomains.httpx.AsyncClient", lambda **_kwargs: TimeoutClient())
+    budget = ScanWorkBudget(http_requests=2, http_shares={"ct": 2})
+    data, _ = await discover_passive_subdomains("example.com", MockResolver(), work_budget=budget)
+
+    assert attempts == data["attempts"] == 2
+    assert data["status"] == "unavailable"
+    assert data["state"] == "TIMEOUT"

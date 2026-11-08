@@ -9,25 +9,6 @@ from app.models import RemediationFix
 from app.provider_templates import _quote_txt, _txt_chunks, apply_provider_templates
 
 
-def _detect_mx_provider(records: dict[str, Any] | None) -> tuple[str, str]:
-    """Detect primary mail service provider from MX records to tailor SPF draft."""
-    if not records:
-        return "Google Workspace / Mail Provider", "include:_spf.google.com"
-    mx_data = records.get("MX", {})
-    raw_mx = " ".join(str(r).lower() for r in mx_data.get("records", []))
-    if any(k in raw_mx for k in ("google", "googlemail", "aspmx")):
-        return "Google Workspace", "include:_spf.google.com"
-    if any(k in raw_mx for k in ("outlook", "protection.outlook", "microsoft")):
-        return "Microsoft 365", "include:spf.protection.outlook.com"
-    if "zoho" in raw_mx:
-        return "Zoho Mail", "include:zoho.com"
-    if any(k in raw_mx for k in ("protonmail", "proton")):
-        return "Proton Mail", "include:_spf.protonmail.ch"
-    if "icloud" in raw_mx:
-        return "Apple iCloud", "include:icloud.com"
-    return "Google Workspace / Mail Provider", "include:_spf.google.com"
-
-
 def generate_remediation_fixes(
     domain: str,
     findings: list[Any],
@@ -41,25 +22,26 @@ def generate_remediation_fixes(
     # 1. SPF Fix
     spf_data = getattr(email_auth, "spf", None) if email_auth else None
     if not spf_data:
-        provider_name, spf_include = _detect_mx_provider(records)
-        fixes.append(RemediationFix(
-            title="Create Authoritative SPF Record (Draft)",
-            record_type="TXT",
-            host="@",
-            value=f"v=spf1 {spf_include} ~all",
-            ttl=3600,
-            is_draft=True,
-            impact_warning="Draft record. Publishing an incomplete SPF record will cause legitimate outbound emails from unlisted servers to fail delivery.",
-            prerequisites=[
-                "Confirm all third-party services sending mail on your behalf (e.g. SendGrid, Mailgun, CRM, helpdesks).",
-                f"Confirm outbound mail provider (detected: {provider_name}) and adjust include: mechanisms accordingly.",
-            ],
-            provider_guides={
-                "Cloudflare": f'Type: TXT, Name: @, Content: "v=spf1 {spf_include} ~all", TTL: Auto',
-                "AWS Route 53": f'Name: (empty), Type: TXT, Value: "v=spf1 {spf_include} ~all"',
-                "GoDaddy / Namecheap": f'Type: TXT, Host: @, Value: v=spf1 {spf_include} ~all',
-            }
-        ))
+        txt_status = (records or {}).get("TXT", {}).get("status")
+        txt_was_checked = records is None or txt_status in ("ok", "no_answer", "nxdomain")
+        if txt_was_checked:
+            fixes.append(RemediationFix(
+                title="Confirm mail use and authorized senders before creating SPF",
+                record_type="SPF",
+                host="@",
+                value="",
+                guidance=(
+                    "No SPF record was generated. DNS records alone cannot establish every system "
+                    "authorized to send email for this domain."
+                ),
+                guidance_only=True,
+                is_draft=True,
+                prerequisites=[
+                    "Confirm whether this exact domain sends email; a subdomain used only for web hosting may not need its own SPF policy.",
+                    "List every authorized sender, including business mail, marketing, transactional, CRM, and support systems.",
+                    "Build one SPF record from the confirmed sender documentation, then validate it before publishing.",
+                ],
+            ))
     else:
         # Check if over limit and flattened record is available and semantics-safe
         spf_lookups = getattr(email_auth, "spf_lookups", None) if email_auth else None

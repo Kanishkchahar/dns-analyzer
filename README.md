@@ -4,6 +4,12 @@ A high-performance, asynchronous DNS and web security posture scanner. Enter a d
 
 The dashboard uses the full browser width. Current releases also include direct-authority AXFR and nameserver checks, wildcard DNS detection, a command-line scanner, finding explanations, provider-specific remediation guidance, and a cached grade badge endpoint. See [Current scope and limitations](#current-scope-and-limitations) for checks that are not implemented yet.
 
+## Dashboard Preview
+
+![DNS Analyzer dashboard showing the security posture overview, scan coverage, and browser-local scan history](docs/images/dashboard.png)
+
+*Example dashboard results; scores and findings depend on the domain and scan time.*
+
 ---
 
 ## 🚀 Quick Start
@@ -18,13 +24,15 @@ This all-in-one runner automatically:
 - Requires Python 3.11 or newer; the Docker image defaults to Python 3.11.
 - Verifies or self-heals the local `venv/` virtual environment
 - Installs or updates dependencies from `requirements.txt`
-- Starts the production server on **http://127.0.0.1:8000** with auto-reload
+- Starts the server on **http://127.0.0.1:8000** without development auto-reload. It binds to loopback by default.
 
 #### Custom Port
 
 ```bash
 bash run.sh 9000
 ```
+
+For development auto-reload, run `bash run.sh --reload`. To expose the local runner on your network, set `DNS_ANALYZER_HOST=0.0.0.0`; place an authenticated, rate-limited reverse proxy in front of any public deployment.
 
 #### Setup Only (Prepare Environment Without Starting Server)
 
@@ -82,7 +90,7 @@ docker stop dns-analyzer-v2 && docker rm dns-analyzer-v2
 ## ⚡ Key Architecture & Features
 
 ### 1. Executive Security Posture Cockpit (Asymmetric Bento Grid)
-- **Weighted Posture Score (2.2.0)**: The score uses DNS infrastructure (20), email authentication (25), DNSSEC (20), takeover evidence (15), TLS/web (10), mail transport (5), and DNS posture (5). Not-applicable and wholly inconclusive factors are excluded; remaining weights are normalized to 100. Partial factors score only completed checks. The breakdown lists excluded factors and the headline reports `based on X of Y factors`. Excluded weight above 30% marks the grade provisional (`(incomplete)`). Successful AXFR caps the score at 54; confirmed takeover and bogus DNSSEC each cap it at 39, with reasons shown.
+- **Weighted Posture Score (2.2.0)**: The score uses DNS infrastructure (20), email authentication (25), DNSSEC (20), takeover evidence (15), TLS/web (10), mail transport (5), and DNS posture (5). Not-applicable and wholly inconclusive factors are excluded; remaining weights are normalized to 100. In a partially observed factor, each inconclusive check receives neutral 50% credit; the breakdown shows its status and policy. The summary's inconclusive count is the number of checks the score could not verify. Excluded weight above 30% marks the grade provisional (`(incomplete)`). Successful AXFR caps the score at 54; confirmed takeover and bogus DNSSEC each cap it at 39, with reasons shown.
 - **Takeover deduction**: For the 15-point factor, `safe` earns 15 (0 deducted), `candidate` earns 6.75 (8.25 deducted), and `confirmed` earns 0 (15 deducted and the score is capped at 39). Candidate deduction is `15 × (1 − 0.45) = 8.25`: candidate evidence earns 45% of factor points and deducts 55%. `inconclusive` and `not_applicable` are excluded; inconclusive never triggers a cap.
 - **Version 2.2.0** changes score normalization and provisional-grade reporting. Grades and `--min-grade` results may differ from earlier versions.
 - See [CHANGELOG.md](CHANGELOG.md) for the 2.2.0 release notes.
@@ -102,10 +110,11 @@ docker stop dns-analyzer-v2 && docker rm dns-analyzer-v2
 - **DKIM Multi-Selector Scanner (RFC 6376)**: Checks common selectors and lets users supply up to 20 additional selector names. Results include public key metadata and distinguish missing records from inconclusive DNS lookups.
 - **Mail Transport Security**: Checks `_mta-sts` and `_smtp._tls` DNS records, safely retrieves a published MTA-STS policy file, and reports TLS-RPT destinations. It does not send email.
 - **Subdomain Takeover Fingerprint Checks**: Uses a separate catalog of 10 service patterns (GitHub Pages, S3 and S3 website endpoints, Heroku, Shopify, Zendesk, Ghost, Surge, Vercel, and Azure App Service). Every shipped entry is unverified and has NXDOMAIN confirmation disabled, so both page-text matches and DNS-only evidence are candidates. Only entries explicitly verified in the data file can produce confirmation; even then the scanner does not prove provider-side claimability.
-- **DNSSEC chain validation (RFC 4033–4035, opt-in)**: `ENABLE_DNSSEC_CHAIN_VALIDATION` defaults to off. With it off, the scan uses the legacy DS/DNSKEY comparison; it does not validate signatures or the root chain. With it on, the chain engine's state appears in `chain_status` as secure, insecure, bogus, or inconclusive, while the existing `status` stays legacy-compatible. Chain results are informational and excluded from score, grade, and caps until scoring rules are approved. Unsupported or unavailable data is inconclusive. DS absence is labeled `insecure (denial not validated)` because denial proofs are not validated. NSEC/NSEC3 denial details remain informational.
+- **DNSSEC chain validation (RFC 4033–4035, opt-in)**: `ENABLE_DNSSEC_CHAIN_VALIDATION` defaults to off. With it off, the scan uses the legacy DS/DNSKEY comparison; it does not validate signatures or the root chain. With it on, the chain engine's state appears in `chain_status` while the existing `status` stays legacy-compatible. Chain results are informational and excluded from score, grade, and caps until scoring rules are approved. Unsupported or unavailable data is inconclusive. DS absence is inconclusive because authenticated denial proofs are not yet validated. NSEC/NSEC3 denial details remain informational.
 - **Authoritative DNS posture**: Attempts TCP AXFR against listed nameservers (reports only record counts), probes random labels for wildcard DNS, and directly compares nameserver SOA serials, MNAME/RNAME/timers, and NS answers.
 - **TLS & HTTPS Security Audit**: Certificate validity, negotiated TLS, HTTPS redirection, HSTS, CSP risk notes, Permissions-Policy, cross-origin isolation headers, cookie security flags, and a bounded `/.well-known/security.txt` presence/format/expiry check. An `OPTIONS` request reports advertised methods only; the scanner does not send write-method probes.
-- **Passive Subdomain Inventory**: Queries Certificate Transparency (CT) logs for publicly logged hostnames, resolves discovered names, checks CNAME takeover signatures, labels wildcard-only results, marks risky labels, records available first-seen dates, sorts by risk, and provides CSV export.
+- **Passive Subdomain Inventory**: Queries Certificate Transparency (CT) logs for publicly logged hostnames with up to two budgeted attempts, distinguishes completed searches with no results from provider failures, and reports source, check time, and attempt count. It resolves discovered names, checks CNAME takeover signatures, labels wildcard-only results, marks risky labels, records available first-seen dates, sorts by risk, and provides CSV export.
+- **SPF remediation safety**: A missing SPF record produces a sender-confirmation checklist, not a guessed provider-specific record. DNS MX records do not establish all authorized outbound mail systems; confirm the domain's mail use and senders before publishing an SPF policy.
 - **Optional Common Path Scan**: Checks a bounded set of common web paths and reads same-origin `robots.txt` and sitemap references. It does not crawl directories; discovered paths are labeled for review and are not accessed automatically beyond the bounded checks.
 - **Scan Coverage & Change History**: Shows completed, partial, blocked, and optional checks. The browser can compare DNS, CT, TLS certificate, and optional path results with earlier scans stored locally.
 - **Scoped Network Inventory & Port Verification**: Nmap-style scoped target resolution and safe port auditing with strict SSRF guardrails (blocking RFC 1918 private subnets `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and loopback `127.0.0.0/8`).
@@ -315,6 +324,8 @@ The application is configured via environment variables:
 | `TRUST_REVERSE_PROXY` | `false` | Inspects `X-Forwarded-For` for client rate limiting. **Security Notice**: Only enable this behind an upstream reverse proxy (e.g. Nginx, Cloudflare) that strips or overwrites untrusted incoming `X-Forwarded-For` headers from external clients to prevent identity spoofing. |
 | `TESTING` | `false` | Internal flag used by test harnesses to bypass artificial IP rate limits. |
 
+The app exposes `/health/live` for process liveness and `/health/ready` for required dashboard assets. Responses include browser security headers; the dashboard and generated HTML reports use a same-origin Content Security Policy. DNS Analyzer uses local system fonts so the dashboard does not depend on a third-party font CDN. Its caches and rate limiter are in-process; use a shared store or a single application worker when deploying multiple workers if consistent limits and cache behavior are required.
+
 #### Docker Multi-Stage Testing Note
 The [`Dockerfile`](Dockerfile) uses a multi-stage build where the final production runtime stage depends on the test verification stage (`COPY --from=test`). Building the image automatically executes `pytest -v` inside the container. You can also explicitly run the test stage using:
 ```bash
@@ -338,7 +349,7 @@ docker build --target test -t dns-analyzer-test .
 
 ### Per-scan work limits
 
-The default scan budget is 500 DNS queries and 25 outbound HTTP fetches. The full scan reserves DNS shares of records 60, SPF 70, DKIM 45, DMARC 15, BIMI 5, DNSSEC 70, subdomains 120, takeover 20, TLS 25, mail transport 15, DNS posture 25, network scan 10, and shared helpers 20. HTTP shares are CT 1, takeover 16, TLS 4, mail transport 1, network scan 2, and shared helpers 1. Unused shares are not borrowed, so one module cannot consume another module's allocation. Standalone list/path/port diagnostics use a network-scan profile with the full per-request cap. When a module's share is exhausted, its affected checks are inconclusive.
+The default scan budget is 500 DNS queries and 25 outbound HTTP fetches. The full scan reserves DNS shares of records 60, SPF 70, DKIM 45, DMARC 15, BIMI 5, DNSSEC 70, subdomains 120, takeover 20, TLS 25, mail transport 15, DNS posture 25, network scan 10, and shared helpers 20. HTTP shares are CT 2, takeover 15, TLS 4, mail transport 1, network scan 2, and shared helpers 1. Unused shares are not borrowed, so one module cannot consume another module's allocation. Standalone list/path/port diagnostics use a network-scan profile with the full per-request cap. When a module's share is exhausted, its affected checks are inconclusive.
 
 | RFC | Specification | Diagnostic Scope |
 |:---|:---|:---|

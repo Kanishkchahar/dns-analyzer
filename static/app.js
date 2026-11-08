@@ -74,6 +74,7 @@ let currentScanData = null;
 let currentViewMode = "cards"; // "cards" | "dig"
 let loadingInterval = null;
 let loadingStartedAt = 0;
+let analysisInFlight = false;
 const SCAN_HISTORY_KEY = "dns_analyzer_scan_history_v1";
 
 // ── Recent Searches (localStorage) ───────────────────────────
@@ -81,7 +82,10 @@ const STORAGE_KEY_RECENT = "dns_analyzer_recent";
 
 function getRecentSearches() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY_RECENT) || "[]");
+    const value = JSON.parse(localStorage.getItem(STORAGE_KEY_RECENT) || "[]");
+    return Array.isArray(value)
+      ? value.filter((domain) => typeof domain === "string" && domain.length > 0 && domain.length <= 253).slice(0, 5)
+      : [];
   } catch (_) {
     return [];
   }
@@ -437,6 +441,7 @@ if (downloadZoneBtn) {
 
 // ── Core: run analysis ────────────────────────────────────────
 async function runAnalysis() {
+  if (analysisInFlight) return;
   const raw = domainInput.value.trim();
   if (!raw) {
     showError("Please enter a domain or URL.");
@@ -450,6 +455,7 @@ async function runAnalysis() {
   // Update the input so the user sees what was parsed
   domainInput.value = domain;
 
+  analysisInFlight = true;
   setLoading(true);
   hideError();
   hideResults();
@@ -464,7 +470,12 @@ async function runAnalysis() {
       body: JSON.stringify({ domain, force_refresh: true }),
     });
 
-    data = await res.json();
+    const responseText = await res.text();
+    try {
+      data = JSON.parse(responseText);
+    } catch (_) {
+      throw new Error(`The server returned an unreadable response (HTTP ${res.status}). Please try again.`);
+    }
 
     if (!res.ok) {
       // Backend validation error (400) or server error (500)
@@ -473,11 +484,14 @@ async function runAnalysis() {
       return;
     }
   } catch (err) {
-    showError("Network error — could not reach the server. Is the backend running?");
+    showError(err instanceof TypeError
+      ? "Network error — could not reach the server. Check your connection and try again."
+      : (err.message || "The scan could not be completed. Please try again."));
     console.error("Fetch error:", err);
     return;
   } finally {
     setLoading(false);
+    analysisInFlight = false;
   }
 
   try {
@@ -688,7 +702,11 @@ function renderScanCoverage(coverage) {
 function readScanHistory() {
   try {
     const value = JSON.parse(localStorage.getItem(SCAN_HISTORY_KEY) || "[]");
-    return Array.isArray(value) ? value : [];
+    if (!Array.isArray(value)) return [];
+    return value.filter((item) => item && typeof item === "object"
+      && typeof item.domain === "string" && item.domain.length <= 253
+      && typeof item.timestamp === "string"
+      && item.records && typeof item.records === "object" && !Array.isArray(item.records)).slice(0, 60);
   } catch (_) { return []; }
 }
 
@@ -942,7 +960,7 @@ function renderBentoCockpit(data, previousScore = null) {
       });
       const normalization = document.createElement("p");
       normalization.className = "score-normalization-note";
-      normalization.textContent = `${breakdown.normalization} Based on ${breakdown.included_factor_count} of ${breakdown.total_factor_count} factors.`;
+      normalization.textContent = `${breakdown.inconclusive_policy ? `${breakdown.inconclusive_policy} ` : ""}${breakdown.normalization} Based on ${breakdown.included_factor_count} of ${breakdown.total_factor_count} factors.`;
       breakdownContent.appendChild(normalization);
       (breakdown.excluded_factors || []).forEach(factor => {
         const note = document.createElement("p");
@@ -2098,6 +2116,7 @@ function renderSubdomains(subData) {
   const subSec = document.getElementById("subdomains-section");
   const subList = document.getElementById("subdomains-list");
   const subCountPill = document.getElementById("subdomain-count-pill");
+  const subdomainsMeta = document.getElementById("subdomains-meta");
   const subBadge = document.getElementById("tab-badge-subdomains");
   const exportCsvButton = document.getElementById("export-subdomains-csv-btn");
   if (!subSec || !subList) return;
@@ -2106,6 +2125,13 @@ function renderSubdomains(subData) {
   subList.innerHTML = "";
 
   const inventoryStatus = subData?.status || "unavailable";
+  if (subdomainsMeta) {
+    const state = String(subData?.state || inventoryStatus).replaceAll("_", " ").toLowerCase();
+    const source = subData?.source || "Certificate Transparency provider";
+    const timestamp = subData?.timestamp || "time unavailable";
+    const attempts = Number.isFinite(subData?.attempts) ? ` · ${subData.attempts} request${subData.attempts === 1 ? "" : "s"}` : "";
+    subdomainsMeta.textContent = `Result: ${state} · Source: ${source} · Checked: ${timestamp}${attempts}`;
+  }
   const subs = subData?.subdomains || [];
   if (exportCsvButton) {
     exportCsvButton.disabled = subs.length === 0;
@@ -2262,21 +2288,28 @@ function renderRemediation(fixes, snippet) {
         ${escapeHtml(fix.title)}
         ${fix.is_draft ? '<span class="pill pill-warning" style="font-size:10px; margin-left:6px; letter-spacing:0.04em;">DRAFT</span>' : ""}
       </span>
-      <span style="font-family:'Geist Mono', monospace; font-size:11px; color:var(--text-muted);">TTL ${fix.ttl}s</span>
+      <span style="font-family:'Geist Mono', monospace; font-size:11px; color:var(--text-muted);">${fix.guidance_only ? "No record generated" : `TTL ${fix.ttl}s`}</span>
     `;
     card.appendChild(header);
 
-    const recheckButton = document.createElement("button");
-    recheckButton.type = "button";
-    recheckButton.className = "btn btn-secondary remediation-recheck-btn";
-    recheckButton.textContent = "Re-check after fix";
-    recheckButton.addEventListener("click", () => recheckAfterFix(fix, recheckButton));
-    card.appendChild(recheckButton);
+    if (fix.guidance_only) {
+      const guidance = document.createElement("p");
+      guidance.className = "remediation-guidance";
+      guidance.textContent = fix.guidance || "Review the prerequisites before changing DNS.";
+      card.appendChild(guidance);
+    } else {
+      const recheckButton = document.createElement("button");
+      recheckButton.type = "button";
+      recheckButton.className = "btn btn-secondary remediation-recheck-btn";
+      recheckButton.textContent = "Re-check after fix";
+      recheckButton.addEventListener("click", () => recheckAfterFix(fix, recheckButton));
+      card.appendChild(recheckButton);
 
-    // Copy block with host and value
-    const copyContent = `${fix.value}`;
-    const copyBlock = makeCopyBlock(copyContent);
-    card.appendChild(copyBlock);
+      // Copy block with host and value
+      const copyContent = `${fix.value}`;
+      const copyBlock = makeCopyBlock(copyContent);
+      card.appendChild(copyBlock);
+    }
 
     // Impact Notice Warning
     if (fix.impact_warning) {

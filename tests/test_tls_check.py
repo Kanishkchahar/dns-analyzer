@@ -1,7 +1,18 @@
 """Tests for Native TLS & HTTPS Security Auditor (app/tls_check.py)."""
 
+from datetime import datetime, timezone
+
 import pytest
-from app.tls_check import PinnedIPBackend, PinnedIPTransport, is_safe_ip, match_san_hostname, audit_tls_and_https, resolve_and_verify_all_ips
+from app.tls_check import (
+    PinnedIPBackend,
+    PinnedIPTransport,
+    audit_tls_and_https,
+    is_safe_ip,
+    match_san_hostname,
+    parse_hsts,
+    parse_security_txt,
+    resolve_and_verify_all_ips,
+)
 
 
 class TestTLSUtilities:
@@ -92,6 +103,32 @@ class TestTLSUtilities:
         # Multi-level subdomain should not match standard single wildcard per RFC 6125
         assert match_san_hostname("deep.sub.example.com", san_list) is False
         assert match_san_hostname("other.com", san_list) is False
+        assert match_san_hostname("foobar.example.com", ["foo*.example.com"]) is False
+
+    def test_hsts_requires_a_single_positive_max_age(self):
+        active = parse_hsts(["max-age=31536000; includeSubDomains"])
+        assert active == {
+            "status": "active", "active": True, "max_age": 31536000,
+            "include_subdomains": True,
+        }
+        assert parse_hsts(["max-age=0"]) ["status"] == "disabled"
+        assert parse_hsts(["includeSubDomains"]) ["status"] == "invalid"
+        assert parse_hsts(["max-age=10", "max-age=20"]) ["status"] == "invalid"
+        assert parse_hsts(["max-age=abc"]) ["status"] == "invalid"
+        assert parse_hsts(["max-age=" + "9" * 5000])["status"] == "invalid"
+        assert parse_hsts([])["status"] == "missing"
+
+    def test_security_txt_requires_contact_and_one_valid_future_expiry(self):
+        now = datetime(2026, 11, 8, tzinfo=timezone.utc)
+        valid = b"Contact: mailto:security@example.com\nExpires: 2027-11-08T00:00:00z\n"
+        assert parse_security_txt(valid, now)["status"] == "valid"
+        assert parse_security_txt(b"Contact: mailto:security@example.com\n", now)["status"] == "malformed"
+        assert parse_security_txt(
+            b"Contact: mailto:security@example.com\nExpires: 2026-11-07T00:00:00Z\n", now,
+        )["status"] == "expired"
+        assert parse_security_txt(
+            b"Contact: mailto:security@example.com\nExpires: 2027-11-08T00:00:00Z\nExpires: 2028-11-08T00:00:00Z\n", now,
+        )["status"] == "malformed"
 
 
 @pytest.mark.asyncio

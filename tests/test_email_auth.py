@@ -201,7 +201,7 @@ class TestEmailScore:
         takeover_data = {"vulnerable": False, "status": "safe"}
 
         domain_score = compute_domain_score(records, [], email_score, dnssec_data, takeover_data)
-        assert domain_score["factors"]["dnssec"]["score"] == 20
+        assert domain_score["factors"]["dnssec"]["score"] == 15
         assert domain_score["factors"]["dnssec"]["status"] == "inconclusive"
         assert domain_score["factors"]["dnssec"]["checks_completed"] == 1
 
@@ -260,6 +260,25 @@ class TestEmailScore:
         assert {item["category"] for item in result["score_breakdown"]["excluded_factors"]} >= {"DNSSEC"}
         assert "based on" in result["label"]
         assert "factors" in result["label"]
+
+    def test_partial_factor_uses_documented_neutral_credit_for_inconclusive_checks(self):
+        result = compute_domain_score(
+            {"TXT": {"status": "ok", "records": []}}, [], {"score": 100},
+            {"status": "delegation_match_verified"}, {"status": "safe", "has_cname": False},
+            email_data={"dmarc_status": "complete", "dkim_status": "partial"},
+        )
+
+        email = result["factors"]["email_auth"]
+        assert email["status"] == "inconclusive"
+        assert email["checks_completed"] == 2
+        assert email["checks_total"] == 3
+        assert email["score"] == 20.83
+        assert result["inconclusive_count"] == sum(
+            factor["checks_total"] - factor["checks_completed"]
+            for factor in result["factors"].values()
+            if factor["status"] == "inconclusive"
+        )
+        assert "50% credit" in result["score_breakdown"]["inconclusive_policy"]
 
     def test_provisional_grade_when_excluded_weight_exceeds_thirty_percent(self):
         records = {

@@ -32,7 +32,7 @@ body {
     radial-gradient(ellipse 60% 30% at 85% 15%, rgba(99, 185, 149, 0.04), transparent 60%);
   background-attachment: fixed;
   color: var(--text-secondary);
-  font-family: 'Geist', 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
   font-size: 15px;
   line-height: 1.65;
   min-height: 100vh;
@@ -100,7 +100,7 @@ p, .hero-sub, .modal-sub, .sec-card-desc, .remediation-sub {
 .logo-tagline {
   font-size: 12px;
   color: var(--text-muted);
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-weight: 400;
 }
 .header-actions {
@@ -116,7 +116,7 @@ p, .hero-sub, .modal-sub, .sec-card-desc, .remediation-sub {
   border-radius: var(--radius-sm);
   padding: 5px 10px;
   font-size: 12px;
-  font-family: 'Geist', sans-serif;
+  font-family: Inter, ui-sans-serif, sans-serif;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -134,7 +134,7 @@ p, .hero-sub, .modal-sub, .sec-card-desc, .remediation-sub {
   border-radius: 3px;
   padding: 1px 5px;
   font-size: 10px;
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   color: var(--accent);
 }
 
@@ -190,7 +190,7 @@ main {
   border-radius: var(--radius-sm);
   padding: 2px 7px;
   font-size: 11px;
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   pointer-events: none;
   line-height: 1.2;
 }
@@ -199,7 +199,7 @@ main {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 14px;
   padding: 12px 16px;
   outline: none;
@@ -211,7 +211,7 @@ main {
 }
 .domain-input::placeholder {
   color: var(--text-muted);
-  font-family: 'Geist', sans-serif;
+  font-family: Inter, ui-sans-serif, sans-serif;
 }
 .domain-input.input-error {
   border-color: var(--danger);
@@ -236,7 +236,7 @@ main {
   color: var(--text-secondary);
   border-radius: 100px;
   padding: 4px 12px;
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
   cursor: pointer;
   transition: all 0.15s cubic-bezier(0.2, 0, 0, 1);
@@ -271,7 +271,7 @@ main {
   color: var(--accent);
   border-radius: 100px;
   padding: 3px 10px;
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
   cursor: pointer;
   transition: all 0.15s cubic-bezier(0.2, 0, 0, 1);
@@ -337,7 +337,7 @@ main {
 }
 .loading-elapsed {
   color: var(--text-muted);
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 11px;
   white-space: nowrap;
 }
@@ -495,7 +495,7 @@ main {
   box-shadow: 0 0 0 2px rgba(101, 185, 232, 0.4);
 }
 .badge .count {
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 28px;
   font-weight: 700;
   line-height: 1.1;
@@ -714,7 +714,7 @@ main {
 }
 .bullet-val {
   color: var(--text-primary);
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
 }
 .bullet-val.ok     { color: var(--success); }
@@ -755,7 +755,7 @@ main {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-muted);
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
 
 .bento-nav-link {
@@ -849,7 +849,7 @@ main {
   border: 1px solid var(--hairline);
   border-radius: 100px;
   color: var(--text-primary);
-  font-family: 'Geist', sans-serif;
+  font-family: Inter, ui-sans-serif, sans-serif;
   font-size: 12px;
   padding: 6px 14px 6px 30px;
   width: 210px;
@@ -918,7 +918,7 @@ main {
   min-width: 80px;
 }
 .severity-tag {
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -932,7 +932,7 @@ main {
 .finding-item.info    .severity-tag { background: rgba(101,185,232,0.12); color: var(--accent);  }
 
 .finding-rtype {
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 10px;
   color: var(--text-muted);
   margin-top: 4px;
@@ -944,7 +944,7 @@ main {
   padding-top: 1px;
 }
 .finding-msg code {
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
   background: var(--raised);
   padding: 1px 5px;
@@ -983,7 +983,7 @@ main {
 }
 .records-meta-tag {
   font-size: 11px;
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   color: var(--text-muted);
   background: var(--surface);
   border: 1px solid var(--hairline);
@@ -1017,7 +1017,7 @@ main {
   background: var(--raised);
 }
 .record-type-label {
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
   font-weight: 700;
   color: var(--text-primary);
@@ -1036,7 +1036,7 @@ main {
 .status-info  { background: rgba(101,185,232,0.10); color: var(--text-muted); }
 
 .record-ttl {
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 10px;
   color: var(--text-muted);
 }
@@ -1056,7 +1056,7 @@ main {
 }
 .record-row:last-child { border-bottom: none; }
 .record-value {
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12.5px;
   color: var(--text-primary);
   word-break: break-all;
@@ -1065,7 +1065,7 @@ main {
   line-height: 1.55;
 }
 .record-label {
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 11px;
   color: var(--text-muted);
   white-space: nowrap;
@@ -1085,7 +1085,7 @@ main {
 
 .record-provider-pill {
   font-size: 10px;
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-weight: 600;
   padding: 1px 7px;
   border-radius: 4px;
@@ -1109,7 +1109,7 @@ main {
 }
 .record-category-pill {
   font-size: 10px;
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-weight: 600;
   padding: 1px 7px;
   border-radius: 4px;
@@ -1163,7 +1163,7 @@ main {
   flex-wrap: wrap;
 }
 .download-bar p { font-size: 14px; color: var(--text-muted); }
-.download-bar p span { color: var(--text-primary); font-family: 'Geist Mono', monospace; }
+.download-bar p span { color: var(--text-primary); font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; }
 
 /* ── Segmented Navigation (Tabs) ── */
 .segment-nav {
@@ -1227,7 +1227,7 @@ main {
 }
 
 .tab-badge {
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
   font-weight: 700;
   padding: 1px 6px;
@@ -1317,7 +1317,7 @@ main {
 .snapshot-pill {
   font-size: 11px;
   font-weight: 700;
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   padding: 2px 8px;
   border-radius: 100px;
   background: var(--raised);
@@ -1474,13 +1474,13 @@ main {
   font-size: 30px;
   font-weight: 700;
   color: var(--text-primary);
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   line-height: 1;
 }
 .score-grade-num {
   font-size: 12px;
   color: var(--text-muted);
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
 .score-info h3 {
   color: var(--text-primary);
@@ -1515,7 +1515,7 @@ main {
 }
 .custom-dkim-tool label { display: block; margin-bottom: 8px; color: var(--text-primary); font-size: 12px; font-weight: 600; }
 .custom-dkim-tool > div { display: flex; gap: 8px; flex-wrap: wrap; }
-.custom-dkim-tool input { flex: 1 1 260px; min-width: 0; height: 38px; padding: 8px 10px; color: var(--text-primary); background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--radius-sm); font: 12px 'Geist Mono', monospace; }
+.custom-dkim-tool input { flex: 1 1 260px; min-width: 0; height: 38px; padding: 8px 10px; color: var(--text-primary); background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--radius-sm); font: 12px ui-monospace, 'SFMono-Regular', Menlo, monospace; }
 .custom-dkim-tool p { margin-top: 8px; color: var(--text-muted); font-size: 11px; }
 .mail-transport-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .auth-helper-copy { margin-top: 10px; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
@@ -1546,7 +1546,7 @@ main {
 }
 .auth-card-val {
   color: var(--text-primary);
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
   display: flex;
   align-items: center;
@@ -1557,7 +1557,7 @@ main {
   border: 1px solid var(--hairline);
   border-radius: 6px;
   padding: 14px 16px;
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
   color: var(--accent);
   word-break: break-all;
@@ -1581,7 +1581,7 @@ main {
   border: 1px solid var(--hairline);
   color: var(--text-muted);
   border-radius: var(--radius-sm);
-  font-family: 'Geist', sans-serif;
+  font-family: Inter, ui-sans-serif, sans-serif;
   font-size: 11px;
   font-weight: 600;
   padding: 4px 9px;
@@ -1640,7 +1640,7 @@ main {
   justify-content: space-between;
   font-size: 11px;
   color: var(--text-muted);
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
 
 /* ── Toast Notification ── */
@@ -1831,6 +1831,16 @@ main {
   align-items: center;
   gap: 8px;
 }
+.remediation-guidance {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin: 8px 0 12px;
+}
+.subdomains-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-top: 3px;
+}
 .fix-provider-guides {
   margin-top: 10px;
   padding-top: 10px;
@@ -1847,7 +1857,7 @@ main {
 .fix-provider-item {
   font-size: 12px;
   color: var(--text-secondary);
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   margin: 3px 0;
 }
 
@@ -1969,7 +1979,7 @@ dialog.modal::backdrop {
   border: 1px solid var(--hairline);
   border-radius: 4px;
   padding: 2px 8px;
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
   color: var(--accent);
   min-width: 24px;
@@ -1998,7 +2008,7 @@ dialog.modal::backdrop {
   border: 1px solid var(--hairline);
   color: var(--text-muted);
   font-size: 10px;
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   cursor: help;
   position: relative;
   margin-left: 6px;
@@ -2134,7 +2144,7 @@ dialog.modal::backdrop {
 .terminal-dots .dot.yellow { background: #E0A458; }
 .terminal-dots .dot.green { background: #63B995; }
 .terminal-title {
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
   color: var(--text-muted);
   flex: 1;
@@ -2165,7 +2175,7 @@ dialog.modal::backdrop {
 }
 .dig-terminal-body {
   padding: 18px 22px;
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12.5px;
   line-height: 1.7;
   color: #a3e635; /* Terminal phosphor green */
@@ -2317,10 +2327,10 @@ dialog.modal::backdrop {
 .path-scan-error { color: var(--danger); }
 .path-advertised-section { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--hairline); }
 .path-advertised-section h3 { display: flex; align-items: center; gap: 8px; color: var(--text-primary); font-size: 12px; margin-bottom: 10px; }
-.path-advertised-section h3 span { color: var(--text-muted); font: 11px 'Geist Mono', monospace; }
+.path-advertised-section h3 span { color: var(--text-muted); font: 11px ui-monospace, 'SFMono-Regular', Menlo, monospace; }
 .path-advertised-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 6px 18px; }
 .path-advertised-list > div { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
-.path-advertised-list code { color: var(--accent); font: 11px 'Geist Mono', monospace; overflow-wrap: anywhere; }
+.path-advertised-list code { color: var(--accent); font: 11px ui-monospace, 'SFMono-Regular', Menlo, monospace; overflow-wrap: anywhere; }
 .path-advertised-list span { color: var(--text-muted); font-size: 10px; text-align: right; flex: 0 0 auto; }
 .path-advertised-list strong { color: var(--warning); font-weight: 600; }
 .subdomain-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
@@ -2330,7 +2340,7 @@ dialog.modal::backdrop {
 .overview-detail-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 14px; }
 .overview-detail-header h2 { color: var(--text-primary); font-size: 15px; line-height: 1.35; }
 .overview-detail-header p { margin-top: 4px; color: var(--text-muted); font-size: 11px; }
-.coverage-count { flex: 0 0 auto; color: var(--accent); font: 11px 'Geist Mono', monospace; }
+.coverage-count { flex: 0 0 auto; color: var(--accent); font: 11px ui-monospace, 'SFMono-Regular', Menlo, monospace; }
 .scan-coverage-list { display: grid; gap: 2px; }
 .scan-coverage-item { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px 0; border-top: 1px solid rgba(255,255,255,.04); }
 .coverage-indicator { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
@@ -2348,7 +2358,7 @@ dialog.modal::backdrop {
 .path-name,
 .path-results-table td code {
   color: var(--text-primary);
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
 }
 .path-state { color: var(--text-secondary); font-size: 12px; }
@@ -2358,14 +2368,14 @@ dialog.modal::backdrop {
 .security-header-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin-top: 14px; }
 .security-header-details > div { display: grid; gap: 3px; padding: 8px 10px; background: var(--raised); border-radius: var(--radius-sm); min-width: 0; }
 .security-header-details span { color: var(--text-muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
-.security-header-details strong { color: var(--text-secondary); font: 11px 'Geist Mono', monospace; overflow-wrap: anywhere; }
+.security-header-details strong { color: var(--text-secondary); font: 11px ui-monospace, 'SFMono-Regular', Menlo, monospace; overflow-wrap: anywhere; }
 .security-risk-note, .security-ok-note { margin-top: 10px; padding: 9px 11px; border-radius: var(--radius-sm); font-size: 11px; line-height: 1.5; }
 .security-risk-note { color: var(--warning); background: rgba(224,164,88,.08); }
 .security-ok-note { color: var(--success); background: rgba(99,185,149,.07); }
 .cookie-audit-summary { display: grid; gap: 6px; margin-top: 12px; color: var(--text-muted); font-size: 11px; }
 .cookie-audit-summary > strong { color: var(--text-primary); font-size: 12px; }
 .cookie-audit-summary > div { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 5px 8px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
-.cookie-audit-summary code { color: var(--accent); font: 11px 'Geist Mono', monospace; }
+.cookie-audit-summary code { color: var(--accent); font: 11px ui-monospace, 'SFMono-Regular', Menlo, monospace; }
 .scope-textarea {
   width: 100%;
   box-sizing: border-box;
@@ -2374,7 +2384,7 @@ dialog.modal::backdrop {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
   padding: 12px 14px;
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 13px;
   line-height: 1.6;
   resize: vertical;
@@ -2508,7 +2518,7 @@ dialog.modal::backdrop {
   gap: 8px;
 }
 .audit-card-target {
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   color: var(--accent);
   font-weight: 600;
 }
@@ -2532,7 +2542,7 @@ dialog.modal::backdrop {
 }
 .audit-stat-chip strong {
   color: var(--text-primary);
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
 .audit-stat-chip strong.color-good { color: var(--success); }
 .audit-stat-chip strong.color-danger { color: var(--danger); }
@@ -2599,7 +2609,7 @@ dialog.modal::backdrop {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   padding: 3px 8px;
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-primary);
@@ -2629,7 +2639,7 @@ dialog.modal::backdrop {
   background: var(--text-muted);
 }
 .banner-evidence-cell {
-  font-family: 'Geist Mono', monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
   color: var(--text-secondary);
   max-width: 420px;
@@ -2732,7 +2742,7 @@ dialog.modal::backdrop {
 .dns-authority-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .dns-authority-grid .auth-card { min-width: 0; }
 @media (max-width: 900px) { .dns-authority-grid { grid-template-columns: 1fr; } }
-.finding-code { color: var(--accent); font: 10px 'Geist Mono', monospace; opacity: .9; }
+.finding-code { color: var(--accent); font: 10px ui-monospace, 'SFMono-Regular', Menlo, monospace; opacity: .9; }
 .finding-guidance { margin-top: 8px; color: var(--text-secondary); font-size: 12px; }
 .finding-guidance summary { color: var(--accent); cursor: pointer; font-size: 11px; font-weight: 600; }
 .finding-guidance p { margin-top: 6px; }

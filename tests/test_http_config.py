@@ -34,13 +34,16 @@ def test_every_application_async_http_client_sets_scanner_user_agent():
 
 
 def test_startup_warns_when_documentation_url_is_placeholder(monkeypatch, caplog):
-    from app.http_config import warn_if_placeholder_documentation_url
     from app.main import app
 
     monkeypatch.delenv("DNS_ANALYZER_DOCUMENTATION_URL", raising=False)
     monkeypatch.setattr("app.http_config.logger", logging.getLogger("app.http_config"))
     with caplog.at_level(logging.WARNING, logger="app.http_config"):
-        startup = next(handler for handler in app.router.on_startup if handler.__name__ == "warn_about_placeholder_documentation_url")
         import asyncio
-        asyncio.run(startup())
+
+        async def start_and_shutdown():
+            async with app.router.lifespan_context(app):
+                pass
+
+        asyncio.run(start_and_shutdown())
     assert "default placeholder" in caplog.text

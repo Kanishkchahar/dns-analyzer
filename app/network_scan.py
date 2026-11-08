@@ -15,6 +15,8 @@ from urllib.parse import urljoin, urlparse
 import defusedxml.ElementTree as ET
 from defusedxml.common import DefusedXmlException
 import dns.asyncresolver
+import dns.exception
+import dns.resolver
 import httpx
 
 from app.models import Finding
@@ -197,49 +199,84 @@ async def run_list_scan(
         }
 
         # Validate input length and basic characters
-        if len(target) > 253 or not TARGET_SYNTAX_REGEX.match(target):
+        if len(target) > 253 or not TARGET_SYNTAX_REGEX.fullmatch(target):
             target_info["reasons"].append("Invalid target syntax or length exceeds 253 characters.")
+            target_info["status"] = "invalid"
             return target_info
 
         # Check if target is already an IP
-        is_ip_direct, reason = is_safe_ip(target)
+        ip_candidate = target[1:-1] if target.startswith("[") and target.endswith("]") else target
+        is_ip_direct, reason = is_safe_ip(ip_candidate)
         if is_ip_direct:
-            target_info["resolved_ips"].append({"ip": target, "safe": True, "reason": "Public IP"})
+            target_info["resolved_ips"].append({"ip": ip_candidate, "safe": True, "reason": "Public IP"})
             target_info["in_scope_safe"] = True
+            target_info["status"] = "in_scope"
             return target_info
         elif "Invalid IP" not in reason:
             # It was an IP, but unsafe
-            target_info["resolved_ips"].append({"ip": target, "safe": False, "reason": reason})
+            target_info["resolved_ips"].append({"ip": ip_candidate, "safe": False, "reason": reason})
             target_info["reasons"].append(reason)
+            target_info["status"] = "blocked"
+            return target_info
+
+        # Reject malformed DNS names before spending resolver budget. A trailing
+        # dot is allowed because it denotes an absolute DNS name.
+        hostname = target.rstrip(".")
+        labels = hostname.split(".")
+        if (
+            not hostname
+            or any(not label or len(label) > 63 or label.startswith("-") or label.endswith("-") for label in labels)
+            or any(not re.fullmatch(r"[A-Za-z0-9-]+", label) for label in labels)
+        ):
+            target_info["reasons"].append("Invalid DNS hostname label syntax.")
+            target_info["status"] = "invalid"
             return target_info
 
         # Resolve A and AAAA records with bounded concurrency and timeout
         async with list_semaphore:
-            try:
-                async def query(rdtype: str) -> list[str]:
-                    try:
-                        answer = await asyncio.wait_for(resolver.resolve(target, rdtype), timeout=2.5)
-                        return [str(record.address) for record in answer if hasattr(record, "address")]
-                    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
-                        return []
-                all_ips = list(dict.fromkeys([ip for kind in ("A", "AAAA") for ip in await query(kind)]))
-                safe_count = 0
-                for ip in all_ips:
-                    safe, r = is_safe_ip(ip)
-                    target_info["resolved_ips"].append({"ip": ip, "safe": safe, "reason": r})
-                    if safe:
-                        safe_count += 1
-                    else:
-                        target_info["reasons"].append(r)
-                target_info["in_scope_safe"] = safe_count > 0 and len(target_info["reasons"]) == 0
-            except asyncio.TimeoutError:
-                target_info["reasons"].append("Resolution timed out after 2.5 seconds.")
-            except ScanBudgetExhausted:
+            async def query(rdtype: str) -> tuple[list[str], str]:
+                try:
+                    answer = await asyncio.wait_for(resolver.resolve(target, rdtype), timeout=2.5)
+                    records = [str(record.address) for record in answer if hasattr(record, "address")]
+                    return records, "resolved" if records else "no_answer"
+                except dns.resolver.NXDOMAIN:
+                    return [], "nxdomain"
+                except dns.resolver.NoAnswer:
+                    return [], "no_answer"
+                except ScanBudgetExhausted:
+                    return [], "budget_exhausted"
+                except (asyncio.TimeoutError, dns.exception.Timeout):
+                    return [], "timeout"
+                except Exception:
+                    return [], "error"
+
+            query_results = await asyncio.gather(query("A"), query("AAAA"))
+            target_info["dns_status"] = {kind: state for kind, (_addresses, state) in zip(("A", "AAAA"), query_results)}
+            all_ips = list(dict.fromkeys(ip for addresses, _state in query_results for ip in addresses))
+            unresolved = any(state in ("budget_exhausted", "timeout", "error") for _addresses, state in query_results)
+            unsafe = False
+            for ip in all_ips:
+                safe, ip_reason = is_safe_ip(ip)
+                target_info["resolved_ips"].append({"ip": ip, "safe": safe, "reason": ip_reason})
+                if not safe:
+                    unsafe = True
+                    target_info["reasons"].append(ip_reason)
+
+            if unsafe:
+                target_info["status"] = "blocked"
+            elif unresolved:
                 target_info["status"] = "inconclusive"
-                target_info["reasons"].append("DNS query budget exhausted; target resolution is inconclusive.")
-            except Exception:
-                target_info["status"] = "inconclusive"
-                target_info["reasons"].append("Target resolution failed; result is inconclusive.")
+                states = set(target_info["dns_status"].values())
+                if "budget_exhausted" in states:
+                    target_info["reasons"].append("DNS query work budget exhausted for one or more address-family lookups.")
+                else:
+                    target_info["reasons"].append("One or more address-family lookups were inconclusive.")
+            elif not all_ips:
+                target_info["status"] = "unresolved"
+                target_info["reasons"].append("No A or AAAA addresses were returned.")
+            else:
+                target_info["status"] = "in_scope"
+                target_info["in_scope_safe"] = True
 
         return target_info
 
@@ -251,6 +288,8 @@ async def run_list_scan(
         "scan_mode": "List Scan (No port probes)",
         "total_targets": len(clean_targets),
         "in_scope_count": total_safe,
+        "inconclusive_count": sum(1 for item in results if item.get("status") == "inconclusive"),
+        "unresolved_count": sum(1 for item in results if item.get("status") == "unresolved"),
         "targets": results,
     }
 

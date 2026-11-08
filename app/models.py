@@ -121,6 +121,8 @@ class RemediationFix(BaseModel):
     record_type: str
     host: str
     value: str
+    guidance: str | None = None
+    guidance_only: bool = False
     ttl: int = 3600
     provider_guides: dict[str, str] = Field(default_factory=dict)
     provider_commands: dict[str, str] = Field(default_factory=dict)

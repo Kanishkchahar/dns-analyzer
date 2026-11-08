@@ -142,6 +142,8 @@ Each row is a condition rule used to assign a finding code. Legacy alias is the 
 | HTTPS | `hsts is active` | `WEB-HSTS-001` | `WEB-001` |
 | HTTPS | `content-security-policy (csp) header is not published` | `WEB-CSP-002` | `WEB-001` |
 | HTTPS | `hsts header is missing` | `WEB-HSTS-002` | `WEB-001` |
+| HTTPS | `hsts header is present but max-age is zero` | `WEB-HSTS-003` | `WEB-001` |
+| HTTPS | `hsts header has a missing, invalid, or duplicate max-age directive` | `WEB-HSTS-004` | `WEB-001` |
 | DMARC | `no dmarc policy` | `MAIL-DMARC-001` | `MAIL-003` |
 | DMARC | `policy is set to 'none'` | `MAIL-DMARC-002` | `MAIL-003` |
 | DMARC | `no aggregate report address (rua)` | `MAIL-DMARC-003` | `MAIL-003` |

@@ -189,6 +189,30 @@ class TestAPIEndpoints:
             assert resp.status_code == 200
             assert "text/html" in resp.headers["content-type"]
             assert "DNS Analyzer" in resp.text
+            assert resp.headers["x-content-type-options"] == "nosniff"
+            assert resp.headers["x-frame-options"] == "DENY"
+            assert "default-src 'self'" in resp.headers["content-security-policy"]
+
+    async def test_health_probes_report_live_and_ready(self):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            live = await client.get("/health/live")
+            ready = await client.get("/health/ready")
+        assert live.status_code == 200
+        assert live.json() == {"status": "alive"}
+        assert ready.status_code == 200
+        assert ready.json() == {"status": "ready"}
+
+    async def test_readiness_probe_fails_when_required_frontend_asset_is_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("app.main.STATIC_DIR", tmp_path)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/health/ready")
+        assert response.status_code == 503
+        assert response.json() == {
+            "status": "not_ready",
+            "missing_assets": ["index.html", "app.js", "style.css"],
+        }
 
     async def test_grade_badge_requires_a_recent_scan_and_serves_svg_after_scan(self):
         from app.main import _SCAN_CACHE, _SCAN_CACHE_TTL, _store_cached_scan, run_full_scan
@@ -233,6 +257,7 @@ class TestAPIEndpoints:
         assert "remediation" in data
         assert "bind_zone_snippet" in data
         assert "domain_score" in data
+        assert data["summary"]["inconclusive"] == data["domain_score"]["inconclusive_count"]
         assert data["domain_score"]["grade"].split(" ", 1)[0] in ("A+", "A", "B")
         assert data["domain_score"]["scope"].startswith("DNS, email authentication")
         assert "score_breakdown" in data

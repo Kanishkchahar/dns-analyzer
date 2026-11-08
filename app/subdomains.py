@@ -20,6 +20,41 @@ from app.work_budget import ScanBudgetExhausted, ScanWorkBudget
 from app.http_config import outbound_http_headers
 
 logger = logging.getLogger(__name__)
+CT_MAX_ATTEMPTS = 2
+CT_RETRY_DELAY_SECONDS = 0.1
+CT_MAX_RESPONSE_BYTES = 512 * 1024
+
+
+async def _fetch_ct_response(url: str, timeout: float, budget: ScanWorkBudget) -> tuple[int, str, bool, int]:
+    """Fetch a bounded CT response with a small retry limit and budget accounting."""
+    last_status = 0
+    last_error: Exception | None = None
+    for attempt in range(1, CT_MAX_ATTEMPTS + 1):
+        if not await budget.reserve_http("ct"):
+            error = ScanBudgetExhausted("outbound request budget exhausted")
+            error.attempts = attempt - 1
+            raise error
+        try:
+            async with httpx.AsyncClient(timeout=timeout, verify=True, headers=outbound_http_headers()) as client:
+                async with client.stream("GET", url) as response:
+                    last_status = response.status_code
+                    if response.status_code == 200:
+                        chunks = []
+                        bytes_read = 0
+                        async for chunk in response.aiter_bytes():
+                            remaining = CT_MAX_RESPONSE_BYTES - bytes_read
+                            chunks.append(chunk[:remaining])
+                            bytes_read += min(len(chunk), remaining)
+                            if bytes_read >= CT_MAX_RESPONSE_BYTES:
+                                return response.status_code, b"".join(chunks).decode("utf-8", errors="replace"), True, attempt
+                        return response.status_code, b"".join(chunks).decode("utf-8", errors="replace"), False, attempt
+        except Exception as exc:
+            last_error = exc
+        if attempt < CT_MAX_ATTEMPTS:
+            await asyncio.sleep(CT_RETRY_DELAY_SECONDS * attempt)
+    if last_error is not None:
+        raise last_error
+    return last_status, "", False, CT_MAX_ATTEMPTS
 
 
 async def discover_passive_subdomains(
@@ -37,91 +72,96 @@ async def discover_passive_subdomains(
         "domain": norm_domain,
         "source": "Certificate Transparency (crt.sh)",
         "status": "complete",
+        "state": "SOURCE_UNAVAILABLE",
         "discovered_count": 0,
         "subdomains": [],
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "attempts": 0,
     }
 
     discovered_names: dict[str, str | None] = {}
     budget = work_budget or ScanWorkBudget()
 
     try:
-        if not await budget.reserve_http("ct"):
-            raise ScanBudgetExhausted("outbound request budget exhausted")
         url = f"https://crt.sh/?q=%25.{norm_domain}&output=json"
-        async with httpx.AsyncClient(timeout=timeout, verify=True, headers=outbound_http_headers()) as client:
-            async with client.stream("GET", url) as resp:
-                if resp.status_code == 200:
-                    chunks = []
-                    bytes_read = 0
-                    max_bytes = 512 * 1024  # Cap response body to 512 KB
-                    async for chunk in resp.aiter_bytes():
-                        bytes_read += len(chunk)
-                        chunks.append(chunk)
-                        if bytes_read >= max_bytes:
-                            break
-                    raw_text = b"".join(chunks).decode("utf-8", errors="replace")
-                    raw_json: list[dict[str, Any]] | None = None
-                    is_truncated = bytes_read >= max_bytes
+        status_code, raw_text, is_truncated, attempts = await _fetch_ct_response(url, timeout, budget)
+        result["attempts"] = attempts
+        if status_code == 200:
+            raw_json: list[dict[str, Any]] | None = None
+            try:
+                raw_json = json.loads(raw_text)
+            except json.JSONDecodeError:
+                # If stream was cut at 512 KB, repair array at last complete JSON object
+                last_brace = raw_text.rfind("}")
+                if last_brace != -1:
                     try:
-                        raw_json = json.loads(raw_text)
-                    except json.JSONDecodeError:
-                        # If stream was cut at 512 KB, repair array at last complete JSON object
-                        last_brace = raw_text.rfind("}")
-                        if last_brace != -1:
-                            try:
-                                repaired_text = raw_text[:last_brace + 1] + "]"
-                                raw_json = json.loads(repaired_text)
-                                is_truncated = True
-                            except Exception:
-                                raw_json = None
+                        repaired_text = raw_text[:last_brace + 1] + "]"
+                        raw_json = json.loads(repaired_text)
+                        is_truncated = True
+                    except Exception:
+                        raw_json = None
 
-                    if raw_json is not None and isinstance(raw_json, list):
-                        for item in raw_json:
-                            if isinstance(item, dict):
-                                name_val = item.get("name_value", "")
-                                first_seen = str(item.get("entry_timestamp") or item.get("not_before") or "") or None
-                                for line in name_val.splitlines():
-                                    clean_name = line.strip().lower().lstrip("*.")
-                                    if clean_name.endswith(f".{norm_domain}") and clean_name != norm_domain:
-                                        prior = discovered_names.get(clean_name)
-                                        if clean_name not in discovered_names or (first_seen and (not prior or first_seen < prior)):
-                                            discovered_names[clean_name] = first_seen
-                        if is_truncated:
-                            result["status"] = "partial"
-                            result["incomplete"] = True
-                            findings.append(Finding(
-                                severity="info",
-                                record_type="Inventory",
-                            message=f"Certificate Transparency log stream reached {max_bytes // 1024} KB limit. Partial inventory returned ({len(discovered_names)} subdomains discovered).",
-                            ))
-                    elif is_truncated:
-                        result["status"] = "unavailable"
-                        result["reason"] = "Certificate Transparency response was truncated before valid JSON could be recovered."
-                        result["incomplete"] = True
-                        findings.append(Finding(
-                            severity="info",
-                            record_type="Inventory",
-                            message=f"Certificate Transparency log response exceeded {max_bytes // 1024} KB limit and could not be parsed; inventory incomplete.",
-                        ))
-                    else:
-                        result["status"] = "unavailable"
-                        result["reason"] = "Certificate Transparency service returned an invalid response."
-                        findings.append(Finding(
-                            severity="info",
-                            record_type="Inventory",
-                            message="Certificate Transparency results could not be parsed; subdomain inventory is unavailable.",
-                        ))
-                else:
-                    result["status"] = "unavailable"
-                    result["reason"] = f"Certificate Transparency service returned HTTP {resp.status_code}."
+            valid_rows = (
+                isinstance(raw_json, list)
+                and (not raw_json or all(
+                    isinstance(item, dict) and isinstance(item.get("name_value"), str)
+                    for item in raw_json
+                ))
+            )
+            if valid_rows:
+                for item in raw_json:
+                    if isinstance(item, dict):
+                        name_val = item.get("name_value", "")
+                        first_seen = str(item.get("entry_timestamp") or item.get("not_before") or "") or None
+                        for line in name_val.splitlines():
+                            clean_name = line.strip().lower().lstrip("*.")
+                            if clean_name.endswith(f".{norm_domain}") and clean_name != norm_domain:
+                                prior = discovered_names.get(clean_name)
+                                if clean_name not in discovered_names or (first_seen and (not prior or first_seen < prior)):
+                                    discovered_names[clean_name] = first_seen
+                if is_truncated:
+                    result["status"] = "partial"
+                    result["state"] = "PARTIAL_RESULTS"
+                    result["incomplete"] = True
                     findings.append(Finding(
                         severity="info",
                         record_type="Inventory",
-                        message=f"Certificate Transparency lookup returned HTTP {resp.status_code}; no subdomain inventory was produced.",
+                        message=f"Certificate Transparency log stream reached {CT_MAX_RESPONSE_BYTES // 1024} KB limit. Partial inventory returned ({len(discovered_names)} subdomains discovered).",
                     ))
+                else:
+                    result["state"] = "DISCOVERY_COMPLETED" if discovered_names else "NO_RESULTS"
+            elif is_truncated:
+                result["status"] = "unavailable"
+                result["state"] = "SOURCE_UNAVAILABLE"
+                result["reason"] = "Certificate Transparency response was truncated before valid JSON could be recovered."
+                result["incomplete"] = True
+                findings.append(Finding(
+                    severity="info",
+                    record_type="Inventory",
+                    message=f"Certificate Transparency log response exceeded {CT_MAX_RESPONSE_BYTES // 1024} KB limit and could not be parsed; inventory incomplete.",
+                ))
+            else:
+                result["status"] = "unavailable"
+                result["state"] = "SOURCE_UNAVAILABLE"
+                result["reason"] = "Certificate Transparency service returned an invalid response."
+                findings.append(Finding(
+                    severity="info",
+                    record_type="Inventory",
+                    message="Certificate Transparency results could not be parsed; subdomain inventory is unavailable.",
+                ))
+        else:
+            result["status"] = "unavailable"
+            result["state"] = "SOURCE_UNAVAILABLE"
+            result["reason"] = f"Certificate Transparency service returned HTTP {status_code}."
+            findings.append(Finding(
+                severity="info",
+                record_type="Inventory",
+                message=f"Certificate Transparency lookup returned HTTP {status_code}; no subdomain inventory was produced.",
+            ))
     except Exception as exc:
         result["status"] = "inconclusive" if isinstance(exc, ScanBudgetExhausted) else "unavailable"
+        result["state"] = "SOURCE_UNAVAILABLE" if isinstance(exc, ScanBudgetExhausted) else "TIMEOUT" if isinstance(exc, (httpx.TimeoutException, TimeoutError)) else "SOURCE_UNAVAILABLE"
+        result["attempts"] = getattr(exc, "attempts", CT_MAX_ATTEMPTS)
         logger.warning("Certificate Transparency lookup failed (%s)", type(exc).__name__)
         result["reason"] = "Certificate Transparency lookup failed"
         findings.append(Finding(
@@ -137,6 +177,7 @@ async def discover_passive_subdomains(
     result["discovered_count"] = len(sorted_hosts)
     if discovered_total > max_hosts and result["status"] == "complete":
         result["status"] = "partial"
+        result["state"] = "PARTIAL_RESULTS"
         result["incomplete"] = True
         findings.append(Finding(
             severity="info",
@@ -176,6 +217,7 @@ async def discover_passive_subdomains(
                 )
             return {
                 "subdomain": sub,
+                "source": "crt.sh",
                 "ips": ips,
                 "cname": cname_target,
                 "cnames": cnames,
@@ -199,6 +241,7 @@ async def discover_passive_subdomains(
     if unresolved_count:
         if result["status"] == "complete":
             result["status"] = "partial"
+        result["state"] = "PARTIAL_RESULTS"
         result["incomplete"] = True
         findings.append(Finding(
             severity="info",

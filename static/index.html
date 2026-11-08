@@ -7,14 +7,6 @@
   <meta name="description" content="Analyze DNS records and detect misconfigurations for any domain." />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 22 22'><circle cx='11' cy='11' r='10' stroke='%2365B9E8' stroke-width='1.5' fill='none'/><path d='M11 1C11 1 7 6 7 11s4 10 4 10' stroke='%2365B9E8' stroke-width='1.5' stroke-linecap='round' fill='none'/><path d='M11 1C11 1 15 6 15 11s-4 10-4 10' stroke='%2365B9E8' stroke-width='1.5' stroke-linecap='round' fill='none'/><path d='M1.5 11h19' stroke='%2365B9E8' stroke-width='1.5' stroke-linecap='round'/></svg>" />
 
-  <!-- Geist font from Vercel CDN -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link
-    href="https://fonts.googleapis.com/css2?family=Geist:wght@400;600;700&family=Geist+Mono:wght@400;600;700&display=swap"
-    rel="stylesheet"
-  />
-
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
@@ -401,6 +393,7 @@
             <div>
               <h2 class="section-title" style="margin-bottom:4px;">🌐 Passive Subdomain Footprint</h2>
               <p class="remediation-sub">Discovered via public Certificate Transparency (CT) logs. Zero packets transmitted to target hosts.</p>
+              <p class="subdomains-meta" id="subdomains-meta"></p>
             </div>
             <div class="subdomain-actions">
               <span class="pill pill-info" id="subdomain-count-pill" style="font-size:12px;">0 Hosts</span>
@@ -428,7 +421,7 @@
             <div class="scope-box-header">
               <label for="list-scan-input" class="scope-label">
                 <span>Approved Target Scope</span>
-                <span class="scope-hint">Up to 5 hostnames or public IPs, separated by commas or newlines</span>
+                <span class="scope-hint">DNS-only list scan: up to 50 targets. Common web-path scan: up to 5 targets. Separate with commas or newlines.</span>
               </label>
             </div>
             <textarea id="list-scan-input" class="scope-textarea" rows="3" placeholder="example.com&#10;www.example.com&#10;93.184.216.34" aria-describedby="scope-safety-note"></textarea>

@@ -17,7 +17,7 @@ DNS_MODULE_SHARES = {
     "mail_transport": 15, "dns_posture": 25, "network_scan": 10, "shared": 20,
 }
 HTTP_MODULE_SHARES = {
-    "ct": 1, "takeover": 16, "tls": 4, "mail_transport": 1,
+    "ct": 2, "takeover": 15, "tls": 4, "mail_transport": 1,
     "network_scan": 2, "shared": 1,
 }
 

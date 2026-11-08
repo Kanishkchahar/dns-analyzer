@@ -383,7 +383,8 @@ _TEMPLATE = """<!DOCTYPE html>
   {% if subdomains %}
   <h2>🌐 Passive Subdomain Inventory</h2>
   <div class="auth-card">
-    <div class="auth-card-title"><span class="pill {% if subdomains.status == 'complete' %}pill-ok{% else %}pill-warn{% endif %}">{{ subdomains.status|default('unknown') }}</span>Certificate Transparency Results</div>
+    <div class="auth-card-title"><span class="pill {% if subdomains.state == 'DISCOVERY_COMPLETED' %}pill-ok{% elif subdomains.state == 'NO_RESULTS' %}pill-info{% else %}pill-warn{% endif %}">{{ (subdomains.state or subdomains.status or 'unknown')|replace('_', ' ')|lower }}</span>Certificate Transparency Results</div>
+    <p style="color:var(--text-muted);font-size:12px;margin-bottom:8px;">Source: {{ subdomains.source|default('not reported') }} · Checked: {{ subdomains.timestamp|default('time not reported') }}{% if subdomains.attempts is defined %} · Requests: {{ subdomains.attempts }}{% endif %}</p>
     {% if subdomains.reason %}<p style="color:var(--text-muted);font-size:13px;margin-bottom:8px;">{{ subdomains.reason }}</p>{% endif %}
     <div class="auth-card-row"><span class="auth-card-key">Discovered</span><span class="auth-card-val">{{ subdomains.discovered_count|default(0) }}{% if subdomains.discovered_total and subdomains.discovered_total != subdomains.discovered_count %} of {{ subdomains.discovered_total }}{% endif %}</span></div>
     {% if subdomains.subdomains %}

@@ -1,6 +1,7 @@
 """Tests for Scoped Network Inventory & Port Service Verification (app/network_scan.py)."""
 
 import pytest
+import dns.exception
 from app.network_scan import (
     COMMON_WEB_PATHS,
     _parse_robots,
@@ -83,6 +84,44 @@ class TestNetworkScan:
         result = await run_list_scan(["example.com"], resolver=BudgetedResolver(object(), budget), work_budget=budget)
         assert result["targets"][0]["status"] == "inconclusive"
         assert any("budget exhausted" in reason.lower() for reason in result["targets"][0]["reasons"])
+
+    async def test_list_scan_marks_malformed_hostname_invalid_without_dns(self):
+        from tests.conftest import MockResolver
+
+        resolver = MockResolver()
+        result = await run_list_scan(["bad..example.com"], resolver=resolver)
+        assert result["targets"][0]["status"] == "invalid"
+        assert resolver.responses == {}
+
+    async def test_list_scan_reports_empty_answers_as_unresolved(self):
+        from tests.conftest import MockResolver
+
+        result = await run_list_scan(["missing.example"], resolver=MockResolver())
+        target = result["targets"][0]
+        assert target["status"] == "unresolved"
+        assert target["dns_status"] == {"A": "nxdomain", "AAAA": "nxdomain"}
+        assert result["unresolved_count"] == 1
+
+    async def test_list_scan_keeps_partial_dns_timeout_inconclusive(self):
+        from tests.conftest import MockAnswer, MockResolver, MockRR
+
+        resolver = MockResolver({
+            ("example.com", "A"): MockAnswer([MockRR(address="93.184.216.34")]),
+            ("example.com", "AAAA"): dns.exception.Timeout(),
+        })
+        result = await run_list_scan(["example.com"], resolver=resolver)
+        target = result["targets"][0]
+        assert target["status"] == "inconclusive"
+        assert target["in_scope_safe"] is False
+        assert target["dns_status"]["A"] == "resolved"
+        assert target["dns_status"]["AAAA"] == "timeout"
+        assert result["inconclusive_count"] == 1
+
+    async def test_list_scan_accepts_bracketed_public_ipv6_literal(self):
+        result = await run_list_scan(["[2606:2800:220:1:248:1893:25c8:1946]"])
+        target = result["targets"][0]
+        assert target["status"] == "in_scope"
+        assert target["in_scope_safe"] is True
 
     async def test_path_scan_http_budget_exhaustion_is_inconclusive_without_fetch(self):
         from app.work_budget import ScanWorkBudget

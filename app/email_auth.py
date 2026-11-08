@@ -435,10 +435,10 @@ def compute_domain_score(
 ) -> dict[str, Any]:
     """Score observed posture while exposing unavailable checks as unknown.
 
-    Unknown component checks are represented by ``None`` and receive neutral
-    midpoint credit only in the factor aggregate; they are never reported as a
-    per-check pass or failure. Not-applicable factors are removed before the
-    domain score is normalized to 100.
+    Unknown checks inside a partially observed factor receive neutral midpoint
+    credit; they are never reported as a per-check pass or failure. A factor
+    with no completed checks is excluded. Not-applicable factors are also
+    removed before the domain score is normalized to 100.
     """
     findings_by_type: dict[str, list[Finding]] = {}
     for finding in [*dns_findings, *(module_findings or [])]:
@@ -474,7 +474,9 @@ def compute_domain_score(
             score = None
         else:
             status = "inconclusive" if len(completed) < len(checks) else "scored"
-            observed_fraction = sum(check["points_earned"] / check["maximum"] for check in completed) / len(completed)
+            earned_fraction = sum(check["points_earned"] / check["maximum"] for check in completed)
+            inconclusive_count = len(checks) - len(completed)
+            observed_fraction = (earned_fraction + 0.5 * inconclusive_count) / len(checks)
             score = round(weight * observed_fraction, 2)
         codes = sorted({item.code for item in related_findings if item.severity in ("warning", "error")})
         return {
@@ -689,6 +691,7 @@ def compute_domain_score(
         "provisional": provisional,
         "checks_completed": completed_checks,
         "checks_total": total_checks,
+        "inconclusive_policy": "Inconclusive checks in a partially observed factor receive neutral 50% credit. Factors with no completed checks and factors marked not_applicable are excluded; remaining factor weights are rescaled to 100.",
         "normalization": "Factors marked not_applicable or inconclusive with no completed checks are excluded; remaining weights are rescaled to 100.",
     }
     return {

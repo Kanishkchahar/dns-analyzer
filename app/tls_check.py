@@ -8,9 +8,9 @@ Hardened with strict SSRF controls, direct IP binding, and validated redirects.
 
 import asyncio
 from datetime import datetime, timezone
-import fnmatch
 import ipaddress
 import logging
+import re
 import socket
 import ssl
 from typing import Any
@@ -164,9 +164,84 @@ def match_san_hostname(hostname: str, san_list: list[str]) -> bool:
                 prefix = norm_host[:-len(suffix)]
                 if prefix.endswith(".") and "." not in prefix[:-1]:
                     return True
-        elif fnmatch.fnmatch(norm_host, norm_pat):
+        elif norm_host == norm_pat:
             return True
     return False
+
+
+def parse_hsts(headers: list[str]) -> dict[str, Any]:
+    """Parse HSTS conservatively; a header only activates with positive max-age."""
+    if not headers:
+        return {"status": "missing", "active": False, "max_age": None, "include_subdomains": False}
+    max_age_values: list[str] = []
+    include_subdomains = False
+    malformed = False
+    for header in headers:
+        for raw_directive in header.split(";"):
+            directive = raw_directive.strip()
+            if not directive:
+                continue
+            name, separator, value = directive.partition("=")
+            name = name.strip().lower()
+            value = value.strip().strip('"')
+            if name == "max-age":
+                if not separator:
+                    malformed = True
+                max_age_values.append(value)
+            elif name == "includesubdomains":
+                if separator:
+                    malformed = True
+                include_subdomains = True
+    if malformed or len(max_age_values) != 1 or not re.fullmatch(r"[0-9]+", max_age_values[0] if max_age_values else ""):
+        return {"status": "invalid", "active": False, "max_age": None, "include_subdomains": include_subdomains}
+    try:
+        max_age = int(max_age_values[0])
+    except ValueError:
+        # Python limits conversion of very long integer strings. Treat such
+        # headers as malformed instead of letting a remote header fail a scan.
+        return {"status": "invalid", "active": False, "max_age": None, "include_subdomains": include_subdomains}
+    if max_age == 0:
+        return {"status": "disabled", "active": False, "max_age": 0, "include_subdomains": include_subdomains}
+    return {"status": "active", "active": True, "max_age": max_age, "include_subdomains": include_subdomains}
+
+
+def parse_security_txt(body: bytes, now: datetime | None = None) -> dict[str, Any]:
+    """Validate required security.txt fields and expiration without retaining raw content."""
+    text = body.decode("utf-8", errors="replace")
+    fields: dict[str, list[str]] = {}
+    malformed = "\ufffd" in text
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition(":")
+        if not separator or not key.strip() or not value.strip():
+            malformed = True
+            continue
+        fields.setdefault(key.strip().lower(), []).append(value.strip())
+
+    contacts = fields.get("contact", [])
+    expires = fields.get("expires", [])
+    if len(expires) != 1:
+        malformed = True
+    expiry = None
+    if len(expires) == 1:
+        raw_expiry = expires[0]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})", raw_expiry):
+            malformed = True
+        else:
+            try:
+                normalized_expiry = raw_expiry[:-1] + "+00:00" if raw_expiry.endswith(("Z", "z")) else raw_expiry
+                expiry = datetime.fromisoformat(normalized_expiry)
+            except ValueError:
+                malformed = True
+
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    expired = expiry is not None and expiry <= current.astimezone(expiry.tzinfo)
+    status = "malformed" if malformed or not contacts else "expired" if expired else "valid"
+    return {"status": status, "contact_count": len(contacts), "expires": expires[0] if len(expires) == 1 else None}
 
 
 def review_csp(policy: str | None) -> list[str]:
@@ -486,7 +561,8 @@ async def audit_tls_and_https(
             async with client.stream("GET", f"https://{norm_domain}/") as resp_https:
                 h = resp_https.headers
 
-                hsts = h.get("strict-transport-security")
+                hsts_values = h.get_list("strict-transport-security")
+                hsts = parse_hsts(hsts_values)
                 csp = h.get("content-security-policy")
                 xfo = h.get("x-frame-options")
                 xcto = h.get("x-content-type-options")
@@ -498,8 +574,11 @@ async def audit_tls_and_https(
                 cookies = _summarize_set_cookie(h)
 
                 sec_headers = {
-                    "hsts": bool(hsts),
-                    "hsts_raw": hsts,
+                    "hsts": hsts["active"],
+                    "hsts_status": hsts["status"],
+                    "hsts_max_age": hsts["max_age"],
+                    "hsts_include_subdomains": hsts["include_subdomains"],
+                    "hsts_raw": "; ".join(hsts_values) or None,
                     "csp": bool(csp),
                     "csp_raw": csp[:4096] if csp else None,
                     "csp_risks": csp_risks,
@@ -513,11 +592,24 @@ async def audit_tls_and_https(
                 }
                 result["security_headers"] = sec_headers
 
-                if hsts:
+                if hsts["status"] == "active":
+                    subdomains_text = " and includeSubDomains" if hsts["include_subdomains"] else ""
                     findings.append(Finding(
                         severity="info",
                         record_type="HTTPS",
-                        message=f"HTTP Strict Transport Security (HSTS) is active: `{hsts}`.",
+                        message=f"HSTS is active with max-age={hsts['max_age']} seconds{subdomains_text}.",
+                    ))
+                elif hsts["status"] == "disabled":
+                    findings.append(Finding(
+                        severity="warning",
+                        record_type="HTTPS",
+                        message="HSTS header is present but max-age is zero, which disables the policy.",
+                    ))
+                elif hsts["status"] == "invalid":
+                    findings.append(Finding(
+                        severity="warning",
+                        record_type="HTTPS",
+                        message="HSTS header has a missing, invalid, or duplicate max-age directive; policy activation could not be confirmed.",
                     ))
                 else:
                     findings.append(Finding(
@@ -601,38 +693,15 @@ async def audit_tls_and_https(
                         body.extend(chunk[: max(0, 16 * 1024 - len(body))])
                         if len(body) >= 16 * 1024:
                             break
-                    text = bytes(body).decode("utf-8", errors="replace")
-                    fields: dict[str, list[str]] = {}
-                    malformed = False
-                    for line in text.splitlines():
-                        line = line.strip()
-                        if not line or line.startswith("#"):
-                            continue
-                        key, sep, value = line.partition(":")
-                        if not sep or not key.strip() or not value.strip():
-                            malformed = True
-                            continue
-                        fields.setdefault(key.strip().lower(), []).append(value.strip())
-                    contacts = fields.get("contact", [])
-                    expires = fields.get("expires", [])
-                    expired = False
-                    if expires:
-                        try:
-                            from email.utils import parsedate_to_datetime
-                            expiry = parsedate_to_datetime(expires[0])
-                            if expiry.tzinfo is None:
-                                expiry = expiry.replace(tzinfo=timezone.utc)
-                            expired = expiry <= datetime.now(timezone.utc)
-                        except (TypeError, ValueError, OverflowError):
-                            malformed = True
-                    security_txt.update({
-                        "status": "expired" if expired else "malformed" if malformed or not contacts else "valid",
-                        "contact_count": len(contacts),
-                        "expires": expires[0] if expires else None,
-                    })
+                    if len(body) >= 16 * 1024:
+                        security_txt.update({"status": "truncated", "reason": "Response exceeded the 16 KiB parsing limit."})
+                    else:
+                        security_txt.update(parse_security_txt(bytes(body)))
                 elif 300 <= response.status_code < 400:
                     security_txt["status"] = "redirected"
-                elif response.status_code in (403, 429, 503):
+                elif response.status_code in (404, 410):
+                    security_txt["status"] = "missing"
+                else:
                     security_txt["status"] = "unavailable"
     except Exception:
         security_txt.update({"status": "inconclusive", "reason": "Request could not be completed."})

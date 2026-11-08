@@ -7,6 +7,8 @@
 #   bash run.sh --docker     # Build & launch container via Docker
 #   bash run.sh --test       # Run the automated test suite
 #   bash run.sh --setup-only # Run setup/dependency install only
+#   bash run.sh --reload     # Enable development auto-reload
+#   DNS_ANALYZER_HOST=0.0.0.0 bash run.sh # Expose on the local network
 #   ./venv/bin/dns-analyzer example.com # Run a CLI scan after setup
 #   bash run.sh --help       # Display help reference
 # ============================================================
@@ -25,7 +27,9 @@ NC='\033[0m'
 SETUP_ONLY=false
 RUN_TESTS=false
 RUN_DOCKER=false
+RUN_RELOAD=false
 PORT=8000
+HOST="${DNS_ANALYZER_HOST:-127.0.0.1}"
 
 # Parse arguments
 for arg in "$@"; do
@@ -35,6 +39,8 @@ for arg in "$@"; do
     RUN_DOCKER=true
   elif [ "$arg" = "--test" ] || [ "$arg" = "-t" ]; then
     RUN_TESTS=true
+  elif [ "$arg" = "--reload" ]; then
+    RUN_RELOAD=true
   elif [ "$arg" = "--help" ] || [ "$arg" = "-h" ]; then
     echo ""
     echo -e "${GREEN}DNS Analyzer v2 — Security Posture Cockpit Edition${NC}"
@@ -44,6 +50,8 @@ for arg in "$@"; do
     echo "  bash run.sh --docker, -d Build & launch containerized service via Docker"
     echo "  bash run.sh --test, -t   Run the automated pytest suite"
     echo "  bash run.sh --setup-only Prepare environment and install the CLI"
+    echo "  bash run.sh --reload     Enable development auto-reload"
+    echo "  DNS_ANALYZER_HOST=0.0.0.0 bash run.sh  Expose on the local network"
     echo "  ./venv/bin/dns-analyzer <domain> Run the shared scan pipeline from the CLI"
     echo "  bash run.sh --help, -h   Show this help message"
     echo ""
@@ -140,7 +148,7 @@ fi
 # ── 5. Launch server ──────────────────────────────────────────
 echo ""
 echo -e "  ${CYAN}➜  Local:   http://127.0.0.1:${PORT}/${NC}"
-if command -v hostname >/dev/null 2>&1 && hostname -I >/dev/null 2>&1; then
+if [ "$HOST" = "0.0.0.0" ] && command -v hostname >/dev/null 2>&1 && hostname -I >/dev/null 2>&1; then
   NETWORK_IP=$(hostname -I | awk '{print $1}')
   if [ -n "$NETWORK_IP" ]; then
     echo -e "  ${CYAN}➜  Network: http://${NETWORK_IP}:${PORT}/${NC}"
@@ -150,4 +158,8 @@ echo ""
 echo -e "  Press ${YELLOW}Ctrl+C${NC} to stop the server."
 echo ""
 
-exec "$PYTHON" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --reload
+UVICORN_ARGS=(app.main:app --host "$HOST" --port "$PORT")
+if [ "$RUN_RELOAD" = true ]; then
+  UVICORN_ARGS+=(--reload)
+fi
+exec "$PYTHON" -m uvicorn "${UVICORN_ARGS[@]}"

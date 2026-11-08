@@ -15,9 +15,37 @@ class TestRemediation:
         fixes = generate_remediation_fixes("example.com", [], email_auth, security)
         titles = [f.title for f in fixes]
 
-        assert any("Authoritative SPF Record" in t for t in titles)
+        assert any("Confirm mail use and authorized senders" in t for t in titles)
         assert any("Anti-Spoofing DMARC Policy" in t for t in titles)
         assert any("Enable DNSSEC" in t for t in titles)
+
+    def test_missing_spf_asks_for_sender_confirmation_without_guessing_a_provider(self):
+        email_auth = EmailAuth(spf=None, dmarc={"policy": "reject"})
+        security = SecurityAudit(dnssec={"enabled": True})
+        records = {
+            "TXT": {"status": "ok", "records": []},
+            "MX": {"status": "ok", "records": ["aspmx.l.google.com"]},
+        }
+
+        fixes = generate_remediation_fixes("example.com", [], email_auth, security, records)
+        spf = next(fix for fix in fixes if fix.record_type == "SPF")
+
+        assert spf.guidance_only is True
+        assert spf.value == ""
+        assert "authorized to send" in spf.guidance
+        assert not spf.provider_guides
+        assert "Google" not in " ".join(spf.prerequisites)
+        assert generate_bind_zone_file("example.com", fixes).count('"v=spf1') == 0
+
+    def test_missing_spf_is_not_reported_as_missing_when_txt_lookup_failed(self):
+        email_auth = EmailAuth(spf=None, dmarc={"policy": "reject"})
+        security = SecurityAudit(dnssec={"enabled": True})
+        fixes = generate_remediation_fixes(
+            "example.com", [], email_auth, security,
+            records={"TXT": {"status": "timeout", "records": []}},
+        )
+
+        assert not any(fix.record_type == "SPF" for fix in fixes)
 
     def test_remediation_for_spf_over_limit_flattening(self):
         email_auth = EmailAuth(

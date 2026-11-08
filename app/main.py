@@ -1,6 +1,7 @@
 """FastAPI application — routes, static file serving, error handling."""
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import logging
 import os
@@ -55,12 +56,30 @@ from app.http_config import outbound_http_headers, warn_if_placeholder_documenta
 logger = logging.getLogger("dns_analyzer")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
-app = FastAPI(title="DNS Analyzer", version="2.2.0")
-
-
-@app.on_event("startup")
-async def warn_about_placeholder_documentation_url() -> None:
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
     warn_if_placeholder_documentation_url()
+    yield
+
+
+app = FastAPI(title="DNS Analyzer", version="2.2.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if request.url.path == "/" or request.url.path.startswith("/api/report/"):
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; "
+            "form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; font-src 'self' data:; connect-src 'self'",
+        )
+    return response
 
 # Concurrency & runtime throttle budgets
 SCAN_SEMAPHORE = asyncio.Semaphore(8)
@@ -448,6 +467,9 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         + ns_consistency_findings
     )
     all_counts = summarize(all_findings)
+    # Findings carry severity counts; scan completeness is counted from the
+    # canonical scoring checks so the summary agrees with its detailed score.
+    all_counts["inconclusive"] = domain_score_data["inconclusive_count"]
 
     # Generate Tailored 1-Click DNS Fixes
     fixes = generate_remediation_fixes(domain, all_findings, email_auth, security_audit, records=records)
@@ -485,6 +507,21 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
 # ---------------------------------------------------------------------------
 # API Routes
 # ---------------------------------------------------------------------------
+
+@app.get("/health/live", include_in_schema=False)
+async def health_live() -> dict[str, str]:
+    """Liveness probe: the application process can serve requests."""
+    return {"status": "alive"}
+
+
+@app.get("/health/ready", include_in_schema=False)
+async def health_ready() -> JSONResponse:
+    """Readiness probe: required dashboard assets are present."""
+    required_assets = (STATIC_DIR / "index.html", STATIC_DIR / "app.js", STATIC_DIR / "style.css")
+    missing = [asset.name for asset in required_assets if not asset.is_file()]
+    if missing:
+        return JSONResponse(status_code=503, content={"status": "not_ready", "missing_assets": missing})
+    return JSONResponse(content={"status": "ready"})
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 async def api_analyze(req: AnalyzeRequest, request: Request) -> AnalyzeResponse:
