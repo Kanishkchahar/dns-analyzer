@@ -257,7 +257,7 @@ async def flatten_spf(domain: str, resolver: dns.asyncresolver.Resolver) -> dict
         return {
             "can_flatten": False,
             "flattened_record": None,
-            "reason": f"Unable to retrieve SPF TXT record for '{domain}': {exc}",
+            "reason": "Unable to retrieve SPF TXT record; flattening is inconclusive.",
             "ip4_ranges": [],
             "ip6_ranges": [],
             "original_lookups": original_lookups,
@@ -345,7 +345,7 @@ async def _flatten_terms_recursive(
         answer = await resolver.resolve(domain, "TXT")
         txt_records = [b"".join(rr.strings).decode("utf-8", errors="replace") for rr in answer]
     except Exception as exc:
-        return False, f"Failed resolving TXT record for '{domain}': {exc}"
+        return False, f"Failed resolving TXT record for '{domain}'; flattening is inconclusive."
 
     spf = parse_spf(txt_records)
     if spf is None:
@@ -437,7 +437,7 @@ async def _resolve_host_ips(
     except dns.resolver.NoAnswer:
         pass  # A query succeeded; this name has no A records.
     except Exception as exc:
-        errors.append(f"A lookup failed: {exc}")
+        errors.append("A lookup failed; SPF result is inconclusive.")
 
     try:
         answer = await resolver.resolve(host, "AAAA")
@@ -446,7 +446,7 @@ async def _resolve_host_ips(
     except dns.resolver.NoAnswer:
         pass  # A query succeeded; this name has no AAAA records.
     except Exception as exc:
-        errors.append(f"AAAA lookup failed: {exc}")
+        errors.append("AAAA lookup failed; SPF result is inconclusive.")
 
     err = "; ".join(errors) if errors else None
     return a_ips, aaaa_ips, err
@@ -461,7 +461,7 @@ async def _resolve_mx_ips(
         answer = await resolver.resolve(domain, "MX")
         hosts = [str(rr.exchange).rstrip(".") for rr in answer if str(rr.exchange).strip() != "."]
     except Exception as exc:
-        return [], [], f"MX lookup failed: {exc}"
+        return [], [], "MX lookup failed; SPF expansion is inconclusive."
 
     if not hosts:
         return [], [], f"No MX hosts configured on '{domain}'"

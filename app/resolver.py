@@ -7,6 +7,7 @@ from typing import Any
 import dns.asyncresolver
 import dns.exception
 import dns.rdatatype
+from app.work_budget import ScanBudgetExhausted
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +60,11 @@ async def _safe_query(resolver: dns.asyncresolver.Resolver, domain: str, rtype: 
     except dns.resolver.NXDOMAIN:
         return {"status": "nxdomain", "records": [], "ttl": 0, "reason": "Non-existent domain (NXDOMAIN)"}
     except dns.resolver.NoAnswer:
-        return {"status": "no_answer", "records": [], "ttl": 0, "reason": "No record of requested type (NoAnswer)"}
+        return {"status": "no_answer", "records": [], "ttl": 0, "reason": "No record of the requested type"}
     except dns.resolver.NoNameservers:
-        return {"status": "no_nameservers", "records": [], "ttl": 0, "reason": "All nameservers failed or refused query (NoNameservers)"}
+        return {"status": "no_nameservers", "records": [], "ttl": 0, "reason": "DNS nameserver lookup failed"}
+    except ScanBudgetExhausted:
+        return {"status": "budget_exhausted", "records": [], "ttl": 0, "reason": "Per-scan DNS query budget exhausted"}
     except dns.exception.Timeout:
         return {"status": "timeout", "records": [], "ttl": 0, "reason": "Query timed out"}
     except Exception as exc:

@@ -223,6 +223,10 @@
               </div>
             </div>
             <p class="bento-hero-subtitle" id="bento-hero-subtitle">Analyzing security posture…</p>
+            <details class="score-breakdown-details" id="score-breakdown-details">
+              <summary>How this score is calculated</summary>
+              <div id="score-breakdown-content"></div>
+            </details>
             <div class="bento-hero-badges">
               <div class="badge badge-errors" id="badge-errors">
                 <span class="count" id="count-errors">0</span>
@@ -302,11 +306,11 @@
             </div>
           </div>
 
-          <!-- Bottom-Right: 1-Click Remediation -->
+          <!-- Bottom-Right: Copy-paste remediation drafts -->
           <div class="bento-card bento-fixes" id="bento-fixes">
             <div class="bento-card-header">
               <span class="bento-card-icon">🔧</span>
-              <span class="bento-card-title">1-Click Remediation</span>
+              <span class="bento-card-title">Copy-paste Fix Drafts</span>
             </div>
             <div class="bento-card-headline" id="bento-fixes-headline">Evaluating…</div>
             <ul class="bento-card-bullets" id="bento-fixes-bullets">
@@ -318,7 +322,7 @@
                 <span class="bento-status-dot" id="bento-fixes-dot"></span>
                 <span class="bento-status-text" id="bento-fixes-status">Pending</span>
               </div>
-              <button class="bento-nav-link" type="button" data-switch="tab-remediation">1-Click Fixes →</button>
+              <button class="bento-nav-link" type="button" data-switch="tab-remediation">Review Fix Drafts →</button>
             </div>
           </div>
         </div>
@@ -485,11 +489,11 @@
 
       <!-- Panel 4: Remediation -->
       <div class="results-tab-panel" id="panel-remediation" role="tabpanel" aria-labelledby="tab-remediation">
-        <!-- 1-Click Remediation Fix Generator -->
+        <!-- Copy-paste remediation draft generator -->
         <div id="remediation-section" class="remediation-section" style="display:none;">
           <div class="remediation-header">
             <div>
-              <h2 class="section-title" style="margin-bottom:4px;">🔧 1-Click DNS Fix Generator</h2>
+              <h2 class="section-title" style="margin-bottom:4px;">🔧 Copy-paste DNS Fix Drafts</h2>
               <p class="remediation-sub">Copy-pasteable records tailored for Cloudflare, AWS Route 53, and GoDaddy to achieve an A+ security posture.</p>
             </div>
             <button class="btn-download-zone" id="download-zone-btn" type="button">

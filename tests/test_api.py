@@ -1,7 +1,10 @@
 """Integration tests for FastAPI endpoints (app/main.py)."""
 
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import patch
 import base64
+from pathlib import Path
 import dns.dnssec
 import dns.name
 import dns.rdata
@@ -10,8 +13,50 @@ import dns.rdatatype
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.main import app
+from app.main import (
+    _CLIENT_REQUESTS,
+    _CUSTOM_DKIM_CACHE,
+    _MAX_TRACKED_IPS,
+    _enforce_rate_limit,
+    _get_cached_custom_dkim,
+    _store_custom_dkim,
+    app,
+)
 from tests.conftest import MockAnswer, MockResolver, MockRR
+
+
+def test_dashboard_displays_incomplete_grade_marker():
+    source = (Path(__file__).parents[1] / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'data.domain_score?.grade?.endsWith("(incomplete)")' in source
+    assert "Grade is provisional (incomplete)" in source
+
+
+@pytest.mark.asyncio
+async def test_custom_dkim_cache_is_keyed_by_normalized_domain_and_selector_set(monkeypatch):
+    _CUSTOM_DKIM_CACHE.clear()
+    _store_custom_dkim("Example.COM.", ["SelectorB", "selectorA", "selectorB"], {
+        "selectors_found": [{"selector": "selectorA"}], "has_dkim": True,
+    })
+    assert ("example.com", ("selectora", "selectorb")) in _CUSTOM_DKIM_CACHE
+    cached = _get_cached_custom_dkim("EXAMPLE.com.")
+    assert cached["selectors_found"] == [{"selector": "selectorA"}]
+
+    monkeypatch.setattr("app.main._CUSTOM_DKIM_CACHE_TTL", 0)
+    assert _get_cached_custom_dkim("example.com") is None
+    _CUSTOM_DKIM_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_stays_within_client_record_bound(monkeypatch):
+    _CLIENT_REQUESTS.clear()
+    monkeypatch.setenv("TESTING", "false")
+    now = asyncio.get_running_loop().time()
+    _CLIENT_REQUESTS.update({f"client-{index}": [now] for index in range(_MAX_TRACKED_IPS)})
+    request = SimpleNamespace(headers={}, client=SimpleNamespace(host="new-client"))
+    _enforce_rate_limit(request)
+    assert len(_CLIENT_REQUESTS) == _MAX_TRACKED_IPS
+    assert "new-client" in _CLIENT_REQUESTS
+    _CLIENT_REQUESTS.clear()
 
 
 @pytest.fixture
@@ -88,7 +133,9 @@ class TestAPIEndpoints:
 
         assert resp.status_code == 200
         assert resp.json()["path_count"] == 7
-        mocked.assert_awaited_once_with(["example.com"])
+        assert mocked.await_count == 1
+        assert mocked.await_args.args == (["example.com"],)
+        assert set(mocked.await_args.kwargs) == {"resolver", "work_budget"}
 
     async def test_network_path_scan_rejects_more_than_five_targets(self):
         transport = ASGITransport(app=app)
@@ -106,7 +153,7 @@ class TestAPIEndpoints:
             assert "DNS Analyzer" in resp.text
 
     async def test_grade_badge_requires_a_recent_scan_and_serves_svg_after_scan(self):
-        from app.main import _store_cached_scan, run_full_scan
+        from app.main import _SCAN_CACHE, _SCAN_CACHE_TTL, _store_cached_scan, run_full_scan
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -115,13 +162,21 @@ class TestAPIEndpoints:
 
         with patch("dns.asyncresolver.Resolver", return_value=mock_dns_system):
             scan = await run_full_scan("example.com")
+        scan.domain_score = scan.domain_score.model_copy(update={"grade": "B (incomplete)"})
         _store_cached_scan("example.com", scan)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.get("/api/badge/example.com")
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("image/svg+xml")
-        assert response.headers["cache-control"] == "public, max-age=60"
+        assert 0 <= int(response.headers["cache-control"].split("=")[-1]) <= int(_SCAN_CACHE_TTL)
         assert "example.com" in response.text
+        assert "B (incomplete)" in response.text
+
+        cached_at, cached_scan = _SCAN_CACHE["example.com"]
+        _SCAN_CACHE["example.com"] = (cached_at - _SCAN_CACHE_TTL - 1, cached_scan)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            expired = await client.get("/api/badge/example.com")
+        assert expired.status_code == 404
 
     async def test_post_analyze_valid_domain(self, mock_dns_system):
         with patch("dns.asyncresolver.Resolver", return_value=mock_dns_system):
@@ -140,11 +195,13 @@ class TestAPIEndpoints:
         assert "remediation" in data
         assert "bind_zone_snippet" in data
         assert "domain_score" in data
-        assert data["domain_score"]["grade"] in ("A+", "A", "B")
-        assert data["domain_score"]["scope"].startswith("DNS and email posture")
+        assert data["domain_score"]["grade"].split(" ", 1)[0] in ("A+", "A", "B")
+        assert data["domain_score"]["scope"].startswith("DNS, email authentication")
+        assert "score_breakdown" in data
+        assert "caps_applied" in data["score_breakdown"]
         assert "infrastructure" in data["domain_score"]["factors"]
         assert data["email_auth"]["score"]["grade"] in ("A+", "A")
-        assert data["security"]["dnssec"]["status"] in ("secured", "delegation_match_verified")
+        assert data["security"]["dnssec"]["status"] == "inconclusive"
 
     async def test_post_analyze_sanitized_error_handling(self):
         with patch("app.main.run_full_scan", side_effect=RuntimeError("Secret database connection failed")):
@@ -228,7 +285,7 @@ class TestAPIEndpoints:
         data = resp.json()
         assert data["status"] == "confirmation_required"
 
-    async def test_post_network_port_scan_accepts_token_only_in_authorization_header(self, monkeypatch):
+    async def test_post_network_port_scan_body_token_is_deprecated_and_header_works(self, monkeypatch, caplog):
         monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
         monkeypatch.setenv("PORT_SCAN_API_KEY", "super-secret-token")
         transport = ASGITransport(app=app)
@@ -238,10 +295,12 @@ class TestAPIEndpoints:
             resp = await client.post("/api/network/port-scan", json={"target": "93.184.216.34", "confirmed": False})
         assert resp.json()["status"] == "unauthorized"
 
-        # A token in JSON is ignored and does not authorize active scanning.
+        # One-release compatibility: JSON authorizes, with a warning that never includes the token.
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post("/api/network/port-scan", json={"target": "93.184.216.34", "confirmed": False, "auth_token": "super-secret-token"})
-        assert resp.json()["status"] == "unauthorized"
+        assert resp.json()["status"] == "confirmation_required"
+        assert "Deprecated port-scan auth_token body field" in caplog.text
+        assert "super-secret-token" not in caplog.text
 
         # 3. With Authorization: Bearer <token> header -> authorized
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -251,6 +310,15 @@ class TestAPIEndpoints:
                 headers={"Authorization": "Bearer super-secret-token"},
             )
         assert resp.json()["status"] == "confirmation_required"
+
+    async def test_analysis_api_does_not_expose_resolver_exception_text(self):
+        transport = ASGITransport(app=app)
+        with patch("app.main.run_full_scan", side_effect=RuntimeError("RESOLVER_SECRET_SENTINEL")):
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.post("/api/analyze", json={"domain": "example.com"})
+        assert response.status_code == 500
+        assert "RESOLVER_SECRET_SENTINEL" not in response.text
+        assert "An error occurred during DNS analysis" in response.text
 
     async def test_get_report_reuses_cached_scan(self, mock_dns_system):
         from app.main import _store_cached_scan, run_full_scan

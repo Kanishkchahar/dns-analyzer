@@ -10,6 +10,7 @@ import asyncio
 from datetime import datetime, timezone
 import fnmatch
 import ipaddress
+import logging
 import socket
 import ssl
 from typing import Any
@@ -18,7 +19,10 @@ import httpcore
 import httpx
 
 from app.models import Finding
-from app.work_budget import ScanWorkBudget
+from app.work_budget import ScanBudgetExhausted, ScanWorkBudget
+from app.http_config import outbound_http_headers
+
+logger = logging.getLogger(__name__)
 
 
 class PinnedIPBackend(httpcore.AsyncNetworkBackend):
@@ -113,14 +117,21 @@ async def resolve_and_verify_all_ips(hostname: str, port: int = 443, resolver: A
         return False, [], "Unsafe hostname: localhost names are blocked"
 
     if resolver is not None:
+        budget_exhausted = False
         async def get_addresses(rdtype: str) -> list[str]:
+            nonlocal budget_exhausted
             try:
                 answer = await resolver.resolve(hostname, rdtype)
                 return [str(item.address) for item in answer if hasattr(item, "address")]
+            except ScanBudgetExhausted:
+                budget_exhausted = True
+                return []
             except Exception:
                 return []
         answers = await asyncio.gather(get_addresses("A"), get_addresses("AAAA"))
         all_ips = list(dict.fromkeys(answers[0] + answers[1]))
+        if budget_exhausted:
+            return False, [], "DNS query budget exhausted; resolution is inconclusive."
         if not all_ips:
             return False, [], "Hostname did not resolve or query budget was unavailable"
     else:
@@ -131,7 +142,7 @@ async def resolve_and_verify_all_ips(hostname: str, port: int = 443, resolver: A
                 return False, [], "Hostname did not resolve to any addresses"
             all_ips = list(dict.fromkeys(info[4][0] for info in addr_info))
         except Exception as exc:
-            return False, [], f"Resolution error: {type(exc).__name__}"
+            return False, [], "Resolution failed; result is inconclusive."
 
     for ip in all_ips:
         safe, reason = is_safe_ip(ip)
@@ -234,6 +245,11 @@ async def audit_tls_and_https(
     # 1. DNS pre-resolution and strict SSRF guard (resolve once, reject non-public IPs)
     safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(norm_domain, port, resolver=resolver)
     if not safe_all:
+        if reason.startswith("DNS query budget exhausted"):
+            result["status"] = "inconclusive"
+            result["reason"] = reason
+            findings.append(Finding(severity="info", record_type="TLS", message="TLS checks could not run because the DNS query budget was exhausted."))
+            return result, findings
         result["status"] = "blocked"
         result["reason"] = reason
         findings.append(Finding(
@@ -293,19 +309,21 @@ async def audit_tls_and_https(
             # as an absent TLS scan.
             target_ip = candidate_ip
             certificate_error = exc
+            logger.warning("TLS certificate verification failed for %s: %s", norm_domain, exc.verify_message)
             result["scanned"] = True
             result["status"] = "certificate_error"
-            result["reason"] = exc.verify_message
+            result["reason"] = "TLS certificate verification failed."
             continue
         except (asyncio.TimeoutError, ConnectionRefusedError, OSError) as exc:
-            connection_errors.append(f"{candidate_ip}: {type(exc).__name__}")
+            connection_errors.append(f"{candidate_ip}: connection failed")
         except Exception as exc:
+            logger.exception("TLS handshake failed")
             result["status"] = "error"
-            result["reason"] = f"{type(exc).__name__}: {str(exc) or 'TLS handshake failed'}"
+            result["reason"] = "TLS handshake failed; result is inconclusive."
             findings.append(Finding(
                 severity="warning",
                 record_type="TLS",
-                message=f"TLS/HTTPS audit on port {port} encountered an error: {result['reason']}.",
+                message="TLS/HTTPS audit encountered an error; result is inconclusive.",
             ))
             return result, findings
 
@@ -315,7 +333,7 @@ async def audit_tls_and_https(
         findings.append(Finding(
             severity="error",
             record_type="TLS",
-            message=f"TLS certificate verification failed for '{norm_domain}': {certificate_error.verify_message}. Untrusted or self-signed certificate.",
+            message=f"TLS certificate verification failed for '{norm_domain}'. Untrusted or self-signed certificate.",
         ))
     elif not connected:
         result["status"] = "unreachable"
@@ -412,9 +430,9 @@ async def audit_tls_and_https(
     redirect_ok = False
     try:
         if not await budget.reserve_http():
-            raise RuntimeError("per-scan outbound request budget exhausted")
+            raise ScanBudgetExhausted("per-scan outbound request budget exhausted")
         http_transport = PinnedIPTransport(target_ip)
-        async with httpx.AsyncClient(transport=http_transport, timeout=3.0, follow_redirects=False) as client:
+        async with httpx.AsyncClient(transport=http_transport, timeout=3.0, follow_redirects=False, headers=outbound_http_headers()) as client:
             async with client.stream("GET", f"http://{norm_domain}/") as resp_http:
                 status_code = resp_http.status_code
                 loc = resp_http.headers.get("location", "")
@@ -452,19 +470,19 @@ async def audit_tls_and_https(
                         message=f"Port 80 HTTP does not redirect to HTTPS (HTTP {status_code}). Cleartext web traffic may be exposed to interception.",
                     ))
     except Exception as exc:
-        result["https_redirect"] = {"enforced": False, "status_code": None, "location": None}
+        result["https_redirect"] = {"enforced": None, "status_code": None, "location": None, "status": "inconclusive"}
         findings.append(Finding(
             severity="info",
             record_type="HTTPS",
-            message=f"Port 80 HTTP redirect check was inconclusive: {type(exc).__name__}.",
+            message="Port 80 HTTP redirect check was inconclusive because the request could not be completed.",
         ))
 
     # 5. Check HTTPS Web Security Headers (Strict TLS verification, pinned IP, stream headers without body download)
     try:
         if not await budget.reserve_http():
-            raise RuntimeError("per-scan outbound request budget exhausted")
+            raise ScanBudgetExhausted("per-scan outbound request budget exhausted")
         https_transport = PinnedIPTransport(target_ip, verify=True)
-        async with httpx.AsyncClient(transport=https_transport, timeout=3.0, follow_redirects=False) as client:
+        async with httpx.AsyncClient(transport=https_transport, timeout=3.0, follow_redirects=False, headers=outbound_http_headers()) as client:
             async with client.stream("GET", f"https://{norm_domain}/") as resp_https:
                 h = resp_https.headers
 
@@ -539,15 +557,15 @@ async def audit_tls_and_https(
         findings.append(Finding(
             severity="info",
             record_type="HTTPS",
-            message=f"HTTPS web security header inspection on port {port} was inconclusive: {type(exc).__name__}.",
+            message="HTTPS web security header inspection was inconclusive because the request could not be completed.",
         ))
 
     # OPTIONS only reports the server's advertised methods; no write method is sent.
     try:
         if not await budget.reserve_http():
-            raise RuntimeError("per-scan outbound request budget exhausted")
+            raise ScanBudgetExhausted("per-scan outbound request budget exhausted")
         options_transport = PinnedIPTransport(target_ip, verify=True)
-        async with httpx.AsyncClient(transport=options_transport, timeout=3.0, follow_redirects=False) as client:
+        async with httpx.AsyncClient(transport=options_transport, timeout=3.0, follow_redirects=False, headers=outbound_http_headers()) as client:
             async with client.stream("OPTIONS", f"https://{norm_domain}/") as response:
                 allowed = [method.strip().upper() for method in response.headers.get("allow", "").split(",") if method.strip()]
                 risky = sorted(set(allowed).intersection({"TRACE", "PUT", "DELETE", "CONNECT"}))
@@ -565,6 +583,65 @@ async def audit_tls_and_https(
                         message=f"OPTIONS advertises potentially sensitive HTTP methods: {', '.join(risky)}. This is an advertisement, not proof that each method accepts requests; no write request was sent.",
                     ))
     except Exception as exc:
-        result["http_methods"] = {"status": "inconclusive", "http_status": None, "advertised": [], "review_methods": [], "probe": "OPTIONS", "reason": type(exc).__name__}
+        result["http_methods"] = {"status": "inconclusive", "http_status": None, "advertised": [], "review_methods": [], "probe": "OPTIONS", "reason": "HTTP method check could not be completed."}
+
+    # RFC 9116 security.txt is a small, fixed-path request. Bound the response
+    # body and validate the required Contact field without following redirects.
+    security_txt: dict[str, Any] = {"status": "missing", "url": f"https://{norm_domain}/.well-known/security.txt"}
+    try:
+        if not await budget.reserve_http():
+            raise ScanBudgetExhausted("request_budget_exhausted")
+        security_transport = PinnedIPTransport(target_ip, verify=True)
+        async with httpx.AsyncClient(transport=security_transport, timeout=3.0, follow_redirects=False, headers=outbound_http_headers()) as client:
+            async with client.stream("GET", security_txt["url"]) as response:
+                security_txt["http_status"] = response.status_code
+                if response.status_code == 200:
+                    body = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        body.extend(chunk[: max(0, 16 * 1024 - len(body))])
+                        if len(body) >= 16 * 1024:
+                            break
+                    text = bytes(body).decode("utf-8", errors="replace")
+                    fields: dict[str, list[str]] = {}
+                    malformed = False
+                    for line in text.splitlines():
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        key, sep, value = line.partition(":")
+                        if not sep or not key.strip() or not value.strip():
+                            malformed = True
+                            continue
+                        fields.setdefault(key.strip().lower(), []).append(value.strip())
+                    contacts = fields.get("contact", [])
+                    expires = fields.get("expires", [])
+                    expired = False
+                    if expires:
+                        try:
+                            from email.utils import parsedate_to_datetime
+                            expiry = parsedate_to_datetime(expires[0])
+                            if expiry.tzinfo is None:
+                                expiry = expiry.replace(tzinfo=timezone.utc)
+                            expired = expiry <= datetime.now(timezone.utc)
+                        except (TypeError, ValueError, OverflowError):
+                            malformed = True
+                    security_txt.update({
+                        "status": "expired" if expired else "malformed" if malformed or not contacts else "valid",
+                        "contact_count": len(contacts),
+                        "expires": expires[0] if expires else None,
+                    })
+                elif 300 <= response.status_code < 400:
+                    security_txt["status"] = "redirected"
+                elif response.status_code in (403, 429, 503):
+                    security_txt["status"] = "unavailable"
+    except Exception:
+        security_txt.update({"status": "inconclusive", "reason": "Request could not be completed."})
+    result["security_txt"] = security_txt
+    if security_txt["status"] in ("missing", "malformed", "expired"):
+        findings.append(Finding(
+            severity="warning" if security_txt["status"] != "missing" else "info",
+            record_type="SECURITY.TXT",
+            message=f"security.txt is {security_txt['status']} at /.well-known/security.txt.",
+        ))
 
     return result, findings

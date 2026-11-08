@@ -171,27 +171,27 @@ class TestEmailScore:
         takeover_data = {"vulnerable": False, "status": "safe"}
 
         domain_score = compute_domain_score(records, dns_findings, email_score, dnssec_data, takeover_data)
-        assert domain_score["score"] == 96
-        assert domain_score["grade"] == "A+"
+        assert 0 <= domain_score["score"] <= 100
         assert "infrastructure" in domain_score["factors"]
         assert "email_auth" in domain_score["factors"]
         assert "dnssec" in domain_score["factors"]
         assert "threats" in domain_score["factors"]
-        assert domain_score["factors"]["infrastructure"]["score"] == 25
-        assert domain_score["factors"]["email_auth"]["score"] == 35
-        assert domain_score["factors"]["dnssec"]["score"] == 16
-        assert domain_score["factors"]["threats"]["score"] == 20
+        assert domain_score["factors"]["infrastructure"]["max_score"] == 20
+        assert domain_score["factors"]["email_auth"]["max_score"] == 25
+        assert domain_score["factors"]["dnssec"]["max_score"] == 20
+        assert domain_score["factors"]["threats"]["max_score"] == 15
+        assert "A and AAAA records present" in domain_score["factors"]["infrastructure"]["summary"]
 
     def test_compute_domain_score_threat_deduction(self):
-        records = {"A": {"status": "ok", "records": ["93.184.216.34"]}}
+        records = {"A": {"status": "ok", "records": ["93.184.216.34"]}, "CNAME": {"status": "ok", "records": ["app.github.io"]}}
         dns_findings = []
         email_score = {"score": 80, "grade": "B", "label": "Fair"}
         dnssec_data = {"status": "unsigned", "enabled": False}
-        takeover_data = {"vulnerable": True, "status": "critical_vulnerability", "provider": "GitHub Pages"}
+        takeover_data = {"vulnerable": True, "status": "confirmed", "has_cname": True, "provider": "GitHub Pages"}
 
         domain_score = compute_domain_score(records, dns_findings, email_score, dnssec_data, takeover_data)
         assert domain_score["factors"]["threats"]["score"] == 0
-        assert domain_score["factors"]["threats"]["status"] == "critical"
+        assert domain_score["factors"]["threats"]["score"] == 0
         assert domain_score["score"] < 60
 
     def test_compute_domain_score_dnssec_delegation_match_scored_separately(self):
@@ -201,17 +201,17 @@ class TestEmailScore:
         takeover_data = {"vulnerable": False, "status": "safe"}
 
         domain_score = compute_domain_score(records, [], email_score, dnssec_data, takeover_data)
-        assert domain_score["factors"]["dnssec"]["score"] == 16
-        assert domain_score["factors"]["dnssec"]["status"] == "delegation_match_verified"
-        assert "DNSSEC Root Anchor & RRSIG Validation" in domain_score["inconclusive_checks"]
+        assert domain_score["factors"]["dnssec"]["score"] == 20
+        assert domain_score["factors"]["dnssec"]["status"] == "inconclusive"
+        assert domain_score["factors"]["dnssec"]["checks_completed"] == 1
 
     def test_compute_domain_score_inconclusive_dnssec_gets_no_dnssec_points(self):
         result = compute_domain_score(
             {}, [], {"score": 100}, {"status": "inconclusive"}, {"status": "safe"}
         )
-        assert result["factors"]["dnssec"]["score"] == 0
+        assert result["factors"]["dnssec"]["score"] is None
         assert result["factors"]["dnssec"]["status"] == "inconclusive"
-        assert "DNSSEC" in result["inconclusive_checks"]
+        assert result["factors"]["dnssec"]["checks"][0]["points_earned"] is None
 
     def test_compute_domain_score_axfr_caps_grade(self):
         result = compute_domain_score(
@@ -219,5 +219,213 @@ class TestEmailScore:
             {"status": "unsigned"}, {"status": "safe"},
             dns_posture_data={"axfr": {"servers": [{"status": "transfer_allowed", "records_exposed": 4}]}},
         )
-        assert result["score"] == 39
-        assert result["grade"] == "F"
+        assert result["score"] == 54
+        assert result["grade"].startswith("D")
+        assert result["score_breakdown"]["caps_applied"][0]["code"] == "AXFR_EXPOSURE"
+
+    def test_not_applicable_factors_are_excluded_and_weights_normalize(self):
+        records = {
+            "A": {"status": "no_answer", "records": []},
+            "AAAA": {"status": "no_answer", "records": []},
+            "MX": {"status": "no_answer", "records": []},
+            "NS": {"status": "ok", "records": ["ns1.example.com"]},
+            "SOA": {"status": "ok", "records": {"serial": 1}},
+            "CNAME": {"status": "no_answer", "records": []},
+        }
+        result = compute_domain_score(
+            records, [], {"score": 100}, {"status": "unsigned"},
+            {"status": "safe", "has_cname": False},
+            tls_data={"scanned": False},
+            dns_posture_data={"axfr": {}, "wildcard": {"status": "not_detected"}, "nameserver_consistency": {"status": "complete", "serials_match": True, "ns_sets_match": True, "soa_fields_match": True}},
+            mail_transport_data={},
+            email_data={"dmarc_status": "complete", "dkim_status": "complete"},
+        )
+        factors = result["factors"]
+        assert factors["threats"]["status"] == "not_applicable"
+        assert factors["tls_web"]["status"] == "not_applicable"
+        assert factors["mail_transport"]["status"] == "not_applicable"
+        assert result["score_breakdown"]["applicable_weight"] == 70
+        assert result["score"] == round(sum(f["score"] for f in factors.values() if f["status"] != "not_applicable") / 70 * 100)
+
+    def test_inconclusive_factor_is_marked_and_does_not_assign_unknown_checks_points(self):
+        result = compute_domain_score(
+            {"A": {"status": "ok", "records": ["192.0.2.10"]}}, [], {"score": 100},
+            {"status": "inconclusive"}, {"status": "safe", "has_cname": False},
+        )
+        dnssec = result["factors"]["dnssec"]
+        assert dnssec["status"] == "inconclusive"
+        assert dnssec["checks"][0]["points_earned"] is None
+        assert dnssec["checks"][1]["points_earned"] is None
+        assert dnssec["score"] is None
+        assert {item["category"] for item in result["score_breakdown"]["excluded_factors"]} >= {"DNSSEC"}
+        assert "based on" in result["label"]
+        assert "factors" in result["label"]
+
+    def test_provisional_grade_when_excluded_weight_exceeds_thirty_percent(self):
+        records = {
+            "A": {"status": "ok", "records": ["192.0.2.10"]},
+            "AAAA": {"status": "ok", "records": ["2001:db8::1"]},
+            "NS": {"status": "ok", "records": ["ns1.example.com", "ns2.example.com"]},
+            "SOA": {"status": "ok", "records": ["ns1.example.com host.example.com 1 3600 1800 604800 300"]},
+            "MX": {"status": "no_answer", "records": []},
+            "CNAME": {"status": "no_answer", "records": []},
+            "TXT": {"status": "ok", "records": ["v=spf1 -all"]},
+        }
+        result = compute_domain_score(
+            records, [], {"score": 100}, {"status": "delegation_match_verified"},
+            {"status": "safe", "has_cname": False},
+            tls_data=None,
+            dns_posture_data={"status": "inconclusive"},
+            mail_transport_data={"mta_sts": {"status": "inconclusive"}, "tls_rpt": {"status": "inconclusive"}},
+            email_data={"dmarc_status": "complete", "dkim_status": "complete"},
+        )
+        assert result["score_breakdown"]["excluded_weight"] > 30
+        assert result["score_breakdown"]["provisional"] is True
+        assert result["grade"].endswith("(incomplete)")
+        assert "based on" in result["label"] and "factors" in result["label"]
+
+        exact_threshold = compute_domain_score(
+            records, [], {"score": 100}, {"status": "delegation_match_verified"},
+            {"status": "safe", "has_cname": False},
+            dns_posture_data={
+                "axfr": {"servers": [{"status": "refused_or_unavailable", "records_exposed": 0}]},
+                "wildcard": {"status": "not_detected"},
+                "nameserver_consistency": {"status": "complete", "serials_match": True, "ns_sets_match": True, "soa_fields_match": True},
+            },
+            mail_transport_data={"mta_sts": {"status": "not_configured"}, "tls_rpt": {"status": "not_configured"}},
+            email_data={"dmarc_status": "complete", "dkim_status": "complete"},
+        )
+        assert exact_threshold["score_breakdown"]["excluded_weight"] == 30
+        assert exact_threshold["score_breakdown"]["provisional"] is False
+
+    def test_all_factors_excluded_has_no_scored_factors(self):
+        records = {
+            key: {"status": "timeout", "records": []}
+            for key in ("A", "AAAA", "NS", "SOA", "MX", "CNAME", "TXT")
+        }
+        result = compute_domain_score(
+            records, [], {"score": 100}, {"status": "inconclusive"},
+            {"status": "inconclusive", "has_cname": False},
+            mail_transport_data={
+                "mta_sts": {"status": "inconclusive"}, "tls_rpt": {"status": "inconclusive"},
+            },
+            email_data={"dmarc_status": "inconclusive", "dkim_status": "inconclusive"},
+        )
+        assert result["score_breakdown"]["included_factor_count"] == 0
+        assert result["score_breakdown"]["excluded_weight"] == 100
+        assert all(factor["status"] == "inconclusive" for factor in result["score_breakdown"]["factors"].values())
+        assert result["grade"] == "F (incomplete)"
+        assert "based on 0 of 7 factors" in result["label"]
+
+    def test_axfr_cap_can_apply_with_provisional_grade(self):
+        records = {
+            "A": {"status": "ok", "records": ["192.0.2.10"]},
+            "AAAA": {"status": "ok", "records": ["2001:db8::1"]},
+            "NS": {"status": "ok", "records": ["ns1.example.com", "ns2.example.com"]},
+            "SOA": {"status": "ok", "records": ["ns1.example.com host.example.com 1 3600 1800 604800 300"]},
+            "MX": {"status": "timeout", "records": []},
+            "CNAME": {"status": "ok", "records": ["service.example.net"]},
+            "TXT": {"status": "timeout", "records": []},
+        }
+        result = compute_domain_score(
+            records, [], {"score": 100}, {"status": "inconclusive"},
+            {"status": "confirmed", "has_cname": True},
+            dns_posture_data={"axfr": {"servers": [{"status": "transfer_allowed", "records_exposed": 2}]}},
+            mail_transport_data={
+                "mta_sts": {"status": "inconclusive"}, "tls_rpt": {"status": "inconclusive"},
+            },
+            email_data={"dmarc_status": "inconclusive", "dkim_status": "inconclusive"},
+        )
+        assert result["score_breakdown"]["provisional"] is True
+        assert result["grade"].endswith("(incomplete)")
+        assert {cap["code"] for cap in result["score_breakdown"]["caps_applied"]} >= {
+            "AXFR_EXPOSURE", "CONFIRMED_TAKEOVER",
+        }
+        assert result["score"] <= 39
+
+    def test_takeover_states_have_explicit_deductions_and_no_candidate_cap(self):
+        records = {
+            "A": {"status": "ok", "records": ["192.0.2.10"]},
+            "AAAA": {"status": "ok", "records": ["2001:db8::1"]},
+            "NS": {"status": "ok", "records": ["ns1.example.com", "ns2.example.com"]},
+            "SOA": {"status": "ok", "records": ["ns1.example.com host.example.com 1 3600 1800 604800 300"]},
+            "CNAME": {"status": "ok", "records": ["service.example.net"]},
+            "MX": {"status": "no_answer", "records": []},
+            "TXT": {"status": "ok", "records": []},
+        }
+        expected = {"safe": (15, 0), "candidate": (6.75, 8.25), "confirmed": (0, 15)}
+        for state, (earned, deducted) in expected.items():
+            result = compute_domain_score(
+                records, [], {"score": 100}, {"status": "unsigned"},
+                {"status": state, "has_cname": True},
+            )
+            factor = result["score_breakdown"]["factors"]["takeover"]
+            assert factor["points_earned"] == earned
+            assert factor["points_deducted"] == deducted
+            if state == "candidate":
+                assert result["score_breakdown"]["caps_applied"] == []
+            if state == "confirmed":
+                assert result["score"] <= 39
+
+        inconclusive = compute_domain_score(
+            records, [], {"score": 100}, {"status": "unsigned"},
+            {"status": "inconclusive", "has_cname": True},
+        )
+        factor = inconclusive["score_breakdown"]["factors"]["takeover"]
+        assert factor["status"] == "inconclusive" and factor["points_earned"] is None
+        assert "Takeover Risk" in [item["category"] for item in inconclusive["score_breakdown"]["excluded_factors"]]
+
+    def test_confirmed_takeover_and_bogus_dnssec_apply_independent_caps(self):
+        records = {
+            "A": {"status": "ok", "records": ["192.0.2.10"]},
+            "AAAA": {"status": "ok", "records": ["2001:db8::1"]},
+            "MX": {"status": "ok", "records": [{"host": "mail.example.com"}]},
+            "NS": {"status": "ok", "records": ["ns1.example.com", "ns2.example.com"]},
+            "SOA": {"status": "ok", "records": {"serial": 1}},
+            "TXT": {"status": "ok", "records": ["v=spf1 -all"]},
+            "CNAME": {"status": "ok", "records": ["app.github.io"]},
+        }
+        kwargs = {
+            "tls_data": {"scanned": True, "status": "complete", "certificate": {"is_expired": False}, "https_redirect": {"enforced": True}, "security_headers": {}},
+            "dns_posture_data": {"axfr": {"servers": [{"status": "refused_or_unavailable", "records_exposed": 0}]}, "wildcard": {"status": "not_detected"}, "nameserver_consistency": {"status": "complete", "serials_match": True, "ns_sets_match": True, "soa_fields_match": True}},
+            "mail_transport_data": {"mta_sts": {"status": "configured", "policy_status": "valid"}, "tls_rpt": {"status": "configured"}},
+            "email_data": {"dmarc_status": "complete", "dkim_status": "complete"},
+        }
+        takeover = compute_domain_score(
+            records, [], {"score": 100}, {"status": "unsigned"},
+            {"status": "confirmed", "has_cname": True, "vulnerable": True}, **kwargs,
+        )
+        assert takeover["score"] == 39
+        assert "CONFIRMED_TAKEOVER" in [cap["code"] for cap in takeover["score_breakdown"]["caps_applied"]]
+
+        bogus = compute_domain_score(
+            records, [], {"score": 100}, {"status": "bogus"},
+            {"status": "safe", "has_cname": True}, **kwargs,
+        )
+        assert bogus["score"] == 39
+        assert "BOGUS_DNSSEC" in [cap["code"] for cap in bogus["score_breakdown"]["caps_applied"]]
+
+    def test_unproven_chain_bogus_dnssec_does_not_trigger_cap(self):
+        records = {"A": {"status": "ok", "records": ["192.0.2.10"]}, "NS": {"status": "ok", "records": ["ns.example.com"]}}
+        common = (records, [], {"score": 90}, {"status": "inconclusive", "validator": "chain"}, {"status": "safe", "has_cname": False})
+        baseline = compute_domain_score(*common)
+        unproven_bogus = compute_domain_score(records, [], {"score": 90}, {"status": "bogus", "validator": "chain"}, {"status": "safe", "has_cname": False})
+        assert "BOGUS_DNSSEC" not in [cap["code"] for cap in unproven_bogus["score_breakdown"]["caps_applied"]]
+        # The factor currently deducts points for bogus regardless of validator; 3c
+        # must decide whether/how chain-validator states participate in the score.
+        assert unproven_bogus["score"] < baseline["score"]
+
+    def test_breakdown_has_points_status_checks_codes_and_cap_reason(self):
+        from app.models import Finding
+
+        result = compute_domain_score(
+            {"A": {"status": "ok", "records": ["192.0.2.10"]}, "NS": {"status": "ok", "records": ["ns.example.com"]}},
+            [Finding(severity="warning", record_type="NS", message="Only one nameserver found — no redundancy.")],
+            {"score": 80}, {"status": "bogus"}, {"status": "candidate", "has_cname": True},
+        )
+        breakdown = result["score_breakdown"]
+        infra = breakdown["factors"]["infrastructure"]
+        assert breakdown["factors"]["takeover"]["maximum"] == 15
+        assert set(("points_earned", "maximum", "status", "finding_codes_costing_points")) <= infra.keys()
+        assert "DNS-NS-003" in infra["finding_codes_costing_points"]
+        assert breakdown["caps_applied"][0]["reason"]

@@ -1,240 +1,276 @@
-"""DNSSEC (Domain Name System Security Extensions) Cryptographic Validator.
+"""DNSSEC cryptographic chain validation using IANA trust anchors."""
+from __future__ import annotations
 
-Audits DNSKEY, DS, and RRSIG records to verify whether the domain implements
-cryptographic authenticity to prevent DNS spoofing and cache poisoning
-(RFC 4033, RFC 4034, RFC 4035). Validates cryptographic DS-to-DNSKEY digest matches.
-"""
-
+from datetime import datetime, timedelta, timezone
+import json
+import os
+from pathlib import Path
 from typing import Any
+
 import dns.asyncresolver
 import dns.dnssec
 import dns.exception
+import dns.flags
 import dns.name
+import dns.rdatatype
+import dns.resolver
+
 from app.models import Finding
+from app.work_budget import ScanBudgetExhausted
 
-# Common DNSSEC algorithm mapping (RFC 8624)
-DNSSEC_ALGORITHMS: dict[int, str] = {
-    3: "DSA/SHA1",
-    5: "RSA/SHA1",
-    7: "RSASHA1-NSEC3-SHA1",
-    8: "RSA/SHA-256",
-    10: "RSA/SHA-512",
-    13: "ECDSA Curve P-256 with SHA-256",
-    14: "ECDSA Curve P-384 with SHA-384",
-    15: "Ed25519",
-    16: "Ed448",
-}
+ANCHOR_PATH = Path(__file__).parent / "data" / "root_trust_anchors.json"
+CLOCK_SKEW = timedelta(minutes=5)
+SIGNATURE_WARNING = timedelta(days=7)
+NSEC3_MAX_ITERATIONS = 150
+SUPPORTED_ALGORITHMS = {8, 10, 13, 14, 15}
+DEPRECATED_ALGORITHMS = {3, 5, 6, 7}
+ALGORITHM_NAMES = {3: "DSA/SHA-1", 5: "RSA/SHA-1", 7: "RSA/SHA-1-NSEC3", 8: "RSA/SHA-256", 10: "RSA/SHA-512", 13: "ECDSA P-256", 14: "ECDSA P-384", 15: "Ed25519"}
 
 
-def _safe_key_tag(rr: Any) -> int:
-    """Safely extract key tag from DNSKEY record."""
-    if hasattr(rr, "key_tag"):
-        return getattr(rr, "key_tag")
+class AnchorFileError(ValueError):
+    pass
+
+
+def load_root_trust_anchors(path: Path = ANCHOR_PATH, now: datetime | None = None) -> list[dict[str, Any]]:
     try:
-        return dns.dnssec.key_id(rr)
-    except Exception:
-        return 0
-
-
-def verify_ds_matches_dnskey(
-    domain_name: dns.name.Name,
-    dnskeys: list[Any],
-    ds_records: list[Any],
-) -> tuple[bool, int]:
-    """Verify that at least one parent DS record matches a published DNSKEY digest."""
-    for ds_rr in ds_records:
-        for key_rr in dnskeys:
-            try:
-                tag = _safe_key_tag(key_rr)
-                ds_tag = getattr(ds_rr, "key_tag", None)
-                if tag != 0 and ds_tag is not None:
-                    if tag == ds_tag:
-                        if hasattr(ds_rr, "digest"):
-                            calc_ds = dns.dnssec.make_ds(domain_name, key_rr, ds_rr.digest_type)
-                            if calc_ds.digest == ds_rr.digest:
-                                return True, tag
-                            else:
-                                continue
-            except Exception:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("anchors"), list):
+            raise ValueError("expected object with anchors list")
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        usable = []
+        for item in data["anchors"]:
+            if not isinstance(item, dict):
+                raise ValueError("anchor entry must be an object")
+            start = datetime.fromisoformat(item["validFrom"].replace("Z", "+00:00"))
+            end_text = item.get("validUntil")
+            end = datetime.fromisoformat(end_text.replace("Z", "+00:00")) if end_text else None
+            for field in ("key_tag", "algorithm", "digest_type", "digest"):
+                if field not in item:
+                    raise ValueError(f"anchor missing {field}")
+            if item.get("revoked") or start > current or (end and end <= current):
                 continue
-    return False, 0
+            usable.append(item)
+        if not usable:
+            raise AnchorFileError("No currently valid, non-revoked DNSSEC root trust anchors remain")
+        return usable
+    except AnchorFileError:
+        raise
+    except Exception as exc:
+        raise AnchorFileError(f"Malformed DNSSEC root trust anchor file: {exc}") from exc
 
 
-async def check_dnssec(
-    domain: str,
-    resolver: dns.asyncresolver.Resolver,
-    apex: str | None = None,
-) -> tuple[dict[str, Any], list[Finding]]:
-    """Query DNSKEY and DS records to audit DNSSEC deployment and validity.
+def _rrset(answer: Any, qname: dns.name.Name, rdtype: int) -> tuple[Any, Any]:
+    response = getattr(answer, "response", None)
+    if response is None:
+        return getattr(answer, "rrset", None), None
+    if response.flags & dns.flags.TC:
+        raise dns.exception.FormError("truncated response")
+    found = sigs = None
+    for section in (response.answer, response.authority):
+        for entry in section:
+            if entry.name == qname and entry.rdtype == rdtype:
+                found = entry
+            elif entry.name == qname and entry.rdtype == dns.rdatatype.RRSIG and entry.covers() == rdtype:
+                sigs = entry
+    return found, sigs
 
-    Validates cryptographic match between parent DS delegation signers and zone DNSKEYs.
-    If *domain* is a subdomain without its own zone cut, checks whether the
-    authoritative zone apex (*apex*) is DNSSEC-secured.
-    """
-    findings: list[Finding] = []
-    has_dnskey = False
-    has_ds = False
-    raw_keys: list[Any] = []
-    raw_ds: list[Any] = []
-    dnskey_records: list[dict[str, Any]] = []
-    ds_records: list[dict[str, Any]] = []
-    lookup_inconclusive = False
 
-    qname = dns.name.from_text(domain)
+def _validity(sigs: Any, now: datetime) -> tuple[bool, datetime | None, datetime | None, str | None]:
+    if not sigs:
+        return False, None, None, "missing_rrsig"
+    inception = min(sig.inception for sig in sigs)
+    expiration = max(sig.expiration for sig in sigs)
+    start = datetime.fromtimestamp(inception, timezone.utc)
+    end = datetime.fromtimestamp(expiration, timezone.utc)
+    if now + CLOCK_SKEW < start:
+        return False, start, end, "signature_not_yet_valid"
+    if now - CLOCK_SKEW > end:
+        return False, start, end, "signature_expired"
+    return True, start, end, None
 
-    # 1. Query DNSKEY on the domain zone
+
+def _validate(rrset: Any, sigs: Any, keys: Any, owner: dns.name.Name, now: datetime) -> tuple[str, str | None, datetime | None, datetime | None]:
+    valid, start, end, reason = _validity(sigs, now)
+    if not valid:
+        return ("indeterminate" if reason == "missing_rrsig" else "bogus"), reason, start, end
+    for sig in sigs:
+        if sig.algorithm not in SUPPORTED_ALGORITHMS | DEPRECATED_ALGORITHMS:
+            return "indeterminate", "unsupported_algorithm", start, end
     try:
-        ans_key = await resolver.resolve(domain, "DNSKEY")
-        for rr in ans_key:
-            has_dnskey = True
-            raw_keys.append(rr)
-            algo_name = DNSSEC_ALGORITHMS.get(rr.algorithm, f"Unknown ({rr.algorithm})")
-            is_ksk = bool(rr.flags & 1)  # bit 15: SEP flag (Key Signing Key)
-            key_tag_val = _safe_key_tag(rr)
-            dnskey_records.append({
-                "flags": rr.flags,
-                "protocol": rr.protocol,
-                "algorithm": algo_name,
-                "algorithm_id": rr.algorithm,
-                "key_tag": key_tag_val,
-                "key_type": "KSK (Key Signing Key)" if is_ksk else "ZSK (Zone Signing Key)",
-            })
-    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
-        has_dnskey = False
+        dns.dnssec.validate(rrset, sigs, {owner: keys}, now=now.timestamp())
+        return "secure", None, start, end
+    except (dns.dnssec.UnsupportedAlgorithm, NotImplementedError):
+        return "indeterminate", "unsupported_algorithm", start, end
     except Exception:
-        has_dnskey = False
-        lookup_inconclusive = True
+        return "bogus", "signature_validation_failed", start, end
 
-    # 2. Query DS (Delegation Signer) at parent zone
+
+async def _resolve(resolver: Any, name: dns.name.Name, kind: str) -> Any:
     try:
-        ans_ds = await resolver.resolve(domain, "DS")
-        for rr in ans_ds:
-            has_ds = True
-            raw_ds.append(rr)
-            ds_records.append({
-                "key_tag": rr.key_tag,
-                "algorithm": DNSSEC_ALGORITHMS.get(rr.algorithm, str(rr.algorithm)),
-                "digest_type": rr.digest_type,
-            })
-    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
-        has_ds = False
-    except Exception:
-        has_ds = False
-        lookup_inconclusive = True
+        return await resolver.resolve(name, kind, search=False, raise_on_no_answer=False, tcp=False)
+    except TypeError as exc:
+        if "keyword" not in str(exc):
+            raise
+        return await resolver.resolve(name, kind)
 
-    # If unsigned, check if parent zone apex has DNSSEC
-    inherited_from: str | None = None
-    if not has_dnskey and not has_ds and apex and apex.lower().rstrip(".") != domain.lower().rstrip("."):
+
+def _anchor_ds(anchors: list[dict[str, Any]]) -> list[Any]:
+    return [dns.rdata.from_text(dns.rdataclass.IN, dns.rdatatype.DS,
+            f"{a['key_tag']} {a['algorithm']} {a['digest_type']} {a['digest']}") for a in anchors]
+
+
+async def check_dnssec(domain: str, resolver: dns.asyncresolver.Resolver, apex: str | None = None) -> tuple[dict[str, Any], list[Finding]]:
+    """Keep established scan behavior until the signed-chain test matrix is complete."""
+    if os.environ.get("ENABLE_DNSSEC_CHAIN_VALIDATION", "false").strip().lower() not in ("1", "true", "yes"):
+        return await _legacy_delegation_check(domain, resolver, apex)
+    return await validate_dnssec_chain(domain, resolver, apex)
+
+
+async def _legacy_delegation_check(domain: str, resolver: Any, apex: str | None) -> tuple[dict[str, Any], list[Finding]]:
+    qname = dns.name.from_text((apex or domain).rstrip("."))
+    try:
+        keys = await resolver.resolve(qname, "DNSKEY")
+        ds = await resolver.resolve(qname, "DS")
+        matched_tag = None
+        for key in keys:
+            for record in ds:
+                try:
+                    calculated = dns.dnssec.make_ds(qname, key, record.digest_type)
+                    if dns.dnssec.key_id(key) == record.key_tag and calculated.digest == record.digest:
+                        matched_tag = record.key_tag
+                        break
+                except Exception:
+                    continue
+        status = "delegation_match_verified" if matched_tag else "bogus"
+        result = _base(status, None if matched_tag else "ds_dnskey_mismatch")
+        result.update({"validator": "legacy", "enabled": bool(matched_tag), "delegation_verified": bool(matched_tag), "has_dnskey": True, "has_ds": True,
+                       "dnskey_count": len(keys), "ds_count": len(ds), "matching_key_tag": matched_tag})
+        return result, [Finding(severity="info" if matched_tag else "error", record_type="DNSSEC", message="Legacy DNSSEC DS/DNSKEY delegation comparison; full chain validation is disabled." if matched_tag else "DNSSEC DS does not match a DNSKEY.")]
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        result = _base("unsigned", "no_ds_or_dnskey")
+        result["validator"] = "legacy"
+        return result, [Finding(severity="info", record_type="DNSSEC", message="DNSSEC records were not found; legacy delegation check only.")]
+    except Exception:
+        result = _base("inconclusive", "legacy_lookup_failed")
+        result["validator"] = "legacy"
+        return result, [Finding(severity="info", record_type="DNSSEC", message="DNSSEC lookup failed; result is inconclusive.")]
+
+
+async def validate_dnssec_chain(domain: str, resolver: dns.asyncresolver.Resolver, apex: str | None = None) -> tuple[dict[str, Any], list[Finding]]:
+    """Validate DNSKEY/DS/SOA signatures from root trust anchor to the zone; AD is ignored."""
+    now = datetime.now(timezone.utc)
+    if hasattr(resolver, "use_edns"):
+        resolver.use_edns(edns=0, ednsflags=dns.flags.DO)
+    try:
+        anchors = load_root_trust_anchors(now=now)
+    except AnchorFileError:
+        return _base("indeterminate", "trust_anchor_file_invalid"), [Finding(severity="info", record_type="DNSSEC", message="DNSSEC trust anchors are unavailable.")]
+    zone = dns.name.from_text((apex or domain).rstrip(".").lower())
+    labels = zone.labels[:-1]
+    chain_zones = [dns.name.root] + [dns.name.Name(tuple(labels[index:]) + (b"",)) for index in range(len(labels) - 1, -1, -1)]
+    chain = []
+    parent_keys = None
+    state, reason = "secure", None
+    for index, current in enumerate(chain_zones):
+        entry = {"zone": current.to_text(omit_final_dot=True) or ".", "key_tags": [], "ds_digests": [], "algorithms": [], "signature_inception": None, "signature_expiration": None, "result": "indeterminate", "reason_code": None}
         try:
-            apex_qname = dns.name.from_text(apex)
-            ans_apex_key = await resolver.resolve(apex, "DNSKEY")
-            ans_apex_ds = await resolver.resolve(apex, "DS")
-            if ans_apex_key and ans_apex_ds:
-                has_dnskey = True
-                has_ds = True
-                inherited_from = apex.lower().rstrip(".")
-                qname = apex_qname
-                for rr in ans_apex_key:
-                    raw_keys.append(rr)
-                    key_tag_val = _safe_key_tag(rr)
-                    dnskey_records.append({
-                        "flags": rr.flags,
-                        "protocol": rr.protocol,
-                        "algorithm": DNSSEC_ALGORITHMS.get(rr.algorithm, f"Unknown ({rr.algorithm})"),
-                        "algorithm_id": rr.algorithm,
-                        "key_tag": key_tag_val,
-                        "key_type": "KSK (Parent Zone)" if (rr.flags & 1) else "ZSK (Parent Zone)",
-                    })
-                for rr in ans_apex_ds:
-                    raw_ds.append(rr)
-                    ds_records.append({
-                        "key_tag": rr.key_tag,
-                        "algorithm": DNSSEC_ALGORITHMS.get(rr.algorithm, str(rr.algorithm)),
-                        "digest_type": rr.digest_type,
-                    })
-        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
-            pass
-        except Exception:
-            lookup_inconclusive = True
-
-    # 3. Cryptographic Verification (Item 7)
-    cryptographically_verified = False
-    matching_tag = 0
-    if has_dnskey and has_ds and raw_keys and raw_ds:
-        cryptographically_verified, matching_tag = verify_ds_matches_dnskey(qname, raw_keys, raw_ds)
-
-    # 4. Determine status based on cryptographic verification
-    if has_dnskey and has_ds:
-        algo = dnskey_records[0]["algorithm"] if dnskey_records else "Standard"
-        if cryptographically_verified:
-            status = "delegation_match_verified"
-            if inherited_from:
-                findings.append(Finding(
-                    severity="info",
-                    record_type="DNSSEC",
-                    message=f"Zone apex '{inherited_from}' DS record matches zone DNSKEY #{matching_tag} digest ({algo}). "
-                            f"Hostname '{domain}' is protected under verified parent apex DS delegation (RRSIG signatures and root trust anchor chain not evaluated)."
-                ))
+            answer = await _resolve(resolver, current, "DNSKEY")
+            keys, key_sigs = _rrset(answer, current, dns.rdatatype.DNSKEY)
+            if not keys:
+                if index:
+                    entry.update(result="insecure", reason_code="ds_absent_denial_not_validated")
+                    chain.append(entry)
+                    state, reason = "insecure", "insecure (denial not validated)"
+                else:
+                    entry.update(reason_code="root_dnskey_absent")
+                    chain.append(entry)
+                    state, reason = "indeterminate", "root DNSKEY response unavailable"
+                break
+            entry["key_tags"] = [dns.dnssec.key_id(k) for k in keys]
+            entry["algorithms"] = sorted({ALGORITHM_NAMES.get(k.algorithm, f"algorithm-{k.algorithm}") for k in keys})
+            entry["deprecated_algorithms"] = sorted({k.algorithm for k in keys if k.algorithm in DEPRECATED_ALGORITHMS})
+            if index == 0:
+                ds_set = _anchor_ds(anchors)
+                matches = any(dns.dnssec.key_id(k) == ds.key_tag and dns.dnssec.make_ds(current, k, ds.digest_type).digest == ds.digest for k in keys for ds in ds_set)
+                if not matches:
+                    entry.update(result="bogus", reason_code="root_anchor_mismatch")
+                    chain.append(entry)
+                    state, reason = "bogus", "root DNSKEY did not match a valid IANA anchor"
+                    break
             else:
-                findings.append(Finding(
-                    severity="info",
-                    record_type="DNSSEC",
-                    message=f"DNSSEC parent delegation verified: DS record matches zone DNSKEY #{matching_tag} digest ({algo}). "
-                            f"DS-to-DNSKEY delegation link verified (full RRSIG signatures and root trust anchor chain not evaluated)."
-                ))
-        else:
-            status = "bogus"
-            findings.append(Finding(
-                severity="error",
-                record_type="DNSSEC",
-                message="DNSSEC Cryptographic Failure: Parent registry contains DS records, but none match the zone's published DNSKEY digests. "
-                        "Resolvers validating DNSSEC will reject queries with SERVFAIL (broken trust chain)."
-            ))
-    elif has_dnskey and not has_ds:
-        status = "incomplete_chain"
-        findings.append(Finding(
-            severity="warning",
-            record_type="DNSSEC",
-            message="DNSKEY records exist in zone, but no DS delegation record found in parent registry. "
-                    "DNSSEC chain-of-trust is unanchored and not verified by recursive resolvers."
-        ))
-    elif not has_dnskey and has_ds:
-        status = "bogus"
-        findings.append(Finding(
-            severity="error",
-            record_type="DNSSEC",
-            message="Parent registry contains a DS record, but zone lacks matching DNSKEY records! "
-                    "Resolvers validating DNSSEC will reject queries with SERVFAIL."
-        ))
-    elif lookup_inconclusive:
-        status = "inconclusive"
-        findings.append(Finding(
-            severity="info",
-            record_type="DNSSEC",
-            message="DNSSEC could not be verified because one or more DNS queries failed. This result does not mean the domain is unsigned.",
-        ))
-    else:
-        status = "unsigned"
-        findings.append(Finding(
-            severity="info",
-            record_type="DNSSEC",
-            message="DNSSEC is not enabled for this domain. The domain is vulnerable to DNS cache poisoning "
-                    "(Kaminsky attacks). Consider enabling DNSSEC at your DNS provider."
-        ))
+                ds_answer = await _resolve(resolver, current, "DS")
+                ds_rrset, ds_sigs = _rrset(ds_answer, current, dns.rdatatype.DS)
+                if not ds_rrset:
+                    entry.update(result="insecure", reason_code="ds_absent_denial_not_validated")
+                    chain.append(entry)
+                    state, reason = "insecure", "insecure (denial not validated)"
+                    break
+                entry["ds_digests"] = [{"digest_type": ds.digest_type, "digest": ds.digest.hex().upper()} for ds in ds_rrset]
+                checked = _validate(ds_rrset, ds_sigs, parent_keys, chain_zones[index - 1], now)
+                if checked[0] != "secure":
+                    entry.update(result=checked[0], reason_code=checked[1])
+                    chain.append(entry)
+                    state, reason = checked[0], checked[1]
+                    break
+                match = any(dns.dnssec.key_id(k) == ds.key_tag and dns.dnssec.make_ds(current, k, ds.digest_type).digest == ds.digest for k in keys for ds in ds_rrset)
+                if not match:
+                    entry.update(result="bogus", reason_code="ds_dnskey_mismatch")
+                    chain.append(entry)
+                    state, reason = "bogus", "DS did not match a child DNSKEY"
+                    break
+            checked = _validate(keys, key_sigs, keys, current, now)
+            if checked[0] != "secure":
+                entry.update(result=checked[0], reason_code=checked[1])
+                chain.append(entry)
+                state, reason = checked[0], checked[1]
+                break
+            entry.update(result="secure", signature_inception=checked[2].isoformat() if checked[2] else None, signature_expiration=checked[3].isoformat() if checked[3] else None)
+            if checked[3] and checked[3] - now < SIGNATURE_WARNING:
+                entry["signature_warning"] = "expires_within_7_days"
+            if current == zone:
+                soa_answer = await _resolve(resolver, current, "SOA")
+                soa, soa_sigs = _rrset(soa_answer, current, dns.rdatatype.SOA)
+                checked_soa = _validate(soa, soa_sigs, keys, current, now) if soa else ("indeterminate", "soa_missing", None, None)
+                if checked_soa[0] != "secure":
+                    entry.update(result=checked_soa[0], reason_code=checked_soa[1])
+                    chain.append(entry)
+                    state, reason = checked_soa[0], checked_soa[1]
+                    break
+            chain.append(entry)
+            parent_keys = keys
+        except ScanBudgetExhausted:
+            entry.update(reason_code="budget_exhausted")
+            chain.append(entry)
+            state, reason = "indeterminate", "DNSSEC reserved query budget exhausted"
+            break
+        except (dns.exception.Timeout, dns.resolver.NoNameservers, dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.FormError):
+            entry.update(reason_code="dns_response_unavailable")
+            chain.append(entry)
+            state, reason = "indeterminate", "DNS response unavailable or truncated after TCP retry"
+            break
+        except Exception:
+            entry.update(reason_code="validation_incomplete")
+            chain.append(entry)
+            state, reason = "indeterminate", "DNSSEC validation could not be completed"
+            break
+    verified = state == "secure" and len(chain) == len(chain_zones)
+    result = _base(state, reason)
+    result["validator"] = "chain"
+    result.update({"enabled": state in ("secure", "bogus"), "delegation_verified": verified, "cryptographically_verified": verified, "chain": chain,
+                   "has_dnskey": bool(chain and chain[-1]["key_tags"]), "has_ds": bool(len(chain) > 1 and chain[-1]["ds_digests"]),
+                   "dnskey_count": len(chain[-1]["key_tags"]) if chain else 0, "ds_count": len(chain[-1]["ds_digests"]) if chain else 0,
+                   "keys": [{"key_tag": k, "algorithm": a} for k, a in zip(chain[-1]["key_tags"], chain[-1]["algorithms"])] if chain else [],
+                   "delegation_signers": chain[-1]["ds_digests"] if chain else [], "matching_key_tag": chain[-1]["key_tags"][0] if verified and chain[-1]["key_tags"] else None,
+                   "nsec": {"type": None, "nsec3_opt_out": None, "iteration_limit": NSEC3_MAX_ITERATIONS, "denial_validated": False}})
+    severity, message = (("info", "DNSSEC chain validated from the IANA root trust anchor to the zone.") if state == "secure" else ("error", f"DNSSEC validation failed: {reason}.") if state == "bogus" else ("warning", f"DNSSEC is {reason}.") if state == "insecure" else ("info", "DNSSEC validation is indeterminate; this does not prove the zone is bogus or unsigned."))
+    findings = [Finding(severity=severity, record_type="DNSSEC", message=message)]
+    for node in chain:
+        if node.get("signature_warning"):
+            findings.append(Finding(severity="warning", record_type="DNSSEC", message=f"DNSSEC signature for {node['zone']} expires within 7 days."))
+    return result, findings
 
-    return {
-        # DNSSEC is configured and its delegation link matches. Full RRSIG and
-        # root trust-anchor validation is outside this module's current scope.
-        "enabled": status == "delegation_match_verified",
-        "delegation_verified": status == "delegation_match_verified",
-        "status": status,
-        "cryptographically_verified": cryptographically_verified,
-        "matching_key_tag": matching_tag if cryptographically_verified else None,
-        "has_dnskey": has_dnskey,
-        "has_ds": has_ds,
-        "dnskey_count": len(dnskey_records),
-        "keys": dnskey_records,
-        "ds_count": len(ds_records),
-        "delegation_signers": ds_records,
-        "inherited_from": inherited_from,
-    }, findings
+
+def _base(status: str, reason: str | None) -> dict[str, Any]:
+    return {"status": status, "reason": reason, "enabled": False, "delegation_verified": False, "cryptographically_verified": False, "has_dnskey": False, "has_ds": False, "dnskey_count": 0, "ds_count": 0, "keys": [], "delegation_signers": [], "chain": []}

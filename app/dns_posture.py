@@ -132,7 +132,7 @@ async def check_wildcard_dns(
             definitive_negative += 1
         except Exception as exc:
             # A failed family lookup is not proof that wildcard DNS is absent.
-            lookup_errors.append(type(exc).__name__)
+            lookup_errors.append("DNS lookup failed")
     ips = sorted(set(answers["A"] + answers["AAAA"]))
     status = "detected" if ips else ("inconclusive" if not definitive_negative else "not_detected")
     findings: list[Finding] = []
@@ -195,7 +195,7 @@ async def _direct_authority_observation(
             values = _extract_answer(response, rdtype)
             return rdtype, values if values else None, None if values else "missing_answer"
         except Exception as exc:
-            return rdtype, None, type(exc).__name__
+            return rdtype, None, "DNS lookup failed"
 
     soa_task = query_type("SOA")
     ns_task = query_type("NS")
@@ -206,6 +206,14 @@ async def _direct_authority_observation(
         "nameserver": host,
         "address": address,
         "soa_serial": int(soa_values[0].serial) if soa_values else None,
+        "soa_fields": ({
+            "mname": str(soa_values[0].mname).rstrip(".").lower(),
+            "rname": str(soa_values[0].rname).rstrip(".").lower(),
+            "refresh": int(soa_values[0].refresh),
+            "retry": int(soa_values[0].retry),
+            "expire": int(soa_values[0].expire),
+            "minimum": int(soa_values[0].minimum),
+        } if soa_values else None),
         "ns_records": sorted({str(item.target).rstrip(".").lower() for item in ns_values}) if ns_values else [],
         "errors": {key: value for key, value in (("SOA", soa_error), ("NS", ns_error)) if value},
     }
@@ -236,6 +244,7 @@ async def check_nameserver_consistency(
         observations.extend(host_observations)
 
     serials = {item["soa_serial"] for item in observations if item.get("soa_serial") is not None}
+    soa_fields = {tuple(sorted(item["soa_fields"].items())) for item in observations if item.get("soa_fields")}
     ns_sets = {tuple(item["ns_records"]) for item in observations if item.get("ns_records")}
     broken = [item for item in observations if item.get("errors") or not item.get("soa_serial") or not item.get("ns_records")]
     if broken:
@@ -251,6 +260,12 @@ async def check_nameserver_consistency(
             record_type="NS CONSISTENCY",
             message="Authoritative nameservers returned different SOA serial numbers. Zone data may be out of sync.",
         ))
+    if len(soa_fields) > 1:
+        findings.append(Finding(
+            severity="warning",
+            record_type="NS CONSISTENCY",
+            message="Authoritative nameservers disagree on SOA MNAME, RNAME, or timer values (refresh, retry, expire, minimum). Check zone propagation and secondary configuration.",
+        ))
     if len(ns_sets) > 1:
         findings.append(Finding(
             severity="warning",
@@ -261,5 +276,6 @@ async def check_nameserver_consistency(
         "status": "partial" if broken else "complete",
         "observations": observations,
         "serials_match": len(serials) <= 1,
+        "soa_fields_match": len(soa_fields) <= 1,
         "ns_sets_match": len(ns_sets) <= 1,
     }, findings

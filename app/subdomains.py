@@ -16,7 +16,8 @@ import dns.asyncresolver
 from app.models import Finding
 from app.resolver import _safe_query
 from app.takeover import check_subdomain_takeover
-from app.work_budget import ScanWorkBudget
+from app.work_budget import ScanBudgetExhausted, ScanWorkBudget
+from app.http_config import outbound_http_headers
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +47,10 @@ async def discover_passive_subdomains(
 
     try:
         if not await budget.reserve_http():
-            raise RuntimeError("outbound request budget exhausted")
+            raise ScanBudgetExhausted("outbound request budget exhausted")
         url = f"https://crt.sh/?q=%25.{norm_domain}&output=json"
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; DNSAnalyzer/2.0)"}
-        async with httpx.AsyncClient(timeout=timeout, verify=True) as client:
-            async with client.stream("GET", url, headers=headers) as resp:
+        async with httpx.AsyncClient(timeout=timeout, verify=True, headers=outbound_http_headers()) as client:
+            async with client.stream("GET", url) as resp:
                 if resp.status_code == 200:
                     chunks = []
                     bytes_read = 0
@@ -121,13 +121,13 @@ async def discover_passive_subdomains(
                         message=f"Certificate Transparency lookup returned HTTP {resp.status_code}; no subdomain inventory was produced.",
                     ))
     except Exception as exc:
-        result["status"] = "unavailable"
+        result["status"] = "inconclusive" if isinstance(exc, ScanBudgetExhausted) else "unavailable"
         logger.warning("Certificate Transparency lookup failed (%s)", type(exc).__name__)
         result["reason"] = "Certificate Transparency lookup failed"
         findings.append(Finding(
             severity="info",
             record_type="Inventory",
-            message=f"Certificate Transparency lookup failed ({type(exc).__name__}); subdomain inventory is unavailable.",
+            message="Certificate Transparency lookup failed; subdomain inventory is unavailable.",
         ))
 
     # Cap to max_hosts for responsive performance
@@ -170,7 +170,7 @@ async def discover_passive_subdomains(
             if cname_target:
                 takeover_data, _ = await check_subdomain_takeover(
                     sub,
-                    {"CNAME": {"status": "ok", "records": [cname_target]}},
+                    {"CNAME": {"status": "ok", "records": cnames}},
                     resolver,
                     budget=budget,
                 )
@@ -178,6 +178,7 @@ async def discover_passive_subdomains(
                 "subdomain": sub,
                 "ips": ips,
                 "cname": cname_target,
+                "cnames": cnames,
                 "status": status,
                 "first_seen": discovered_names.get(sub),
                 "risk_tags": risk_tags,

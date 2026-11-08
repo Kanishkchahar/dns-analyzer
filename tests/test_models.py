@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from app.models import (
     AnalyzeRequest,
     AnalyzeResponse,
+    DomainScore,
     EmailAuth,
     EmailScore,
     Finding,
@@ -60,6 +61,17 @@ class TestAnalyzeRequest:
 
 
 class TestDataSchemas:
+    def test_api_response_json_preserves_provisional_grade_suffix(self):
+        response = AnalyzeResponse(
+            domain="example.com",
+            scan_timestamp="2026-11-08 00:00:00 UTC",
+            records={}, findings=[], summary=Summary(errors=0, warnings=0, info=0),
+            domain_score=DomainScore(
+                score=82, grade="B (incomplete)", label="Good (based on 4 of 7 factors)", factors={},
+            ),
+        )
+        assert response.model_dump(mode="json")["domain_score"]["grade"] == "B (incomplete)"
+
     def test_finding_schema(self):
         f = Finding(severity="error", record_type="A", message="Test error message")
         assert f.severity == "error"
@@ -72,6 +84,16 @@ class TestDataSchemas:
         assert finding.code == "DNS-AXFR-001"
         assert finding.explanation["fix"]
         assert "never record contents" in finding.explanation["technical"]
+
+    def test_distinct_findings_get_distinct_stable_codes_with_legacy_generic_code_retained(self):
+        missing_ns = Finding(severity="error", record_type="NS", message="No nameservers found for this domain.")
+        single_ns = Finding(severity="warning", record_type="NS", message="Only one nameserver found — no redundancy.")
+        assert missing_ns.code == "DNS-NS-001"
+        assert single_ns.code == "DNS-NS-003"
+        assert missing_ns.legacy_codes == ["DNS-004"]
+
+        from app.finding_catalog import catalog_for_export
+        assert catalog_for_export()["NS"]["code"] == "DNS-004"
 
     def test_summary_schema(self):
         s = Summary(errors=1, warnings=2, info=3)

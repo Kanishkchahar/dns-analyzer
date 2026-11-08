@@ -18,6 +18,10 @@ class TestNetworkScan:
         payload = b'<!DOCTYPE foo [<!ENTITY x "expanded">]><urlset><url><loc>https://example.com/&x;</loc></url></urlset>'
         assert _parse_sitemap(payload, "example.com") == []
 
+    def test_sitemap_parser_rejects_external_entity_payloads(self):
+        payload = b'<!DOCTYPE foo [<!ENTITY x SYSTEM "file:///etc/passwd">]><urlset><url><loc>&x;</loc></url></urlset>'
+        assert _parse_sitemap(payload, "example.com") == []
+
     def test_robots_and_sitemap_extract_same_host_paths_only(self):
         robots = b"Disallow: /private/\nSitemap: https://example.com/custom-map.xml\nSitemap: https://other.example/map.xml"
         sitemap = b"<urlset><url><loc>https://example.com/docs/start</loc></url><url><loc>https://other.example/private</loc></url></urlset>"
@@ -33,7 +37,7 @@ class TestNetworkScan:
         assert not _same_origin_https_url("https://other.example/next", "example.com")
 
     async def test_common_path_scan_uses_fixed_paths_and_blocks_private_targets(self, monkeypatch):
-        async def reject_private(target, port=443):
+        async def reject_private(target, port=443, resolver=None):
             return False, ["127.0.0.1"], "Unsafe address '127.0.0.1': Loopback blocked"
 
         monkeypatch.setattr("app.network_scan.resolve_and_verify_all_ips", reject_private)
@@ -60,6 +64,22 @@ class TestNetworkScan:
         t_loop = next(t for t in res["targets"] if t["target"] == "127.0.0.1")
         assert t_loop["in_scope_safe"] is False
         assert any("Loopback" in r for r in t_loop["reasons"])
+
+    async def test_list_scan_dns_budget_exhaustion_is_inconclusive(self):
+        from app.work_budget import BudgetedResolver, ScanWorkBudget
+        budget = ScanWorkBudget(dns_queries=0, http_requests=0)
+        result = await run_list_scan(["example.com"], resolver=BudgetedResolver(object(), budget), work_budget=budget)
+        assert result["targets"][0]["status"] == "inconclusive"
+        assert any("budget exhausted" in reason.lower() for reason in result["targets"][0]["reasons"])
+
+    async def test_path_scan_http_budget_exhaustion_is_inconclusive_without_fetch(self):
+        from app.work_budget import ScanWorkBudget
+        budget = ScanWorkBudget(dns_queries=500, http_requests=0)
+        result = await run_common_path_scan(["93.184.216.34"], work_budget=budget)
+        target = result["targets"][0]
+        assert target["status"] == "partial"
+        assert all(path["state"] == "inconclusive" for path in target["paths"])
+        assert all("budget exhausted" in path["error"].lower() for path in target["paths"])
 
     async def test_port_scan_disabled_by_default(self, monkeypatch):
         monkeypatch.delenv("ENABLE_ACTIVE_PORT_SCAN", raising=False)

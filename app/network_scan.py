@@ -18,6 +18,8 @@ import httpx
 
 from app.models import Finding
 from app.tls_check import PinnedIPTransport, is_safe_ip, resolve_and_verify_all_ips
+from app.http_config import outbound_http_headers
+from app.work_budget import BudgetedResolver, ScanBudgetExhausted, ScanWorkBudget
 
 # Curated, safe default ports for standard public infrastructure auditing
 STANDARD_PORTS: dict[int, str] = {
@@ -177,9 +179,12 @@ def verify_port_scan_authorization(
 async def run_list_scan(
     targets: list[str],
     resolver: dns.asyncresolver.Resolver | None = None,
+    work_budget: ScanWorkBudget | None = None,
 ) -> dict[str, Any]:
     """Resolve user-approved target scope without probing ports (bounded concurrency & input validation)."""
     clean_targets = [t.strip() for t in targets if t.strip()]
+    budget = work_budget or ScanWorkBudget()
+    resolver = resolver or BudgetedResolver(dns.asyncresolver.Resolver(), budget)
     list_semaphore = asyncio.Semaphore(10)
 
     async def _resolve_target(target: str) -> dict[str, Any]:
@@ -209,13 +214,14 @@ async def run_list_scan(
 
         # Resolve A and AAAA records with bounded concurrency and timeout
         async with list_semaphore:
-            loop = asyncio.get_running_loop()
             try:
-                addr_info = await asyncio.wait_for(
-                    loop.getaddrinfo(target, None, type=socket.SOCK_STREAM),
-                    timeout=2.5,
-                )
-                all_ips = list(dict.fromkeys(info[4][0] for info in addr_info))
+                async def query(rdtype: str) -> list[str]:
+                    try:
+                        answer = await asyncio.wait_for(resolver.resolve(target, rdtype), timeout=2.5)
+                        return [str(record.address) for record in answer if hasattr(record, "address")]
+                    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+                        return []
+                all_ips = list(dict.fromkeys([ip for kind in ("A", "AAAA") for ip in await query(kind)]))
                 safe_count = 0
                 for ip in all_ips:
                     safe, r = is_safe_ip(ip)
@@ -227,8 +233,12 @@ async def run_list_scan(
                 target_info["in_scope_safe"] = safe_count > 0 and len(target_info["reasons"]) == 0
             except asyncio.TimeoutError:
                 target_info["reasons"].append("Resolution timed out after 2.5 seconds.")
-            except Exception as exc:
-                target_info["reasons"].append(f"Resolution failed: {exc}")
+            except ScanBudgetExhausted:
+                target_info["status"] = "inconclusive"
+                target_info["reasons"].append("DNS query budget exhausted; target resolution is inconclusive.")
+            except Exception:
+                target_info["status"] = "inconclusive"
+                target_info["reasons"].append("Target resolution failed; result is inconclusive.")
 
         return target_info
 
@@ -247,6 +257,8 @@ async def run_list_scan(
 async def run_common_path_scan(
     targets: list[str],
     timeout: float = 3.0,
+    resolver: dns.asyncresolver.Resolver | None = None,
+    work_budget: ScanWorkBudget | None = None,
 ) -> dict[str, Any]:
     """Check fixed public paths and parse same-origin robots/sitemap data, without crawling."""
     clean_targets = [target.strip() for target in targets if target.strip()]
@@ -254,15 +266,18 @@ async def run_common_path_scan(
         raise ValueError("Provide between 1 and 5 target hostnames or public IPs.")
 
     target_semaphore = asyncio.Semaphore(5)
+    budget = work_budget or ScanWorkBudget()
+    resolver = resolver or BudgetedResolver(dns.asyncresolver.Resolver(), budget)
 
     async def _scan_target(target: str) -> dict[str, Any]:
         if len(target) > 253 or not TARGET_SYNTAX_REGEX.fullmatch(target):
             return {"target": target, "status": "invalid", "reason": "Invalid target syntax or length.", "paths": []}
 
         async with target_semaphore:
-            safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(target, port=443)
+            safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(target, port=443, resolver=resolver)
             if not safe_all or not resolved_ips:
-                return {"target": target, "status": "blocked", "reason": reason, "paths": []}
+                exhausted = budget.dns_remaining <= 0
+                return {"target": target, "status": "inconclusive" if exhausted else "blocked", "reason": "DNS query budget exhausted; target resolution is inconclusive." if exhausted else reason, "paths": []}
 
             path_semaphore = asyncio.Semaphore(7)
             url_host = target.strip("[]")
@@ -300,11 +315,14 @@ async def run_common_path_scan(
                     errors: list[str] = []
                     for candidate_ip in resolved_ips:
                         try:
+                            if not await budget.reserve_http():
+                                return {"path": path, "status_code": None, "state": "inconclusive", "location": None, "error": "HTTP request budget exhausted."}
                             transport = PinnedIPTransport(candidate_ip, verify=True)
                             async with httpx.AsyncClient(
                                 transport=transport,
                                 timeout=timeout,
                                 follow_redirects=False,
+                                headers=outbound_http_headers(),
                             ) as client:
                                 request_url = f"{origin}{path}"
                                 async with client.stream("GET", request_url) as response:
@@ -317,14 +335,17 @@ async def run_common_path_scan(
                                         redirect_url = urljoin(request_url, location)
                                         if _same_origin_https_url(redirect_url, target_host):
                                             try:
+                                                if not await budget.reserve_http():
+                                                    return {"path": path, "status_code": status_code, "state": "inconclusive", "location": location, "error": "HTTP request budget exhausted."}
                                                 # Re-resolve and apply the same public-IP filter before one same-origin hop.
-                                                redirect_safe, redirect_ips, redirect_reason = await resolve_and_verify_all_ips(target_host, port=443)
+                                                redirect_safe, redirect_ips, redirect_reason = await resolve_and_verify_all_ips(target_host, port=443, resolver=resolver)
                                                 if redirect_safe and redirect_ips:
                                                     redirect_transport = PinnedIPTransport(redirect_ips[0], verify=True)
                                                     async with httpx.AsyncClient(
                                                         transport=redirect_transport,
                                                         timeout=timeout,
                                                         follow_redirects=False,
+                                                        headers=outbound_http_headers(),
                                                     ) as redirect_client:
                                                         async with redirect_client.stream("GET", redirect_url) as redirected:
                                                             final_status = redirected.status_code
@@ -332,8 +353,8 @@ async def run_common_path_scan(
                                                                 body = await _read_limited(redirected)
                                                 else:
                                                     redirect_error = f"Same-host redirect blocked by SSRF policy: {redirect_reason}"
-                                            except Exception as exc:
-                                                redirect_error = f"Same-host redirect check failed: {type(exc).__name__}"
+                                            except Exception:
+                                                redirect_error = "Same-host redirect check failed; result is inconclusive."
                                     elif (path in ("/robots.txt", "/sitemap.xml") or path in declared_sitemap_paths) and 200 <= status_code < 300:
                                         body = await _read_limited(response)
                                     if body:
@@ -346,11 +367,9 @@ async def run_common_path_scan(
                                         "redirect_status_code": final_status,
                                         "error": redirect_error,
                                     }
-                        except (httpx.TimeoutException, httpx.NetworkError, OSError) as exc:
-                            errors.append(f"{candidate_ip}: {type(exc).__name__}")
-                        except Exception as exc:
-                            errors.append(f"{candidate_ip}: {type(exc).__name__}")
-                    return {"path": path, "status_code": None, "state": "unavailable", "location": None, "error": "; ".join(errors)}
+                        except Exception:
+                            errors.append("Connection failed; result is inconclusive.")
+                    return {"path": path, "status_code": None, "state": "inconclusive" if "budget exhausted" in ";".join(errors).lower() else "unavailable", "location": None, "error": "; ".join(errors)}
 
             path_results = await asyncio.gather(*(_check_path(path) for path in COMMON_WEB_PATHS))
             custom_sitemaps = [
@@ -389,6 +408,7 @@ async def run_port_scan(
     confirmed: bool = False,
     timeout: float = 1.5,
     auth_header: str | None = None,
+    resolver: dns.asyncresolver.Resolver | None = None,
 ) -> dict[str, Any]:
     """Execute scoped, opt-in port and service verification on approved target."""
     if not is_active_scan_allowed():
@@ -429,10 +449,10 @@ async def run_port_scan(
 
     # Resolve target and enforce strict SSRF check across all resolved IPs
     clean_host = target.strip().lower().rstrip(".")
-    safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(clean_host, port=target_ports[0])
+    safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(clean_host, port=target_ports[0], resolver=resolver)
     if not safe_all or not resolved_ips:
         return {
-            "status": "blocked",
+            "status": "inconclusive" if reason.startswith("DNS query budget exhausted") else "blocked",
             "message": f"SSRF Guard: Target '{clean_host}' cannot be probed ({reason}). Scanning aborted.",
         }
 

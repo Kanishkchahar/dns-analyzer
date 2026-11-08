@@ -1,0 +1,40 @@
+{
+  "source_url": "https://data.iana.org/root-anchors/root-anchors.xml",
+  "retrieved_utc": "2026-11-08",
+  "xml_sha256": "3ccaab38830025ee0a0f6c1f25769427544f81ea2865aa860468f3ef5278b908",
+  "anchors": [
+    {
+      "id": "Kjqmt7v",
+      "key_tag": 19036,
+      "algorithm": 8,
+      "digest_type": 2,
+      "digest": "49AAC11D7B6F6446702E54A1607371607A1A41855200FD2CE1CDDE32F24E8FB5",
+      "public_key": null,
+      "validFrom": "2010-07-15T00:00:00+00:00",
+      "validUntil": "2019-01-11T00:00:00+00:00",
+      "revoked": false
+    },
+    {
+      "id": "Klajeyz",
+      "key_tag": 20326,
+      "algorithm": 8,
+      "digest_type": 2,
+      "digest": "E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D",
+      "public_key": "AwEAAaz/tAm8yTn4Mfeh5eyI96WSVexTBAvkMgJzkKTOiW1vkIbzxeF3+/4RgWOq7HrxRixHlFlExOLAJr5emLvN7SWXgnLh4+B5xQlNVz8Og8kvArMtNROxVQuCaSnIDdD5LKyWbRd2n9WGe2R8PzgCmr3EgVLrjyBxWezF0jLHwVN8efS3rCj/EWgvIWgb9tarpVUDK/b58Da+sqqls3eNbuv7pr+eoZG+SrDK6nWeL3c6H5Apxz7LjVc1uTIdsIXxuOLYA4/ilBmSVIzuDWfdRUfhHdY6+cn8HFRm+2hM8AnXGXws9555KrUB5qihylGa8subX2Nn6UwNR1AkUTV74bU=",
+      "validFrom": "2017-02-02T00:00:00+00:00",
+      "validUntil": null,
+      "revoked": false
+    },
+    {
+      "id": "Kmyv6jo",
+      "key_tag": 38696,
+      "algorithm": 8,
+      "digest_type": 2,
+      "digest": "683D2D0ACB8C9B712A1948B27F741219298D0A450D612C483AF444A4C0FB2B16",
+      "public_key": "AwEAAa96jeuknZlaeSrvyAJj6ZHv28hhOKkx3rLGXVaC6rXTsDc449/cidltpkyGwCJNnOAlFNKF2jBosZBU5eeHspaQWOmOElZsjICMQMC3aeHbGiShvZsx4wMYSjH8e7Vrhbu6irwCzVBApESjbUdpWWmEnhathWu1jo+siFUiRAAxm9qyJNg/wOZqqzL/dL/q8PkcRU5oUKEpUge71M3ej2/7CPqpdVwuMoTvoB+ZOT4YeGyxMvHmbrxlFzGOHOijtzN+u1TQNatX2XBuzZNQ1K+s2CXkPIZo7s6JgZyvaBevYtxPvYLw4z9mR7K2vaF18UYH9Z9GNUUeayffKC73PYc=",
+      "validFrom": "2024-07-18T00:00:00+00:00",
+      "validUntil": null,
+      "revoked": false
+    }
+  ]
+}

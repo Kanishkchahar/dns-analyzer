@@ -1,11 +1,15 @@
 """Pydantic request/response schemas for the DNS Analyzer API."""
 
 import re
+import logging
+import os
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.finding_catalog import get_finding_guidance
+from app.finding_catalog import get_finding_guidance, known_finding_codes, legacy_codes_for
+
+_finding_logger = logging.getLogger(__name__)
 
 
 DOMAIN_RE = re.compile(
@@ -57,6 +61,7 @@ class Finding(BaseModel):
     record_type: str
     message: str
     code: str = "GEN-001"
+    legacy_codes: list[str] = Field(default_factory=list)
     explanation: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -64,8 +69,19 @@ class Finding(BaseModel):
     def attach_catalog_entry(cls, value: Any) -> Any:
         if isinstance(value, dict):
             value = dict(value)
-            guidance = get_finding_guidance(value.get("record_type", ""), value.get("message", ""))
+            record_type = value.get("record_type", "")
+            guidance = get_finding_guidance(record_type, value.get("message", ""))
             value.setdefault("code", guidance["code"])
+            if value["code"] not in known_finding_codes():
+                unknown_code = value["code"]
+                _finding_logger.error("Finding code %r is missing from catalog; using GEN-001", unknown_code)
+                if os.environ.get("PYTEST_CURRENT_TEST"):
+                    raise ValueError(f"Finding code {unknown_code!r} is missing from the finding catalog.")
+                value["code"] = "GEN-001"
+                guidance = get_finding_guidance("UNKNOWN", "")
+                value["legacy_codes"] = []
+                value["explanation"] = guidance
+            value.setdefault("legacy_codes", legacy_codes_for(guidance, record_type))
             value.setdefault("explanation", guidance)
         return value
 
@@ -117,7 +133,7 @@ class RemediationFix(BaseModel):
 class DomainFactorScore(BaseModel):
     category: str
     weight: int
-    score: int
+    score: float | None
     max_score: int
     status: str
     summary: str
@@ -141,6 +157,7 @@ class AnalyzeResponse(BaseModel):
     summary: Summary
     zone_metadata: dict[str, Any] | None = None
     domain_score: DomainScore | None = None
+    score_breakdown: dict[str, Any] = Field(default_factory=dict)
     email_auth: EmailAuth | None = None
     security: SecurityAudit | None = None
     tls: dict[str, Any] | None = None
@@ -183,3 +200,4 @@ class PortScanRequest(BaseModel):
     target: str
     ports: list[int] | None = None
     confirmed: bool = False
+    auth_token: str | None = None

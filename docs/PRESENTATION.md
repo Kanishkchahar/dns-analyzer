@@ -1,8 +1,8 @@
-# 🛡️ DNS Analyzer v2 — Security Posture Cockpit
+# 🛡️ DNS Analyzer 2.2.0 — Security Posture Cockpit
 ## Master Presentation, Demo Script & Technical Viva Reference
 
 > **Project Author:** Kanishk  
-> **Version:** 2.1.0 — Security Posture Cockpit Edition
+> **Version:** 2.2.0 — Security Posture Cockpit Edition
 > **Tech Stack:** Python 3.11+ · FastAPI · dnspython · Vanilla JS · Jinja2 · Uvicorn · Pytest
 
 ---
@@ -24,7 +24,7 @@
 
 ## 1. Elevator Pitch & Opening Statement
 
-> *"Good morning / afternoon. Today, I am presenting **DNS Analyzer v2 — Security Posture Cockpit Edition**.*  
+> *"Good morning / afternoon. Today, I am presenting **DNS Analyzer 2.2.0 — Security Posture Cockpit Edition**.*
 >  
 > *DNS is the foundational routing fabric of the modern internet, and email authentication is our frontline defense against identity spoofing and credential theft. Yet, misconfigured DNS zones silently bring down mission-critical platforms, cause transactional emails to be marked as spam, and expose companies to catastrophic subdomain hijacking.*  
 >  
@@ -52,9 +52,9 @@ bash run.sh
 
 ### Key Features to Highlight During the Demo:
 1. ⚡ **Asynchronous Concurrency**: *"Independent DNS and security checks run concurrently with bounded timeouts. Results can vary with DNS, CT, and target response times."*
-2. 🍱 **Bento Grid Dashboard**: *"The score ring summarizes DNS and email posture; TLS, MTA-STS, TLS-RPT, and BIMI results are reported separately and do not affect this score."*
-3. 🛡️ **Takeover Fingerprint Checks**: *"Checks known CNAME service patterns. An exact bounded page-fingerprint match is confirmed; DNS-only evidence remains a candidate. Catalog patterns are heuristic and require manual confirmation."*
-4. 🔐 **DNSSEC Delegation Check**: *"Inspects published DNSKEY and DS records and checks for a matching delegation. Full RRSIG cryptographic validation and root trust-chain verification are not implemented yet."*
+2. 🍱 **Bento Grid Dashboard**: *"The score uses seven weighted factors. Open the score breakdown for points, incomplete checks, excluded factors, and caps."*
+3. 🛡️ **Takeover Fingerprint Checks**: *"Checks known CNAME service patterns. DNS-only evidence is a candidate unless an entry is explicitly verified and opts into NXDOMAIN confirmation. Page matches on the currently unverified catalog are candidates, not confirmed findings."*
+4. 🔐 **DNSSEC Chain Validation**: *"Validates DNSKEY, DS and SOA signatures from the IANA root trust anchor through the zone; reports insecure denial as unvalidated when the parent has no DS."*
 5. 📈 **SPF 10-Lookup Recursion Meter & Flattener**: *"Visual bar tracking lookups against the strict RFC 7208 limit of 10, with an automatic CIDR flattener that optimizes over-limit records to 0 lookups."*
 6. ✨ **BIMI Brand Inbox Validation**: *"Audits whether the domain publishes a verified SVG logo and satisfies strict DMARC criteria for official avatar display in Gmail and Apple Mail."*
 7. 🔧 **Copy-Paste Fix Drafts & BIND Export**: *"Generates draft record values, provider-specific guidance, and a BIND snippet. You review and apply suggested changes yourself."*
@@ -92,8 +92,8 @@ The dashboard overview is structured as a **Two-Tier Security Posture Cockpit** 
 └─────────────────────────────────────┴──────────────────────────────────┴───────────────────────────────┘
 ```
 
-*The wireframe above is illustrative. Scores, counts, and statuses depend on the domain scanned and are not a promised result. The displayed score covers DNS and email posture; TLS, MTA-STS, TLS-RPT, and BIMI findings do not affect it.*
-*A confirmed AXFR caps the score at 39 (grade F). An inconclusive DNSSEC result is shown separately and receives no DNSSEC points.*
+*The wireframe above is illustrative. Scores, counts, and statuses depend on the domain scanned and are not a promised result. The score weights infrastructure 20, email authentication 25, DNSSEC 20, takeover evidence 15, TLS/web 10, mail transport 5, and DNS posture 5. Not-applicable factors are excluded and the remaining weights are normalized to 100.*
+*A factor with no completed checks is excluded with status inconclusive; not-applicable factors are also excluded. The remaining factors are normalized to 100 and the score label shows `based on X of Y factors`. If excluded factors exceed 30% of total weight, the grade is provisional and shown as `(incomplete)`. For the 15-point takeover factor, safe earns 15, candidate earns 6.75 (`15 × 0.45`) and deducts 8.25 (`15 × (1 − 0.45)`), confirmed earns 0 and triggers the cap of 39; inconclusive and not-applicable are excluded and never trigger a cap. AXFR caps at 54 and bogus DNSSEC at 39.*
 
 ### Design Notes:
 1. **Dominant Visual Centerpiece**: The animated SVG health ring sits on the left, anchoring the dashboard. Executives and non-technical stakeholders instantly comprehend domain health in 3 seconds.
@@ -107,11 +107,11 @@ The dashboard overview is structured as a **Two-Tier Security Posture Cockpit** 
 ### The Problem:
 * **72% of organizations** suffer DNS outages, with an average downtime cost exceeding $900,000 per incident (EfficientIP Global DNS Threat Report).
 * **91% of targeted cyberattacks** initiate via spear-phishing or domain spoofing (FBI Internet Crime Report).
-* **Stale CNAMEs** can point to third-party resources that may be claimable. This project uses provider fingerprints; it does not perform CVE lookups or prove provider-side claimability.
+* **Stale CNAMEs** can point to third-party resources that may be claimable. This project uses provider fingerprints; it does not provide CVE-based threat hunting or prove provider-side claimability.
 * Traditional utilities (`dig`, `nslookup`) are single-query, CLI-only, and provide no contextual policy analysis or remediation.
 
 ### The Solution:
-DNS Analyzer v2 combines DNS and email configuration checks, partial DNSSEC delegation inspection, selected web checks, and known-pattern takeover detection in a browser dashboard. The backend uses Python dependencies; the browser interface is served as static HTML, CSS, and JavaScript without a frontend build step.
+DNS Analyzer 2.2.0 combines DNS and email configuration checks, partial DNSSEC delegation inspection, selected web checks, and known-pattern takeover detection in a browser dashboard. The backend uses Python dependencies; the browser interface is served as static HTML, CSS, and JavaScript without a frontend build step.
 
 ---
 
@@ -172,7 +172,7 @@ The main analysis runs the checks below. Common web path checks and active port 
 * **What It Tells You**: Returns the IPv4 addresses where the domain's web servers or proxy edge nodes reside.
 * **Why It Is Important**: Fundamental to web connectivity. If an `A` record is absent and no `AAAA` or `CNAME` exists, the domain is completely dark and unresolvable for 90%+ of internet users.
 
-#### 2. IPv6 Dual-Stack Resolution Scan (`AAAA` Records)
+#### 2. IPv6 Record Presence (`AAAA` Records)
 * **What It Does**: Queries the domain for 128-bit IPv6 address records (`AAAA`).
 * **What It Tells You**: Confirms whether the domain supports native IPv6 routing or is legacy IPv4-only.
 * **Why It Is Important**: Over 45% of global Google users now access services via IPv6. On mobile networks (5G) and emerging ISP infrastructure that operate IPv6-only, lack of `AAAA` records causes traffic to route through translation gateways (NAT64/DNS64), adding latency and potential connection drops.
@@ -185,7 +185,7 @@ The main analysis runs the checks below. Common web path checks and active port 
 #### 4. Nameserver Redundancy & Fault Tolerance Scan (RFC 1035 §2.2)
 * **What It Does**: Counts the number of distinct authoritative nameservers and validates redundancy (minimum of 2 required).
 * **What It Tells You**: Confirms whether the domain has distributed DNS resilience or a Single Point of Failure (SPOF).
-* **Why It Is Important**: If a domain has only 1 nameserver and that server goes down, crashes, or is DDoS'd, all services across the organization (website, email, API, VPN) instantly go offline. RFC 1035 mandates at least 2 independent nameservers.
+* **Why It Is Important**: A single nameserver leaves the zone without a second configured authority if that server becomes unavailable. Operational guidance recommends multiple nameservers; this scanner counts NS hostnames and does not prove their network or provider independence.
 
 #### 5. Nameserver Host Address Resolution Check
 * **What It Does**: Resolves each authoritative nameserver hostname to an underlying IP address.
@@ -239,7 +239,7 @@ The main analysis runs the checks below. Common web path checks and active port 
 * **Why It Is Important**: RFC 7208 §3.2 mandates that a domain MUST NOT publish multiple SPF records. When receiving mail servers encounter multiple SPF records, they immediately return `PermError`, causing legitimate marketing, transactional, and executive emails to be marked as spam or dropped.
 
 #### 13. SPF Recursive 10-Lookup Limit & Tree Traversal Scan (RFC 7208 §4.6.4)
-* **What It Does**: Recursively traverses and counts every DNS lookup triggered by `include:`, `a`, `mx`, `ptr`, and `redirect` mechanisms.
+* **What It Does**: Recursively traverses and counts DNS lookups triggered by `include:`, `a`, `mx`, `ptr`, and `redirect` mechanisms, subject to recursion and scan time limits.
 * **What It Tells You**: The exact number of DNS lookups required to evaluate the SPF record, warning if approaching the limit (8–10) or in violation (>10).
 * **Why It Is Important**: RFC 7208 limits lookups to 10 to prevent infinite recursive DNS amplification attacks. When a company uses Google Workspace (1 lookup) + Zendesk (2 lookups) + Salesforce (4 lookups) + SendGrid (3 lookups) + HubSpot (2 lookups) = 12 lookups, the record fails with `PermError`. Receivers stop reading the record and treat legitimate mail as unauthenticated.
 
@@ -279,16 +279,17 @@ The main analysis runs the checks below. Common web path checks and active port 
 
 #### 18. Subdomain Takeover Fingerprints
 * **What It Does**: Checks CNAME targets against a local catalog of 10 provider patterns. For HTTP patterns, the scanner makes a pinned HTTPS request with redirects disabled, a short timeout, a 16 KiB response cap, and a shared per-scan request budget.
-* **What It Tells You**: An exact stored page fingerprint is reported as confirmed; DNS-only failure is reported as a candidate, never proof of provider-side claimability.
-* **Limit**: The catalog is heuristic and its entries have not all been independently checked against live provider accounts. A match still needs owner/provider confirmation. This is not a CVE lookup service.
+* **What It Tells You**: DNS-only evidence is a `candidate` by default. A bounded page-text match is also a candidate while the catalog entry is unverified. Only a verified entry can produce a confirmed page match, and only an explicitly opted-in verified NXDOMAIN rule can produce a confirmed DNS result; neither proves claimability.
+* **Limit**: All 10 shipped entries are marked unverified and have NXDOMAIN confirmation disabled. The scanner uses a small heuristic fingerprint catalog; it does not provide CVE-based threat hunting.
 
-#### 19. DNSSEC Delegation Inspection (RFC 4033, 4034, 4035)
+#### 19. DNSSEC Chain Validation (RFC 4033, 4034, 4035)
 * **What It Does**: Queries DNSKEY and DS records, reports key algorithms, and checks whether a parent DS digest matches a published DNSKEY.
 * **What It Tells You**: Shows whether the observed delegation records match. It does not validate RRSIGs or construct the complete root-to-domain trust chain.
-* **Why It Is Important**: A mismatched DS and DNSKEY can cause validating resolvers to treat a signed zone as bogus. This check is a useful deployment signal, not a full DNSSEC validator.
+* **Why It Is Important**: The current validator checks DNSKEY, DS and SOA signatures from IANA root anchors. An unsigned delegation is labeled `insecure (denial not validated)` because authenticated NSEC/NSEC3 denial is not implemented.
 
 #### 20. BIMI (Brand Indicators for Message Identification) Check (RFC 8617)
-* **What It Does**: Queries `default._bimi.{domain}` for verified SVG brand logos and checks whether the domain's DMARC policy meets the strict eligibility criteria (`p=quarantine` or `p=reject` with `pct=100`).
+* **What It Does**: Queries `default._bimi.{domain}` for a BIMI TXT record and checks whether the DMARC policy meets the configured eligibility criteria (`p=quarantine` or `p=reject` with `pct=100`).
+* **Limit**: It does not fetch or validate the referenced SVG or VMC.
 * **What It Tells You**: Confirms whether the company's verified brand avatar will display next to emails in Gmail, Apple Mail, and Yahoo Mail.
 * **Why It Is Important**: BIMI may display a brand mark in supported mail clients. It is a visual indicator, not proof that a message is authentic.
 
@@ -307,14 +308,14 @@ The main analysis runs the checks below. Common web path checks and active port 
 * **Why It Is Important**: Reduces false alarms for hostnames that inherit authority from a parent zone. Apex discovery is heuristic and does not replace checking delegation with the domain operator.
 
 #### 23. TLS Encryption & HTTPS Security Posture Audit
-* **What It Does**: Checks certificate validity, negotiated TLS details, HTTP-to-HTTPS behavior, and observed response headers. Header review includes HSTS, CSP risk notes, Permissions-Policy, COOP/CORP, and cookie flags. A safe `OPTIONS` request reports methods advertised in the `Allow` header.
+* **What It Does**: Checks certificate validity, negotiated TLS details, HTTP-to-HTTPS behavior, and observed response headers. Header review includes HSTS, CSP risk notes, Permissions-Policy, COOP/CORP, and cookie flags. It also requests `/.well-known/security.txt` with a timeout and 16 KiB body cap, then checks Contact syntax and an optional Expires value. A safe `OPTIONS` request reports methods advertised in the `Allow` header.
 * **What It Tells You**: Highlights certificate and browser-policy issues visible from the scanned endpoint. Cookie values are not retained. Advertised HTTP methods are hints, not proof that those methods accept requests; no write-method request is sent.
 * **Why It Is Important**: Modern web applications must enforce end-to-end transport encryption. Missing HSTS allows SSL stripping attacks, and expired certificates trigger browser security warnings that destroy user trust.
 
 #### 24. Passive Subdomain Inventory via Certificate Transparency (RFC 6962)
 * **What It Does**: Queries public Certificate Transparency (CT) logs via `crt.sh` to extract publicly logged subdomains associated with the root apex, then non-intrusively resolves their IP addresses and inspects CNAME pointers.
-* **What It Tells You**: Uncovers forgotten external attack surface assets, dev/staging environments, and potential dangling CNAME takeover candidates.
-* **Why It Is Important**: Passive reconnaissance sends zero probe packets to target infrastructure, making it 100% non-invasive, safe, and invisible to target firewalls while giving defenders complete visibility into their public exposure.
+* **What It Tells You**: Lists hostnames publicly logged in CT and the scanner's bounded DNS observations, including possible dangling CNAME candidates.
+* **Limit**: CT discovery depends on a third-party CT lookup and is capped. DNS observations and provider fingerprints are heuristic; this is not a complete asset inventory.
 
 #### 25. Scoped Network Inventory & SSRF-Guarded Port Auditing
 * **What It Does**: Provides Nmap-style target scope resolution (List Scan) and scoped TCP port verification for standard services (HTTP 80, HTTPS 443, SSH 22, SMTP 25/465/587, DNS 53) with built-in SSRF protections.
@@ -331,6 +332,12 @@ The main analysis runs the checks below. Common web path checks and active port 
 * **Privacy**: History snapshots are stored in the current browser's local storage and can be cleared from the dashboard. They are not a server-side monitoring service.
 * **Reports**: The standalone HTML report includes available scan findings and coverage information; recent path scan results may be included when available.
 
+#### Privacy, outbound requests, and budgets
+
+Use this scanner only for domains and hosts you own or are authorized to assess. The application configures Python logging at INFO to its default stream (normally stderr), but does not configure a file or external log destination or retention; host/container redirection and retention are **not configured by the application**. Logs can contain scan domains, exception diagnostics, and outbound URLs from `httpx` request logging. The port-token deprecation warning never records the token. User-facing API errors are generic. There is no configured persistent server-side result store: the main scan cache lives 60 seconds (up to 128 domains), path results 15 minutes (up to 128 targets), custom DKIM results 15 minutes (up to 128 domain/selector-set entries), and badge SVGs only as long as the related scan is fresh (up to 256 entries). The process-local rate limiter stores client IP keys and rolling-window request timestamps (up to 2,048 client entries); stale-key lifetime depends on cleanup. Browser local storage keeps up to five recent domains and up to 60 snapshots (five per domain), with no application-configured expiry.
+
+DNS queries go to the recursive resolver configured on the application host. CT discovery submits the domain to `crt.sh`; web/TLS and MTA-STS requests go to the scanned host or its relevant policy/CNAME hosts. Third-party retention is outside application control. Outbound HTTP identifies itself as `DNSAnalyzer/2.2.0 (+<documentation URL>)`; set `DNS_ANALYZER_DOCUMENTATION_URL` to replace the placeholder. Per-scan limits are 500 DNS queries and 25 HTTP fetches, shared by scan modules; exhausted checks are inconclusive.
+
 ---
 
 ## 7. RFC Rules & Security Standards Reference
@@ -342,7 +349,7 @@ The main analysis runs the checks below. Common web path checks and active port 
 | **Routing** | RFC 1035 §2.2 | `check_ns_redundancy`: Enforces minimum of 2 distinct nameservers | **WARNING** |
 | **Routing** | RFC 1035 | `check_ns_resolves`: Verifies each nameserver host resolves to an IP | **ERROR** |
 | **Email** | RFC 5321 | `check_mx_exists`: Verifies mail exchange records are published | **INFO** |
-| **Email** | RFC 5321 | `check_mx_resolves`: Verifies mail hosts resolve to reachable IPs | **ERROR** |
+| **Email** | RFC 5321 | `check_mx_resolves`: Verifies mail hosts have address records; it does not connect to them | **ERROR** |
 | **DNS Rules** | RFC 1034 §3.6.2 | `check_cname_conflict`: Ensures CNAME exclusivity at zone node | **ERROR** |
 | **Operations**| RFC 1912 / 2182 | `check_soa_sanity`: Audits SOA refresh, retry, and expire sanity | **WARNING** |
 | **Operations**| RFC 1035 | `check_ttl_sanity`: Flags `TTL = 0` and `TTL > 7 days` | **WARN/INFO** |
@@ -352,8 +359,8 @@ The main analysis runs the checks below. Common web path checks and active port 
 | **Anti-Spoof**| RFC 7208 §5.5 | `check_spf_deprecated_ptr`: Flags deprecated and slow `ptr` mechanism| **WARNING** |
 | **Phishing** | RFC 7489 | `check_dmarc_policy`: Audits `none` → `quarantine` → `reject` & `rua` | **ERROR/WARN**|
 | **Signatures**| RFC 6376 | `check_dkim_selectors`: Audits 15 selectors & public key extraction | **INFO/WARN** |
-| **Takeover** | Service fingerprints | `check_subdomain_takeover`: Exact HTTP match is confirmed; DNS-only evidence is a candidate | **WARN/ERROR** |
-| **Crypto** | RFC 4033–4035 | `check_dnssec`: DNSKEY inspection and DS-to-DNSKEY delegation match; no full RRSIG chain validation | **INFO/WARN** |
+| **Takeover** | Service fingerprints | `check_subdomain_takeover`: Unverified page matches and default DNS-only evidence are candidates; confirmation requires verified catalog data and explicit opt-in | **WARN/ERROR** |
+| **Crypto** | RFC 4033–4035 | `check_dnssec`: validates DNSKEY, DS and SOA signatures from root anchors; denial proofs are not validated | **INFO/WARN/ERROR** |
 | **Branding** | RFC 8617 | `check_bimi`: SVG logo publication & DMARC eligibility | **INFO** |
 | **Zone Cut** | RFC 1034/2181 | `discover_zone_apex`: Authoritative zone tree cut discovery | **INFO** |
 | **Web Security** | RFC 5246/8446 | `audit_tls_and_https`: Certificate expiration, TLS 1.3 & HSTS | **WARN/INFO** |
@@ -389,16 +396,16 @@ The main analysis runs the checks below. Common web path checks and active port 
   - `p=none`: Audit mode. Unauthorized emails are delivered normally to recipient inboxes; only XML telemetry reports are generated. Does not stop phishing.
   - `p=quarantine`: Moderate enforcement. Unauthorized emails are routed to the recipient's Spam/Junk folder.
   - `p=reject`: Requests receivers to reject messages that fail DMARC policy evaluation. Receiver behavior can vary, and this does not prevent every form of phishing or spoofing.
-* **Q: How is the DNS and email posture score computed?**
-  *Answer:* The score combines DNS infrastructure (25 points), email authentication (35), DNSSEC (20), and takeover posture (20), then clamps the result to 0–100. Confirmed AXFR exposure caps the score at 39. TLS, MTA-STS, TLS-RPT, and BIMI are shown separately and do not affect it. Inconclusive DNSSEC receives no DNSSEC points and is listed as inconclusive. Grades are A+ (95–100), A (85–94), B (70–84), C (55–69), D (40–54), and F (<40).
+* **Q: How is the posture score computed?**
+  *Answer:* The weighted factors are DNS infrastructure (20), email authentication (25), DNSSEC (20), takeover evidence (15), TLS/web (10), mail transport (5), and DNS posture (5). Not-applicable factors and wholly inconclusive factors are excluded; remaining weights are normalized to 100. Partial factors score only completed checks. The label reports `based on X of Y factors`. When excluded weight is over 30%, the grade is marked `(incomplete)`. AXFR caps at 54; confirmed takeover and bogus DNSSEC cap at 39 each. Grade bands remain A+ (95–100), A (85–94), B (70–84), C (55–69), D (40–54), and F (<40).
 
 ---
 
-### Category D: Threat Hunting & Cryptography
+### Category D: Takeover Indicators & Cryptography
 * **Q: What is a subdomain takeover and what does this scanner establish?**
-  *Answer:* A risk can arise when a CNAME points to a third-party resource that is no longer controlled by the domain owner and can be claimed by another account. The scanner checks a small heuristic catalog: a matching bounded HTTP fingerprint is marked confirmed by that rule, while DNS-only evidence is a candidate. Neither result proves provider-side claimability; verify with the service owner.
+  *Answer:* A risk can arise when a CNAME points to a third-party resource that is no longer controlled by the domain owner and can be claimed by another account. All current catalog entries are unverified, so their page-text matches and default DNS-only evidence remain candidates. Confirmation requires a verified entry and its configured confirmation method; even then, the scanner does not prove provider-side claimability.
 * **Q: What does the current DNSSEC check validate?**
-  *Answer:* It inspects DNSKEY and DS records and checks whether a DS digest matches a child key. It does not yet validate RRSIGs or walk the complete root-to-domain trust chain, so it is not a full DNSSEC validator.
+  *Answer:* It requests DNSSEC records with DO and validates DNSKEY, DS, and SOA signatures from an IANA root anchor through the zone. DS denial is not authenticated yet, so a no-DS result is explicitly labeled `insecure (denial not validated)`.
 
 ---
 
@@ -446,7 +453,7 @@ The main analysis runs the checks below. Common web path checks and active port 
 
 ## 10. Closing Statement
 
-> *"DNS Analyzer v2 brings DNS and email checks, selected TLS and web diagnostics, known-pattern takeover checks, and remediation guidance into one dashboard. Its coverage panel shows where checks are incomplete, so teams can use the results as a starting point for investigation. Thank you."*
+> *"DNS Analyzer 2.2.0 brings DNS and email checks, selected TLS and web diagnostics, known-pattern takeover checks, and remediation guidance into one dashboard. Its coverage panel shows where checks are incomplete, so teams can use the results as a starting point for investigation. Thank you."*
 
 ---
 
@@ -461,6 +468,7 @@ The main analysis runs the checks below. Common web path checks and active port 
 | `bash run.sh --setup-only` | Pre-install dependencies and prepare `venv/` without launching server |
 | `./venv/bin/dns-analyzer example.com` | Run the shared scan pipeline from the CLI |
 | `./venv/bin/dns-analyzer example.com --json` | Print machine-readable scan JSON |
-| `./venv/bin/dns-analyzer example.com --min-grade B` | Exit with code 2 when the grade is below B; code 3 indicates error findings |
-| `docker run -d -p 8000:8000 kanishkchahar/dns-analyzer:v2.1.0` | Run the versioned production image directly via Docker |
+| `./venv/bin/dns-analyzer example.com --min-grade B` | Compare by base letter; provisional grades warn. Code 2 means below B; code 3 means error findings |
+| `./venv/bin/dns-analyzer example.com --require-complete` | Exit with code 4 if the grade is provisional; error findings still return code 3 |
+| `docker run -d -p 8000:8000 kanishkchahar/dns-analyzer:v2.2.0` | Run the versioned production image directly via Docker |
 | `bash run.sh --help` | Display command usage and script flags |

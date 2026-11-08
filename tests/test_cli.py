@@ -11,7 +11,7 @@ def _scan(*, score=70, grade="C", errors=0):
         domain_score=SimpleNamespace(score=score, grade=grade),
         summary=SimpleNamespace(errors=errors, warnings=0, info=0),
         findings=findings,
-        model_dump=lambda **_: {"domain": "example.com", "score": score},
+        model_dump=lambda **_: {"domain": "example.com", "score": score, "grade": grade},
     )
 
 
@@ -40,3 +40,42 @@ def test_cli_json_output(monkeypatch, capsys):
     monkeypatch.setattr(cli, "_scan", fake_scan)
     assert cli.main(["example.com", "--json"]) == 0
     assert '"score": 100' in capsys.readouterr().out
+
+
+def test_cli_displays_provisional_grade_and_status(monkeypatch, capsys):
+    async def fake_scan(_):
+        return _scan(score=82, grade="B (incomplete)")
+
+    monkeypatch.setattr(cli, "_scan", fake_scan)
+    assert cli.main(["example.com"]) == 0
+    output = capsys.readouterr().out
+    assert "Grade: B (incomplete) (82/100)" in output
+    assert "Grade status: provisional" in output
+
+
+def test_min_grade_uses_provisional_base_letter_and_warns(monkeypatch, capsys):
+    async def fake_scan(_):
+        return _scan(score=79, grade="B (incomplete)")
+
+    monkeypatch.setattr(cli, "_scan", fake_scan)
+    assert cli.main(["example.com", "--min-grade", "B"]) == 0
+    output = capsys.readouterr().out
+    assert "Warning: provisional grade is treated as base grade for --min-grade B" in output
+
+
+def test_require_complete_returns_distinct_exit_code_for_provisional_grade(monkeypatch, capsys):
+    async def fake_scan(_):
+        return _scan(score=90, grade="A (incomplete)")
+
+    monkeypatch.setattr(cli, "_scan", fake_scan)
+    assert cli.main(["example.com", "--require-complete"]) == cli.EXIT_GRADE_PROVISIONAL
+    assert "Grade status: provisional" in capsys.readouterr().out
+
+
+def test_cli_json_keeps_incomplete_grade_suffix(monkeypatch, capsys):
+    async def fake_scan(_):
+        return _scan(score=79, grade="B (incomplete)")
+
+    monkeypatch.setattr(cli, "_scan", fake_scan)
+    assert cli.main(["example.com", "--json"]) == 0
+    assert '"grade": "B (incomplete)"' in capsys.readouterr().out

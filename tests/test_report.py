@@ -79,6 +79,11 @@ class TestReportBuilder:
             email_auth=email_auth,
             security=security,
             remediation=fixes,
+            domain_score={
+                "grade": "B (incomplete)",
+                "score": 82,
+                "label": "Good (based on 4 of 7 factors)",
+            },
         )
 
         assert "<!DOCTYPE html>" in html
@@ -89,6 +94,7 @@ class TestReportBuilder:
         assert "v=spf1 ?all" in html
         assert "quarantine" in html
         assert "93.184.216.34" in html
+        assert "Overall Domain Grade: B (incomplete)" in html
 
     def test_build_report_escapes_untrusted_html(self, sample_resolver_data):
         findings = [
