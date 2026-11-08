@@ -848,6 +848,7 @@ function renderBentoCockpit(data, previousScore = null) {
   const bentoGrade = document.getElementById("bento-grade");
   const bentoScoreNum = document.getElementById("bento-score-num");
   const heroSubtitle = document.getElementById("bento-hero-subtitle");
+  const breakdownContent = document.getElementById("score-breakdown-content");
 
   if (!hero) return;
 
@@ -875,7 +876,7 @@ function renderBentoCockpit(data, previousScore = null) {
       ? circumference
       : circumference - (circumference * Math.max(0, Math.min(100, previousScore)) / 100);
     bentoRingFg.style.strokeDashoffset = startOffset;
-    bentoGrade.textContent = sc.grade;
+    bentoGrade.textContent = sc.grade.replace(/ \(incomplete\)$/, "");
     bentoScoreNum.textContent = `${sc.score}/100`;
 
     requestAnimationFrame(() => {
@@ -886,6 +887,69 @@ function renderBentoCockpit(data, previousScore = null) {
   } else {
     if (bentoGrade) bentoGrade.textContent = "--";
     if (bentoScoreNum) bentoScoreNum.textContent = "--/100";
+  }
+
+  if (breakdownContent) {
+    breakdownContent.replaceChildren();
+    const breakdown = data.score_breakdown;
+    if (!breakdown?.factors) {
+      breakdownContent.textContent = "Score details are unavailable for this result.";
+    } else {
+      const table = document.createElement("table");
+      table.className = "score-breakdown-table";
+      const header = document.createElement("tr");
+      ["Factor", "Points", "Status", "Checks"].forEach(label => {
+        const th = document.createElement("th");
+        th.scope = "col";
+        th.textContent = label;
+        header.appendChild(th);
+      });
+      const thead = document.createElement("thead");
+      thead.appendChild(header);
+      table.appendChild(thead);
+      const tbody = document.createElement("tbody");
+      Object.values(breakdown.factors).forEach(factor => {
+        const row = document.createElement("tr");
+        const cells = [
+          factor.category,
+          `${factor.points_earned ?? factor.score}/${factor.maximum ?? factor.max_score}`,
+          factor.status,
+          `${factor.checks_completed}/${factor.checks_total}`,
+        ];
+        cells.forEach(value => {
+          const cell = document.createElement("td");
+          cell.textContent = String(value ?? "—");
+          row.appendChild(cell);
+        });
+        tbody.appendChild(row);
+      });
+      table.appendChild(tbody);
+      breakdownContent.appendChild(table);
+
+      Object.values(breakdown.factors).forEach(factor => {
+        const checks = (factor.checks || []).filter(check => check.status === "inconclusive");
+        if (!checks.length) return;
+        const note = document.createElement("p");
+        note.textContent = `${factor.category}: ${checks.map(check => check.check).join(", ")} could not be scored.`;
+        breakdownContent.appendChild(note);
+      });
+
+      (breakdown.caps_applied || []).forEach(cap => {
+        const note = document.createElement("p");
+        note.className = "score-cap-note";
+        note.textContent = `Score cap ${cap.maximum}: ${cap.reason}`;
+        breakdownContent.appendChild(note);
+      });
+      const normalization = document.createElement("p");
+      normalization.className = "score-normalization-note";
+      normalization.textContent = `${breakdown.normalization} Based on ${breakdown.included_factor_count} of ${breakdown.total_factor_count} factors.`;
+      breakdownContent.appendChild(normalization);
+      (breakdown.excluded_factors || []).forEach(factor => {
+        const note = document.createElement("p");
+        note.textContent = `${factor.category} (${factor.weight} points): excluded from normalization (${factor.status}).`;
+        breakdownContent.appendChild(note);
+      });
+    }
   }
 
   // ── Hero Subtitle ──
@@ -899,17 +963,20 @@ function renderBentoCockpit(data, previousScore = null) {
       ? `: ${data.domain_score.inconclusive_checks.join(", ")}`
       : "";
     const labelPrefix = data.domain_score?.label ? `${data.domain_score.label} · ` : "";
+    const provisionalNote = data.domain_score?.grade?.endsWith("(incomplete)")
+      ? " Grade is provisional (incomplete) because over 30% of factor weight was excluded."
+      : "";
     if (errs > 0) {
-      heroSubtitle.textContent = `${labelPrefix}${errs} Critical Issue${errs === 1 ? "" : "s"} Detected`;
+      heroSubtitle.textContent = `${labelPrefix}${errs} Critical Issue${errs === 1 ? "" : "s"} Detected.${provisionalNote}`;
       heroSubtitle.style.color = "var(--danger)";
     } else if (warns > 0) {
-      heroSubtitle.textContent = `${labelPrefix}${warns} Warning${warns === 1 ? "" : "s"} — Review Advised`;
+      heroSubtitle.textContent = `${labelPrefix}${warns} Warning${warns === 1 ? "" : "s"} — Review Advised.${provisionalNote}`;
       heroSubtitle.style.color = "var(--warning)";
     } else if (inconcl > 0) {
-      heroSubtitle.textContent = `${labelPrefix}Base Checks Passed (${inconcl} Check${inconcl === 1 ? "" : "s"} Inconclusive${checkNames})`;
+      heroSubtitle.textContent = `${labelPrefix}Base Checks Passed (${inconcl} Check${inconcl === 1 ? "" : "s"} Inconclusive${checkNames}).${provisionalNote}`;
       heroSubtitle.style.color = "var(--accent)";
     } else {
-      heroSubtitle.textContent = `${labelPrefix}All Audited Systems Authenticated & Safe`;
+      heroSubtitle.textContent = `${labelPrefix}All Audited Systems Authenticated & Safe.${provisionalNote}`;
       heroSubtitle.style.color = "var(--success)";
     }
   }
@@ -1420,7 +1487,7 @@ function renderEmailAuth(emailAuth, domain) {
     scoreGrade.style.color = ringColor;
     // Animate: start from full offset, then transition to target
     scoreRingFg.style.strokeDashoffset = circumference;
-    scoreGrade.textContent = sc.grade;
+    scoreGrade.textContent = sc.grade.replace(/ \(incomplete\)$/, "");
     scoreNum.textContent = `${sc.score}/100`;
     scoreLabel.textContent = `Email Health: ${sc.label}`;
     scoreDesc.textContent = `DNS and email posture score for ${domain}. TLS, mail transport, and BIMI are reported separately.`;
@@ -2281,7 +2348,8 @@ async function recheckAfterFix(fix, button) {
     const remaining = [...newFindings];
     const fixed = [];
     for (const oldFinding of oldFindings) {
-      const index = remaining.findIndex(item => item.code === oldFinding.code && item.message === oldFinding.message);
+      const aliases = new Set([oldFinding.code, ...(oldFinding.legacy_codes || [])]);
+      const index = remaining.findIndex(item => aliases.has(item.code) || (item.legacy_codes || []).includes(oldFinding.code));
       if (index >= 0) remaining.splice(index, 1);
       else fixed.push(oldFinding);
     }

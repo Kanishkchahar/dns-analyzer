@@ -49,11 +49,12 @@ from app.subdomains import discover_passive_subdomains
 from app.takeover import check_subdomain_takeover
 from app.tls_check import audit_tls_and_https
 from app.work_budget import BudgetedResolver, ScanWorkBudget
+from app.http_config import outbound_http_headers
 
 logger = logging.getLogger("dns_analyzer")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
-app = FastAPI(title="DNS Analyzer", version="2.1.0")
+app = FastAPI(title="DNS Analyzer", version="2.2.0")
 
 # Concurrency & runtime throttle budgets
 SCAN_SEMAPHORE = asyncio.Semaphore(8)
@@ -67,6 +68,7 @@ _SCAN_CACHE: dict[str, tuple[float, AnalyzeResponse]] = {}
 _SCAN_CACHE_TTL = 60.0
 _PATH_SCAN_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _PATH_SCAN_CACHE_TTL = 900.0
+_CUSTOM_DKIM_CACHE_TTL = 900.0
 _CUSTOM_DKIM_CACHE: dict[tuple[str, tuple[str, ...]], tuple[float, dict[str, Any]]] = {}
 _BADGE_CACHE: dict[str, tuple[float, bytes]] = {}
 
@@ -121,11 +123,11 @@ def _get_cached_path_scan(domain: str) -> dict[str, Any] | None:
 
 
 def _store_custom_dkim(domain: str, selectors: list[str], result: dict[str, Any]) -> None:
-    key = (domain, tuple(sorted(set(selectors))))
+    key = (domain.lower().rstrip("."), tuple(sorted({item.strip().lower() for item in selectors if item.strip()})))
     if len(_CUSTOM_DKIM_CACHE) >= 128 and key not in _CUSTOM_DKIM_CACHE:
         oldest = min(_CUSTOM_DKIM_CACHE, key=lambda key: _CUSTOM_DKIM_CACHE[key][0])
         del _CUSTOM_DKIM_CACHE[oldest]
-    _CUSTOM_DKIM_CACHE[key] = (asyncio.get_running_loop().time(), result)
+    _CUSTOM_DKIM_CACHE[key] = (asyncio.get_running_loop().time(), dict(result))
 
 
 def _get_cached_custom_dkim(domain: str) -> dict[str, Any] | None:
@@ -133,12 +135,12 @@ def _get_cached_custom_dkim(domain: str) -> dict[str, Any] | None:
     merged: dict[str, Any] | None = None
     found: dict[str, dict[str, Any]] = {}
     for key, (cached_time, result) in list(_CUSTOM_DKIM_CACHE.items()):
-        if now - cached_time >= _PATH_SCAN_CACHE_TTL:
+        if now - cached_time >= _CUSTOM_DKIM_CACHE_TTL:
             del _CUSTOM_DKIM_CACHE[key]
             continue
-        if key[0] != domain:
+        if key[0] != domain.lower().rstrip("."):
             continue
-        merged = result if merged is None else {**merged, **result}
+        merged = dict(result) if merged is None else {**merged, **result}
         for item in result.get("selectors_found", []):
             found[item.get("selector", "")] = item
     if merged is not None:
@@ -224,7 +226,7 @@ def _build_scan_coverage(
 
     record_errors = [
         name for name, entry in records.items()
-        if isinstance(entry, dict) and entry.get("status") in ("timeout", "no_nameservers", "error")
+        if isinstance(entry, dict) and entry.get("status") in ("timeout", "no_nameservers", "error", "budget_exhausted")
     ]
     dns_status = "partial" if record_errors else "complete"
     result = [item("DNS records / CAA", dns_status, f"{len(record_errors)} query error(s)" if record_errors else "Queries completed")]
@@ -269,11 +271,11 @@ def _build_scan_coverage(
 
 
 def _check_failure(name: str, exc: Exception) -> Finding:
-    logger.warning("%s check failed: %s", name, type(exc).__name__)
+    logger.error("%s check failed", name, exc_info=(type(exc), exc, exc.__traceback__))
     return Finding(
         severity="info",
         record_type=name,
-        message=f"{name} check could not complete ({type(exc).__name__}). Other scan results are still available.",
+        message=f"{name} check could not complete. Other scan results are still available.",
     )
 
 
@@ -294,7 +296,7 @@ async def _isolated_pair_check(name: str, awaitable: Any, fallback_data: Any) ->
 async def run_full_scan(domain: str) -> AnalyzeResponse:
     """Execute end-to-end DNS, security, and email authentication audit for a domain."""
     import dns.asyncresolver
-    work_budget = ScanWorkBudget(dns_queries=500, http_requests=25)
+    work_budget = ScanWorkBudget()
     resolver = BudgetedResolver(dns.asyncresolver.Resolver(), work_budget)
     records = await resolve_domain(domain, resolver=resolver)
     findings = analyze(domain, records)
@@ -319,7 +321,7 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         if isinstance(lookup_result, BaseException):
             spf_lookup_data = {
                 "status": "inconclusive", "total_lookups": 0, "limit": 10,
-                "over_limit": False, "lookup_tree": [], "reason": str(lookup_result) or type(lookup_result).__name__,
+                "over_limit": False, "lookup_tree": [], "reason": "SPF lookup count could not be completed.",
             }
             spf_scan_findings.append(_check_failure("SPF Lookup Count", lookup_result if isinstance(lookup_result, Exception) else RuntimeError(type(lookup_result).__name__)))
         else:
@@ -327,7 +329,7 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         if isinstance(flatten_result, BaseException):
             spf_flat_data = {
                 "can_flatten": False, "flattened_record": None,
-                "reason": f"SPF flattening could not complete ({type(flatten_result).__name__}).",
+                "reason": "SPF flattening could not be completed.",
                 "ip4_ranges": [], "ip6_ranges": [], "original_lookups": 0, "flattened_lookups": 0,
             }
             spf_scan_findings.append(_check_failure("SPF Flattening", flatten_result if isinstance(flatten_result, Exception) else RuntimeError(type(flatten_result).__name__)))
@@ -351,7 +353,7 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
     ) = await asyncio.gather(
         _isolated_data_check("DMARC", fetch_dmarc(domain, resolver, apex=zone_apex), {"status": "inconclusive", "policy": None, "reason": "DMARC lookup failed."}),
         _isolated_data_check("DKIM", check_dkim_selectors(domain, resolver), {"status": "inconclusive", "selectors_found": [], "selectors_checked": [], "has_dkim": False}),
-        _isolated_pair_check("DNSSEC", check_dnssec(domain, resolver, apex=zone_apex), {"status": "inconclusive", "enabled": False, "delegation_verified": False, "reason": "DNSSEC queries failed."}),
+        _isolated_pair_check("DNSSEC", check_dnssec(domain, work_budget.dnssec_resolver(resolver)), {"status": "inconclusive", "enabled": False, "delegation_verified": False, "reason": "DNSSEC queries failed."}),
         _isolated_pair_check("TAKEOVER", check_subdomain_takeover(domain, records, resolver, budget=work_budget), {"scanned": False, "vulnerable": False, "status": "could_not_verify", "details": "Takeover check did not complete."}),
         _isolated_pair_check("TLS", audit_tls_and_https(domain, resolver=resolver, work_budget=work_budget), {"scanned": False, "status": "error", "reason": "TLS audit did not complete."}),
         _isolated_pair_check("SUBDOMAINS", discover_passive_subdomains(zone_apex, resolver, work_budget=work_budget), {"domain": zone_apex, "source": "Certificate Transparency (crt.sh)", "status": "unavailable", "reason": "Subdomain inventory did not complete.", "discovered_count": 0, "subdomains": []}),
@@ -393,7 +395,15 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         dnssec_data=dnssec_data,
         takeover_data=takeover_data,
         tls_data=tls_data,
-        dns_posture_data={"axfr": axfr_data},
+        dns_posture_data={"axfr": axfr_data, "wildcard": wildcard_data, "nameserver_consistency": ns_consistency_data},
+        mail_transport_data=mail_transport_data,
+        subdomains_data=sub_data,
+        email_data={
+            "spf_status": "complete" if records.get("TXT", {}).get("status") in ("ok", "no_answer", "nxdomain") else "inconclusive",
+            "dmarc_status": (dmarc_data or {}).get("status", "complete"),
+            "dkim_status": dkim_data.get("status", "inconclusive"),
+        },
+        module_findings=(spf_findings + dmarc_findings + dkim_findings + mail_transport_findings + dnssec_findings + takeover_findings + tls_findings + sub_findings + axfr_findings + wildcard_findings + ns_consistency_findings),
     )
 
     email_auth = EmailAuth(
@@ -448,6 +458,7 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         summary=Summary(**all_counts),
         zone_metadata=zone_meta,
         domain_score=DomainScore(**domain_score_data),
+        score_breakdown=domain_score_data["score_breakdown"],
         email_auth=email_auth,
         security=security_audit,
         tls=tls_data,
@@ -511,7 +522,10 @@ async def api_network_list_scan(req: ListScanRequest, request: Request) -> dict[
     _enforce_rate_limit(request)
     if not req.targets or len(req.targets) > 50:
         raise HTTPException(status_code=400, detail="Provide between 1 and 50 target hostnames or IPs.")
-    return await run_list_scan(req.targets)
+    import dns.asyncresolver
+    budget = ScanWorkBudget()
+    resolver = BudgetedResolver(dns.asyncresolver.Resolver(), budget)
+    return await run_list_scan(req.targets, resolver=resolver, work_budget=budget)
 
 
 @app.post("/api/network/path-scan")
@@ -521,7 +535,10 @@ async def api_network_path_scan(req: PathScanRequest, request: Request) -> dict[
     if not req.targets or len(req.targets) > 5:
         raise HTTPException(status_code=400, detail="Provide between 1 and 5 target hostnames or public IPs.")
     try:
-        result = await asyncio.wait_for(run_common_path_scan(req.targets), timeout=30.0)
+        import dns.asyncresolver
+        budget = ScanWorkBudget()
+        resolver = BudgetedResolver(dns.asyncresolver.Resolver(), budget)
+        result = await asyncio.wait_for(run_common_path_scan(req.targets, resolver=resolver, work_budget=budget), timeout=30.0)
         _store_path_scan_results(result)
         return result
     except asyncio.TimeoutError as exc:
@@ -533,7 +550,8 @@ async def api_dkim_selector_check(req: DkimSelectorRequest, request: Request) ->
     """Check user-supplied DKIM selectors for the analyzed domain."""
     _enforce_rate_limit(request)
     import dns.asyncresolver
-    resolver = dns.asyncresolver.Resolver()
+    budget = ScanWorkBudget()
+    resolver = BudgetedResolver(dns.asyncresolver.Resolver(), budget)
     try:
         result = await asyncio.wait_for(
             check_dkim_selectors(req.domain, resolver, custom_selectors=req.selectors),
@@ -552,11 +570,20 @@ async def api_network_port_scan(req: PortScanRequest, request: Request) -> dict[
     if not req.target or len(req.target) > 253:
         raise HTTPException(status_code=400, detail="Invalid target provided.")
     auth_header = request.headers.get("authorization")
+    auth_token = req.auth_token
+    if auth_token:
+        logger.warning("Deprecated port-scan auth_token body field used; use Authorization header")
+        if not auth_header:
+            auth_header = f"Bearer {auth_token}"
+    import dns.asyncresolver
+    budget = ScanWorkBudget()
+    resolver = BudgetedResolver(dns.asyncresolver.Resolver(), budget)
     return await run_port_scan(
         req.target,
         ports=req.ports,
         confirmed=req.confirmed,
         auth_header=auth_header,
+        resolver=resolver,
     )
 
 
@@ -571,9 +598,10 @@ async def api_subdomains(domain: str, request: Request) -> dict[str, Any]:
 
     try:
         import dns.asyncresolver
-        resolver = dns.asyncresolver.Resolver()
+        budget = ScanWorkBudget()
+        resolver = BudgetedResolver(dns.asyncresolver.Resolver(), budget)
         data, _ = await asyncio.wait_for(
-            discover_passive_subdomains(req.domain, resolver),
+            discover_passive_subdomains(req.domain, resolver, work_budget=budget),
             timeout=10.0,
         )
         return data
@@ -597,19 +625,21 @@ async def api_grade_badge(domain: str, request: Request) -> Response:
     if not scan or not scan.domain_score:
         _BADGE_CACHE.pop(req.domain, None)
         raise HTTPException(status_code=404, detail="No recent scan is available for this domain. Run an analysis first.")
+    scan_cached_at = _SCAN_CACHE[req.domain][0]
+    remaining_ttl = max(0, int(_SCAN_CACHE_TTL - (now - scan_cached_at)))
     cached_badge = _BADGE_CACHE.get(req.domain)
-    if cached_badge and now - cached_badge[0] < _SCAN_CACHE_TTL:
-        return Response(cached_badge[1], media_type="image/svg+xml", headers={"Cache-Control": f"public, max-age={int(_SCAN_CACHE_TTL)}"})
+    if cached_badge and now - scan_cached_at < _SCAN_CACHE_TTL:
+        return Response(cached_badge[1], media_type="image/svg+xml", headers={"Cache-Control": f"public, max-age={remaining_ttl}"})
     grade = scan.domain_score.grade
-    color = "#63b995" if grade.startswith("A") else "#e0a458" if grade in ("B", "C") else "#e36d6d"
+    color = "#63b995" if grade.startswith("A") else "#e0a458" if grade.startswith(("B", "C")) else "#e36d6d"
     label = f"{req.domain} · {grade} · {scan.domain_score.score}/100"
     import html as html_module
     escaped_label = html_module.escape(label, quote=True)
     svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" width="230" height="28" role="img" '
+        '<svg xmlns="http://www.w3.org/2000/svg" width="310" height="28" role="img" '
         f'aria-label="{escaped_label}"><title>{escaped_label}</title>'
-        '<rect width="230" height="28" rx="5" fill="#1b1e22"/>'
-        f'<path d="M0 5a5 5 0 0 1 5-5h220a5 5 0 0 1 5 5v18a5 5 0 0 1-5 5H5a5 5 0 0 1-5-5z" fill="#1b1e22"/>'
+        '<rect width="310" height="28" rx="5" fill="#1b1e22"/>'
+        f'<path d="M0 5a5 5 0 0 1 5-5h300a5 5 0 0 1 5 5v18a5 5 0 0 1-5 5H5a5 5 0 0 1-5-5z" fill="#1b1e22"/>'
         f'<path d="M0 5a5 5 0 0 1 5-5h82v28H5a5 5 0 0 1-5-5z" fill="{color}"/>'
         f'<text x="10" y="18" fill="#0c0d0e" font-family="Arial,sans-serif" font-size="11" font-weight="700">{html_module.escape(req.domain)}</text>'
         f'<text x="96" y="18" fill="#f2f0ea" font-family="Arial,sans-serif" font-size="11" font-weight="700">Grade {grade} · {scan.domain_score.score}/100</text></svg>'
@@ -617,7 +647,7 @@ async def api_grade_badge(domain: str, request: Request) -> Response:
     if len(_BADGE_CACHE) >= 256 and req.domain not in _BADGE_CACHE:
         del _BADGE_CACHE[min(_BADGE_CACHE, key=lambda key: _BADGE_CACHE[key][0])]
     _BADGE_CACHE[req.domain] = (now, svg)
-    return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": f"public, max-age={int(_SCAN_CACHE_TTL)}"})
+    return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": f"public, max-age={remaining_ttl}"})
 
 
 @app.get("/api/report/{domain}", response_class=HTMLResponse)
@@ -681,6 +711,7 @@ async def api_report(domain: str, request: Request) -> HTMLResponse:
             path_scan=cached_paths,
             coverage=report_coverage,
             dns_posture=scan.dns_posture,
+            domain_score=scan.domain_score,
         )
         return HTMLResponse(
             content=html,

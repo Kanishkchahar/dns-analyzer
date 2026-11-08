@@ -611,6 +611,27 @@ main {
   line-height: 1.4;
   position: relative;
 }
+.score-breakdown-details {
+  width: 100%;
+  max-width: 440px;
+  position: relative;
+  z-index: 1;
+  font-size: 12px;
+}
+.score-breakdown-details summary {
+  color: var(--accent);
+  cursor: pointer;
+  text-align: center;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+#score-breakdown-content { margin-top: 10px; max-height: 260px; overflow: auto; }
+.score-breakdown-table { width: 100%; border-collapse: collapse; text-align: left; }
+.score-breakdown-table th, .score-breakdown-table td { padding: 5px 7px; border-bottom: 1px solid var(--hairline); }
+.score-breakdown-table th { color: var(--text-primary); font-weight: 600; }
+.score-breakdown-table td { color: var(--text-secondary); }
+.score-cap-note { color: var(--warning); margin-top: 7px; }
+.score-normalization-note { color: var(--text-muted); margin-top: 7px; }
 
 .bento-hero-badges {
   display: flex;

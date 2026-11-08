@@ -223,7 +223,7 @@ async def _check_single_selector(
     except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
         return None
     except Exception as exc:
-        return {"_query_error": type(exc).__name__}
+        return {"_query_error": "DNS selector lookup failed"}
 
     tags = _parse_tags(raw)
     public_key = tags.get("p", "")
@@ -402,6 +402,23 @@ _DOMAIN_GRADE_THRESHOLDS: list[tuple[int, str, str]] = [
     (0,  "F",  "High Risk"),
 ]
 
+DOMAIN_SCORE_WEIGHTS = {
+    "infrastructure": 20,
+    "email_auth": 25,
+    "dnssec": 20,
+    "threats": 15,
+    "tls_web": 10,
+    "mail_transport": 5,
+    "dns_posture": 5,
+}
+
+DOMAIN_SCORE_CAPS = (
+    {"code": "AXFR_EXPOSURE", "maximum": 54, "reason": "An authoritative server allowed a non-empty zone transfer."},
+    {"code": "CONFIRMED_TAKEOVER", "maximum": 39, "reason": "A provider takeover rule was confirmed by verified evidence."},
+    {"code": "BOGUS_DNSSEC", "maximum": 39, "reason": "A parent DS does not match the zone DNSKEY or the zone key is absent."},
+)
+TAKEOVER_STATE_FRACTIONS = {"safe": 1.0, "candidate": 0.45, "confirmed": 0.0}
+
 
 def compute_domain_score(
     records: dict[str, Any],
@@ -411,161 +428,276 @@ def compute_domain_score(
     takeover_data: dict[str, Any] | None,
     tls_data: dict[str, Any] | None = None,
     dns_posture_data: dict[str, Any] | None = None,
+    mail_transport_data: dict[str, Any] | None = None,
+    subdomains_data: dict[str, Any] | None = None,
+    email_data: dict[str, Any] | None = None,
+    module_findings: list[Finding] | None = None,
 ) -> dict[str, Any]:
-    """Compute the DNS and email posture score (TLS and mail transport excluded).
+    """Score observed posture while exposing unavailable checks as unknown.
 
-    Combines documented operational pillars:
-      1. DNS Infrastructure & Redundancy (25% weight)
-      2. Email Authentication Defense (35% weight)
-      3. DNSSEC & Cryptographic Integrity (20% weight)
-      4. Subdomain Takeover & Threat Defense (20% weight)
-    Explicitly tracks inconclusive checks to avoid false reassurance.
+    Unknown component checks are represented by ``None`` and receive neutral
+    midpoint credit only in the factor aggregate; they are never reported as a
+    per-check pass or failure. Not-applicable factors are removed before the
+    domain score is normalized to 100.
     """
-    inconclusive_checks: list[str] = []
+    findings_by_type: dict[str, list[Finding]] = {}
+    for finding in [*dns_findings, *(module_findings or [])]:
+        findings_by_type.setdefault(finding.record_type.upper(), []).append(finding)
 
-    # 1. DNS Infrastructure (25 pts max)
-    infra_pts = 0
-    a_rec = records.get("A", {})
-    if a_rec.get("status") == "ok" and a_rec.get("records"):
-        infra_pts += 10
-    aaaa_rec = records.get("AAAA", {})
-    if aaaa_rec.get("status") == "ok" and aaaa_rec.get("records"):
-        infra_pts += 5
-    ns_rec = records.get("NS", {})
+    def penalty_value(items: list[Finding]) -> float:
+        errors = sum(item.severity == "error" for item in items)
+        warnings = sum(item.severity == "warning" for item in items)
+        return max(0.0, 1.0 - min(1.0, errors * 0.35 + warnings * 0.18))
+
+    def check_value(label: str, value: float | None, max_points: float = 1.0) -> dict[str, Any]:
+        earned = None if value is None else round(value * max_points, 2)
+        return {"check": label, "points_earned": earned,
+                "points_deducted": None if earned is None else round(max_points - earned, 2),
+                "maximum": max_points, "status": "inconclusive" if value is None else "scored"}
+
+    def make_factor(
+        key: str,
+        category: str,
+        summary: str,
+        checks: list[dict[str, Any]],
+        related_findings: list[Finding],
+        *,
+        not_applicable: bool = False,
+    ) -> dict[str, Any]:
+        weight = DOMAIN_SCORE_WEIGHTS[key]
+        completed = [check for check in checks if check["points_earned"] is not None]
+        if not_applicable:
+            status = "not_applicable"
+            score = None
+        elif not completed:
+            status = "inconclusive"
+            score = None
+        else:
+            status = "inconclusive" if len(completed) < len(checks) else "scored"
+            observed_fraction = sum(check["points_earned"] / check["maximum"] for check in completed) / len(completed)
+            score = round(weight * observed_fraction, 2)
+        codes = sorted({item.code for item in related_findings if item.severity in ("warning", "error")})
+        return {
+            "category": category,
+            "weight": weight,
+            "score": score,
+            "max_score": weight,
+            "points_earned": score,
+            "points_deducted": None if score is None else round(weight - score, 2),
+            "maximum": weight,
+            "status": status,
+            "summary": summary,
+            "checks_completed": len(completed),
+            "checks_total": len(checks),
+            "checks": checks,
+            "finding_codes_costing_points": codes,
+        }
+
+    def records_component(name: str, points: float) -> dict[str, Any]:
+        entry = records.get(name, {})
+        status = entry.get("status")
+        if status in ("ok", "no_answer", "nxdomain"):
+            return check_value(name, 1.0 if status == "ok" and bool(entry.get("records")) else 0.0, points)
+        return check_value(name, None, points)
+
+    a_rec, aaaa_rec = records.get("A", {}), records.get("AAAA", {})
+    ns_rec, soa_rec = records.get("NS", {}), records.get("SOA", {})
     ns_count = len(ns_rec.get("records", [])) if ns_rec.get("status") == "ok" else 0
-    if ns_count >= 2:
-        infra_pts += 5
-    elif ns_count == 1:
-        infra_pts += 2
-    soa_rec = records.get("SOA", {})
-    if soa_rec.get("status") == "ok" and soa_rec.get("records"):
-        infra_pts += 5
+    core_dns_statuses = [entry.get("status") for entry in (a_rec, aaaa_rec, ns_rec, soa_rec)]
+    dns_checks = [
+        records_component("A", 1),
+        records_component("AAAA", 1),
+        check_value("NS redundancy", (1.0 if ns_count >= 2 else 0.5 if ns_count == 1 else 0.0) if ns_rec.get("status") in ("ok", "no_answer", "nxdomain") else None, 1),
+        records_component("SOA", 1),
+        check_value("DNS finding review", penalty_value(dns_findings) if all(s in ("ok", "no_answer", "nxdomain") for s in core_dns_statuses) else None, 1),
+    ]
+    infra_findings = [f for f in dns_findings if f.record_type.upper() in {"GENERAL", "A", "AAAA", "NS", "MX", "SOA", "CNAME", "CAA", "TXT"}]
+    has_ipv4 = a_rec.get("status") == "ok" and bool(a_rec.get("records"))
+    has_ipv6 = aaaa_rec.get("status") == "ok" and bool(aaaa_rec.get("records"))
+    family_summary = "A and AAAA records present" if has_ipv4 and has_ipv6 else ("AAAA records present; A absent" if has_ipv6 else ("A records present; AAAA absent" if has_ipv4 else "no address records"))
+    factors: dict[str, dict[str, Any]] = {
+        "infrastructure": make_factor("infrastructure", "DNS Infrastructure", f"{family_summary}, {ns_count} NS records", dns_checks, infra_findings),
+    }
 
-    for f in dns_findings:
-        if f.severity == "error":
-            infra_pts -= 10
-        elif f.severity == "warning":
-            infra_pts -= 4
-    infra_score = max(0, min(25, infra_pts))
-    infra_status = "healthy" if infra_score >= 20 else ("warning" if infra_score >= 12 else "degraded")
-    infra_summary = f"{'Dual-stack IPv4/IPv6' if aaaa_rec.get('status') == 'ok' else 'IPv4-only'}, {ns_count} NS redundant"
-
-    # 2. Email Authentication (35 pts max)
-    raw_email_score = email_score.get("score", 0)
-    email_factor_score = max(0, min(35, round(raw_email_score * 0.35)))
-    email_status = "enforced" if raw_email_score >= 85 else ("partial" if raw_email_score >= 60 else "vulnerable")
-    email_summary = f"SPF, DMARC, DKIM ({raw_email_score}/100)"
-
-    # 3. DNSSEC (20 pts max)
-    dnssec_status = dnssec_data.get("status", "inconclusive") if dnssec_data else "inconclusive"
-    if dnssec_status == "delegation_match_verified":
-        dnssec_score = 16
-        dnssec_stat = "delegation_match_verified"
-        dnssec_summary = "Parent DS record matches zone DNSKEY digest (full RRSIG root anchor chain unvalidated)"
-        inconclusive_checks.append("DNSSEC Root Anchor & RRSIG Validation")
-    elif dnssec_status == "incomplete_chain":
-        dnssec_score = 8
-        dnssec_stat = "warning"
-        dnssec_summary = "DNSKEY present but missing parent DS delegation"
-    elif dnssec_status == "bogus":
-        dnssec_score = 0
-        dnssec_stat = "error"
-        dnssec_summary = "Parent DS record without matching zone DNSKEY (causes SERVFAIL)"
-    elif dnssec_status == "inconclusive":
-        dnssec_score = 0
-        dnssec_stat = "inconclusive"
-        dnssec_summary = "DNSSEC status could not be determined; no DNSSEC points awarded"
-        inconclusive_checks.append("DNSSEC")
+    all_email_findings = [f for values in findings_by_type.values() for f in values if f.record_type.upper() in ("SPF", "DMARC", "DKIM")]
+    if email_data is None:
+        raw = max(0, min(100, int(email_score.get("score", 0)))) / 100
+        email_checks = [check_value("SPF / DMARC / DKIM", raw, 1)]
     else:
-        dnssec_score = 10
-        dnssec_stat = "unsigned"
-        dnssec_summary = "Zone unsigned (standard baseline, vulnerable to cache poisoning)"
+        txt_status = records.get("TXT", {}).get("status")
+        spf_done = txt_status in ("ok", "no_answer", "nxdomain")
+        dmarc_done = email_data.get("dmarc_status") != "inconclusive"
+        dkim_status = email_data.get("dkim_status")
+        dkim_done = dkim_status == "complete"
+        email_checks = [
+            check_value("SPF", penalty_value([f for f in all_email_findings if f.record_type.upper() == "SPF"]) if spf_done else None),
+            check_value("DMARC", penalty_value([f for f in all_email_findings if f.record_type.upper() == "DMARC"]) if dmarc_done else None),
+            check_value("DKIM selector discovery", penalty_value([f for f in all_email_findings if f.record_type.upper() == "DKIM"]) if dkim_done else None),
+        ]
+    factors["email_auth"] = make_factor("email_auth", "Email Authentication", "SPF, DMARC, and DKIM findings", email_checks, all_email_findings)
 
-    # 4. Takeover & Threat Defense (20 pts max)
-    is_vulnerable = bool(takeover_data.get("vulnerable")) if takeover_data else False
-    takeover_stat_str = takeover_data.get("status", "safe") if takeover_data else "safe"
-    if is_vulnerable:
-        threat_score = 0
-        threat_status = "critical"
-        threat_summary = f"Dangling CNAME pointing to unresolvable {takeover_data.get('provider', 'host')}"
-    elif takeover_stat_str == "dangling_alias":
-        threat_score = 10
-        threat_status = "warning"
-        threat_summary = "Dangling CNAME alias pointing to unresolvable destination"
-    elif takeover_stat_str == "could_not_verify":
-        threat_score = 15
-        threat_status = "inconclusive"
-        threat_summary = "Takeover resolution inconclusive due to resolver error or timeout"
-        inconclusive_checks.append("Subdomain Takeover")
-    elif takeover_stat_str == "candidate":
-        threat_score = 16
-        threat_status = "candidate"
-        threat_summary = "Potential dangling service alias; ownership was not confirmed"
-    else:
-        threat_score = 20
-        threat_status = "safe"
-        threat_summary = "No dangling CNAME records or takeover vectors detected"
+    dnssec_status = (dnssec_data or {}).get("status", "inconclusive")
+    chain_result_is_informational = (dnssec_data or {}).get("validator") == "chain"
+    scored_dnssec_status = (dnssec_data or {}).get("legacy_score_status", "inconclusive") if chain_result_is_informational else dnssec_status
+    dnssec_scores = {"delegation_match_verified": 1.0, "incomplete_chain": 0.5, "unsigned": 0.5, "bogus": 0.0}
+    dnssec_checks = [
+        check_value("Observed DS / DNSKEY status", dnssec_scores.get(scored_dnssec_status)),
+        check_value("RRSIG and root-chain validation", None),
+    ]
+    dnssec_summary = (
+        f"Chain validator reported {dnssec_status}; this opt-in result is informational. Scoring uses the legacy delegation result."
+        if chain_result_is_informational
+        else f"Observed DNSSEC state: {dnssec_status}; full signature chain is not validated."
+    )
+    factors["dnssec"] = make_factor(
+        "dnssec", "DNSSEC", dnssec_summary,
+        dnssec_checks, [] if chain_result_is_informational else findings_by_type.get("DNSSEC", []),
+    )
 
-    if tls_data is not None and not tls_data.get("scanned", False):
-        inconclusive_checks.append("TLS & HTTPS Audit")
+    subdomains = (subdomains_data or {}).get("subdomains", [])
+    main_cname = records.get("CNAME", {})
+    main_has_cname = bool((takeover_data or {}).get("has_cname"))
+    ct_has_cname = any(item.get("cnames") or item.get("cname") for item in subdomains)
+    has_takeover = main_has_cname or ct_has_cname
+    takeover_statuses = [(takeover_data or {}).get("status")] if (takeover_data or {}).get("has_cname") else []
+    takeover_statuses.extend((item.get("takeover") or {}).get("status") for item in subdomains if item.get("cnames") or item.get("cname"))
+    takeover_checks = [
+        check_value(f"CNAME takeover evidence {index + 1}", TAKEOVER_STATE_FRACTIONS.get(state))
+        for index, state in enumerate(takeover_statuses)
+    ]
+    cname_absent_definite = main_cname.get("status") in ("no_answer", "nxdomain", "not_found")
+    takeover_unknown = not main_has_cname and not cname_absent_definite
+    if takeover_unknown:
+        takeover_checks.append(check_value("Main-domain CNAME discovery", None))
+    takeover_findings = [f for f in [*findings_by_type.get("TAKEOVER", []), *findings_by_type.get("SUBDOMAIN TAKEOVER", [])]]
+    factors["threats"] = make_factor(
+        "threats", "Takeover Risk", "Candidate and confirmed evidence is weighted conservatively.", takeover_checks,
+        takeover_findings, not_applicable=not has_takeover and not takeover_unknown,
+    )
 
-    total_score = max(0, min(100, infra_score + email_factor_score + dnssec_score + threat_score))
-    axfr_servers = (dns_posture_data or {}).get("axfr", {}).get("servers", [])
-    axfr_confirmed = any(server.get("status") == "transfer_allowed" and server.get("records_exposed", 0) > 0 for server in axfr_servers)
-    if axfr_confirmed:
-        total_score = min(total_score, 39)
-        inconclusive_checks.append("AXFR exposes zone records")
+    cname_rec = records.get("CNAME", {})
+    has_site_target = bool(a_rec.get("records") or aaaa_rec.get("records") or cname_rec.get("records"))
+    no_site_target_definite = (
+        a_rec.get("status") in ("no_answer", "nxdomain")
+        and aaaa_rec.get("status") in ("no_answer", "nxdomain")
+        and cname_rec.get("status") in ("no_answer", "nxdomain", "not_found")
+    )
+    site_target_unknown = not has_site_target and not no_site_target_definite
+    tls_checks: list[dict[str, Any]] = []
+    tls_findings = [f for typ in ("TLS", "HTTPS", "CSP", "COOKIE", "HTTP METHODS", "SECURITY.TXT") for f in findings_by_type.get(typ, [])]
+    if tls_data and tls_data.get("scanned"):
+        cert = tls_data.get("certificate")
+        tls_checks = [
+            check_value("TLS certificate and negotiation", penalty_value(tls_findings) if cert or tls_data.get("status") == "certificate_error" else None),
+            check_value("HTTPS behavior and headers", penalty_value(tls_findings) if tls_data.get("https_redirect") is not None or tls_data.get("security_headers") is not None else None),
+        ]
+    elif has_site_target or site_target_unknown:
+        tls_checks = [check_value("TLS connection and certificate", None), check_value("HTTPS behavior and headers", None)]
+    factors["tls_web"] = make_factor("tls_web", "TLS and Web", "Certificate, HTTPS behavior, and reported web findings.", tls_checks, tls_findings, not_applicable=no_site_target_definite)
 
-    grade = "F"
-    label = "High Risk"
-    for threshold, g, lbl in _DOMAIN_GRADE_THRESHOLDS:
+    mx_status = records.get("MX", {}).get("status")
+    has_mx = mx_status == "ok" and bool(records.get("MX", {}).get("records"))
+    no_mx_definite = mx_status in ("no_answer", "nxdomain", "not_found")
+    mail = mail_transport_data or {}
+    sts = mail.get("mta_sts", {})
+    rpt = mail.get("tls_rpt", {})
+    mail_checks = [
+        check_value("MTA-STS record and policy", 1.0 if sts.get("status") == "configured" and sts.get("policy_status") == "valid" else 0.0 if sts.get("status") == "not_configured" or sts.get("policy_status") == "invalid" else None),
+        check_value("TLS-RPT record", 1.0 if rpt.get("status") == "configured" else 0.0 if rpt.get("status") == "not_configured" else None),
+    ]
+    mail_findings = findings_by_type.get("MTA-STS", []) + findings_by_type.get("TLS-RPT", [])
+    if not has_mx and not no_mx_definite:
+        mail_checks = [check_value("MTA-STS record and policy", None), check_value("TLS-RPT record", None)]
+    factors["mail_transport"] = make_factor("mail_transport", "Mail Transport", "MTA-STS policy and TLS-RPT publication.", mail_checks, mail_findings, not_applicable=no_mx_definite)
+
+    posture = dns_posture_data or {}
+    axfr = posture.get("axfr", {})
+    wildcard = posture.get("wildcard", {})
+    ns_consistency = posture.get("nameserver_consistency", {})
+    has_ns = ns_rec.get("status") == "ok" and bool(ns_rec.get("records"))
+    no_ns_definite = ns_rec.get("status") in ("no_answer", "nxdomain", "not_found")
+    server_states = [item.get("status") for item in axfr.get("servers", [])]
+    axfr_value = 0.0 if any(state == "transfer_allowed" for state in server_states) else 1.0 if server_states and all(state not in ("budget_exhausted", "unresolved_or_non_public") for state in server_states) else None
+    wildcard_value = 0.0 if wildcard.get("status") == "detected" else 1.0 if wildcard.get("status") == "not_detected" else None
+    consistency_value = 1.0 if ns_consistency.get("status") == "complete" and ns_consistency.get("serials_match") is True and ns_consistency.get("ns_sets_match") is True and ns_consistency.get("soa_fields_match", True) is True else 0.0 if ns_consistency.get("status") == "complete" else None
+    posture_checks = [check_value("AXFR", axfr_value), check_value("Wildcard DNS", wildcard_value), check_value("Nameserver consistency", consistency_value)]
+    if not has_ns and not no_ns_definite:
+        posture_checks = [check_value("AXFR", None), check_value("Wildcard DNS", None), check_value("Nameserver consistency", None)]
+    posture_findings = findings_by_type.get("AXFR", []) + findings_by_type.get("WILDCARD DNS", []) + findings_by_type.get("NS CONSISTENCY", [])
+    factors["dns_posture"] = make_factor("dns_posture", "DNS Posture", "AXFR, wildcard DNS, and authoritative nameserver consistency.", posture_checks, posture_findings, not_applicable=no_ns_definite)
+
+    included = [
+        factor for factor in factors.values()
+        if factor["status"] != "not_applicable" and factor["checks_completed"] > 0
+    ]
+    excluded_factors = [
+        {"category": factor["category"], "weight": factor["weight"], "status": factor["status"]}
+        for factor in factors.values() if factor not in included
+    ]
+    active = included
+    applicable_weight = sum(factor["weight"] for factor in active)
+    completed_checks = sum(factor["checks_completed"] for factor in active)
+    total_checks = sum(factor["checks_total"] for factor in active)
+    included_factor_count = len(active)
+    total_factor_count = len(factors)
+    excluded_weight = sum(item["weight"] for item in excluded_factors)
+    raw_score = (sum(factor["score"] for factor in active) / applicable_weight * 100) if applicable_weight else 0
+    caps_applied: list[dict[str, Any]] = []
+    axfr_confirmed = any(item.get("status") == "transfer_allowed" and item.get("records_exposed", 0) > 0 for item in axfr.get("servers", []))
+    takeover_confirmed = any(state == "confirmed" for state in takeover_statuses)
+    # The new chain validator remains opt-in until its signed-zone matrix passes;
+    # do not let its unproven bogus result trigger the domain score cap.
+    dnssec_bogus = (
+        (scored_dnssec_status == "bogus" if chain_result_is_informational else dnssec_status == "bogus")
+        and (dnssec_data or {}).get("validator", "legacy") in ("legacy", "chain")
+    )
+    cap_checks = ((axfr_confirmed, DOMAIN_SCORE_CAPS[0]), (takeover_confirmed, DOMAIN_SCORE_CAPS[1]), (dnssec_bogus, DOMAIN_SCORE_CAPS[2]))
+    total_score = round(raw_score)
+    for applies, cap in cap_checks:
+        if applies:
+            caps_applied.append(dict(cap))
+            total_score = min(total_score, cap["maximum"])
+
+    grade, label = "F", "High Risk"
+    for threshold, candidate_grade, candidate_label in _DOMAIN_GRADE_THRESHOLDS:
         if total_score >= threshold:
-            grade = g
-            label = lbl
+            grade, label = candidate_grade, candidate_label
             break
+    provisional = excluded_weight > 30
+    if provisional:
+        grade = f"{grade} (incomplete)"
+    inconclusive_checks = [f"{factor['category']}: {factor['checks_completed']} of {factor['checks_total']} checks" for factor in factors.values() if factor["status"] == "inconclusive"]
+    label = f"{label} (based on {included_factor_count} of {total_factor_count} factors)"
+    if provisional:
+        label = f"{label}; grade is provisional"
+    if not included_factor_count:
+        label = f"No factors could be scored (based on 0 of {total_factor_count} factors); grade is provisional"
+    if caps_applied:
+        label = f"{label} (capped: {', '.join(cap['code'] for cap in caps_applied)})"
 
-    if inconclusive_checks and total_score >= 85:
-        label = f"{label} (With Inconclusive Checks)"
-
+    # Keep the legacy ``domain_score.factors.threats`` field working while the
+    # new transparent breakdown uses the approved factor name, ``takeover``.
+    breakdown_factors = {("takeover" if key == "threats" else key): value for key, value in factors.items()}
+    score_breakdown = {
+        "factors": breakdown_factors,
+        "caps_applied": caps_applied,
+        "applicable_weight": applicable_weight,
+        "excluded_factors": excluded_factors,
+        "excluded_weight": excluded_weight,
+        "included_factor_count": included_factor_count,
+        "total_factor_count": total_factor_count,
+        "provisional": provisional,
+        "checks_completed": completed_checks,
+        "checks_total": total_checks,
+        "normalization": "Factors marked not_applicable or inconclusive with no completed checks are excluded; remaining weights are rescaled to 100.",
+    }
     return {
         "score": total_score,
         "grade": grade,
         "label": label,
-        "scope": "DNS and email posture (TLS, MTA-STS, TLS-RPT, and BIMI are reported separately)",
-        "inconclusive_count": len(inconclusive_checks),
+        "scope": "DNS, email authentication, DNSSEC, takeover evidence, TLS/web, mail transport, and DNS posture",
+        "inconclusive_count": sum(factor["checks_total"] - factor["checks_completed"] for factor in factors.values() if factor["status"] == "inconclusive"),
         "inconclusive_checks": inconclusive_checks,
-        "factors": {
-            "infrastructure": {
-                "category": "DNS Infrastructure",
-                "weight": 25,
-                "score": infra_score,
-                "max_score": 25,
-                "status": infra_status,
-                "summary": infra_summary,
-            },
-            "email_auth": {
-                "category": "Email Spoofing Defense",
-                "weight": 35,
-                "score": email_factor_score,
-                "max_score": 35,
-                "status": email_status,
-                "summary": email_summary,
-            },
-            "dnssec": {
-                "category": "DNSSEC & Integrity",
-                "weight": 20,
-                "score": dnssec_score,
-                "max_score": 20,
-                "status": dnssec_stat,
-                "summary": dnssec_summary,
-            },
-            "threats": {
-                "category": "Subdomain Threat Defense",
-                "weight": 20,
-                "score": threat_score,
-                "max_score": 20,
-                "status": threat_status,
-                "summary": threat_summary,
-            },
-        },
+        "factors": factors,
+        "score_breakdown": score_breakdown,
     }

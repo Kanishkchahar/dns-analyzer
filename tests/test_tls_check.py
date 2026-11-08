@@ -16,10 +16,34 @@ class TestTLSUtilities:
         assert isinstance(backend, PinnedIPBackend)
         assert backend.target_ip == "1.1.1.1"
 
+    def test_pinned_transport_private_pool_api_change_has_clear_failure(self):
+        transport = PinnedIPTransport("1.1.1.1", verify=True)
+        try:
+            pool = transport._pool
+            ssl_context = pool._ssl_context
+            backend = pool._network_backend
+        except AttributeError as exc:
+            pytest.fail(
+                "PinnedIPTransport depends on httpcore's private AsyncConnectionPool "
+                "._ssl_context and ._network_backend API; update the pinned transport "
+                f"for this httpcore version ({exc})."
+            )
+        assert ssl_context is not None
+        assert isinstance(backend, PinnedIPBackend)
+
     async def test_resolve_and_verify_all_ips_blocks_loopback(self):
         safe, ips, reason = await resolve_and_verify_all_ips("127.0.0.1", 80)
         assert safe is False
         assert "Unsafe address" in reason
+
+    async def test_resolve_and_verify_budget_exhaustion_is_inconclusive(self):
+        from app.work_budget import BudgetedResolver, ScanWorkBudget
+        budget = ScanWorkBudget(dns_queries=0, http_requests=25)
+        resolver = BudgetedResolver(object(), budget)
+        safe, addresses, reason = await resolve_and_verify_all_ips("example.com", resolver=resolver)
+        assert safe is False
+        assert addresses == []
+        assert "DNS query budget exhausted" in reason
 
     def test_ssrf_safety_blocks_private_and_loopback_ips(self):
         # Loopback

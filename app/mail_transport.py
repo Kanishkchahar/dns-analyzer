@@ -11,6 +11,7 @@ import httpx
 from app.models import Finding
 from app.tls_check import PinnedIPTransport, resolve_and_verify_all_ips
 from app.work_budget import ScanWorkBudget
+from app.http_config import outbound_http_headers
 
 
 async def _query_txt(resolver: dns.asyncresolver.Resolver, name: str) -> tuple[list[str], str | None]:
@@ -20,7 +21,7 @@ async def _query_txt(resolver: dns.asyncresolver.Resolver, name: str) -> tuple[l
     except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
         return [], None
     except Exception as exc:
-        return [], type(exc).__name__
+        return [], "DNS lookup failed"
 
 
 def _parse_sts_policy(text: str) -> dict[str, Any]:
@@ -76,10 +77,10 @@ async def check_mail_transport(
             for address in ips:
                 try:
                     if not await budget.reserve_http():
-                        policy_errors.append("request_budget_exhausted")
+                        policy_errors.append("budget_exhausted")
                         break
                     transport = PinnedIPTransport(address, verify=True)
-                    async with httpx.AsyncClient(transport=transport, timeout=timeout, follow_redirects=False) as client:
+                    async with httpx.AsyncClient(transport=transport, timeout=timeout, follow_redirects=False, headers=outbound_http_headers()) as client:
                         async with client.stream("GET", f"https://mta-sts.{domain}/.well-known/mta-sts.txt") as response:
                             policy_status_code = response.status_code
                             if 200 <= response.status_code < 300:
@@ -91,13 +92,14 @@ async def check_mail_transport(
                                 policy_body = bytes(chunks).decode("utf-8", errors="replace")
                             break
                 except Exception as exc:
-                    policy_errors.append(type(exc).__name__)
+                    policy_errors.append("request failed")
             if policy_body is not None:
                 parsed = _parse_sts_policy(policy_body)
                 valid = parsed.get("version") == "STSv1" and parsed.get("mode") in ("testing", "enforce", "none") and isinstance(parsed.get("max_age"), int) and parsed["max_age"] >= 0
                 sts_data.update({"policy_status": "valid" if valid else "invalid", "policy_http_status": policy_status_code, "policy": parsed, "policy_reason": None if valid else "Policy file is missing required or valid fields."})
             else:
-                sts_data.update({"policy_status": "unavailable", "policy_http_status": policy_status_code, "policy_reason": "Policy file could not be retrieved within the request budget or timed out."})
+                exhausted = "budget_exhausted" in policy_errors
+                sts_data.update({"policy_status": "inconclusive" if exhausted else "unavailable", "policy_http_status": policy_status_code, "policy_reason": "HTTP request budget exhausted; result is inconclusive." if exhausted else "Policy file could not be retrieved."})
 
     rpt_txt = next((item for item in rpt_records if item.strip().lower().startswith("v=tlsrptv1")), None)
     rpt_data: dict[str, Any] = {"status": "inconclusive" if rpt_error else "not_configured", "dns_name": rpt_name, "record": rpt_txt, "reporting_uris": [], "reason": f"DNS lookup failed ({rpt_error})." if rpt_error else None}

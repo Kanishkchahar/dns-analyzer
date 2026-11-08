@@ -1,11 +1,11 @@
 # ==============================================================================
-# Dockerfile v2 — Production Multi-Stage Build for DNS Analyzer v2
+# Dockerfile v2 — Production Multi-Stage Build for DNS Analyzer 2.2.0
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
 # Stage 1: Dependency Builder
 # ------------------------------------------------------------------------------
-ARG PYTHON_VERSION=3.14
+ARG PYTHON_VERSION=3.11
 FROM python:${PYTHON_VERSION}-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -53,8 +53,8 @@ RUN pytest -v
 FROM python:${PYTHON_VERSION}-slim AS runtime
 
 LABEL maintainer="DNS Analyzer Team" \
-      version="2.1.0" \
-      description="DNS Analyzer v2 — Security Posture Cockpit & DNS/Email Diagnostic Engine"
+      version="2.2.0" \
+      description="DNS Analyzer 2.2.0 — Security Posture Cockpit & DNS/Email Diagnostic Engine"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

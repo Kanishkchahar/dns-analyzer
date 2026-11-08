@@ -61,9 +61,9 @@ echo ""
 
 if [ "$RUN_DOCKER" = true ]; then
   echo -e "  ${CYAN}➜ Building and starting DNS Analyzer v2 container via Docker...${NC}"
-  docker build -t kanishkchahar/dns-analyzer:v2.1.0 -t kanishkchahar/dns-analyzer:v2 .
+  docker build -t kanishkchahar/dns-analyzer:v2.2.0 -t kanishkchahar/dns-analyzer:v2 .
   docker rm -f dns-analyzer-v2 2>/dev/null || true
-  docker run -d --name dns-analyzer-v2 --restart unless-stopped -p "${PORT:-8000}:8000" kanishkchahar/dns-analyzer:v2.1.0
+  docker run -d --name dns-analyzer-v2 --restart unless-stopped -p "${PORT:-8000}:8000" kanishkchahar/dns-analyzer:v2.2.0
   echo ""
   echo -e "  ${GREEN}✔ Container running on http://127.0.0.1:${PORT:-8000}/${NC}"
   echo -e "  To view logs:  ${YELLOW}docker logs -f dns-analyzer-v2${NC}"

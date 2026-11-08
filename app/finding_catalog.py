@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from typing import Any
 
 
@@ -38,11 +40,164 @@ _CATALOG: dict[str, dict[str, str]] = {
 
 
 _DMARC_RULES: tuple[tuple[str, str, str, str, str], ...] = (
-    ("no DMARC policy", "MAIL-DMARC-001", "DMARC record missing", "Publish a DMARC TXT record at _dmarc and start with a monitored policy.", "RFC 7489"),
+    ("no dmarc policy", "MAIL-DMARC-001", "DMARC record missing", "Publish a DMARC TXT record at _dmarc and start with a monitored policy.", "RFC 7489"),
     ("policy is set to 'none'", "MAIL-DMARC-002", "DMARC policy is monitor-only", "Review reports, then move to quarantine or reject when legitimate mail aligns.", "RFC 7489"),
     ("no aggregate report address (rua)", "MAIL-DMARC-003", "DMARC aggregate reporting is disabled", "Add a monitored rua=mailto: address to receive aggregate reports.", "RFC 7489"),
     ("policy applies to only", "MAIL-DMARC-004", "DMARC policy is partially applied", "Set pct=100 after validating mail flows and report results.", "RFC 7489"),
 )
+
+# Stable condition codes split findings that historically shared a broad
+# record-type code. The catalog's original broad codes remain available as
+# compatibility aliases for clients that stored earlier responses.
+_CONDITION_CODES: tuple[tuple[str, str, str], ...] = (
+    ("GENERAL", "does not resolve to any ip address", "DNS-RESOLVE-001"),
+    ("NS", "no nameservers found", "DNS-NS-001"),
+    ("NS", "only one nameserver", "DNS-NS-003"),
+    ("NS", "does not resolve", "DNS-NS-004"),
+    ("NS", "operates under authoritative zone", "DNS-NS-005"),
+    ("MX", "no mx records found", "MAIL-MX-001"),
+    ("MX", "does not resolve", "MAIL-MX-002"),
+    ("CNAME", "coexists with other record types", "DNS-CNAME-001"),
+    ("SOA", "no soa record found", "DNS-SOA-001"),
+    ("SOA", "refresh interval", "DNS-SOA-002"),
+    ("SOA", "expire value", "DNS-SOA-003"),
+    ("CAA", "no caa issuance policy", "DNS-CAA-002"),
+    ("CAA", "explicitly forbids certificate issuance", "DNS-CAA-003"),
+    ("CAA", "restricts certificate issuance to", "DNS-CAA-004"),
+    ("A", "ttl of 0", "DNS-TTL-001"),
+    ("AAAA", "ttl of 0", "DNS-TTL-001"),
+    ("MX", "ttl of 0", "DNS-TTL-001"),
+    ("NS", "ttl of 0", "DNS-TTL-001"),
+    ("CNAME", "ttl of 0", "DNS-TTL-001"),
+    ("TXT", "ttl of 0", "DNS-TTL-001"),
+    ("CAA", "ttl of 0", "DNS-TTL-001"),
+    ("SOA", "ttl of 0", "DNS-TTL-001"),
+    ("A", "ttl on `a` record is unusually high", "DNS-TTL-002"),
+    ("AAAA", "ttl on `aaaa` record is unusually high", "DNS-TTL-002"),
+    ("MX", "ttl on `mx` record is unusually high", "DNS-TTL-002"),
+    ("NS", "ttl on `ns` record is unusually high", "DNS-TTL-002"),
+    ("CNAME", "ttl on `cname` record is unusually high", "DNS-TTL-002"),
+    ("TXT", "ttl on `txt` record is unusually high", "DNS-TTL-002"),
+    ("CAA", "ttl on `caa` record is unusually high", "DNS-TTL-002"),
+    ("SOA", "ttl on `soa` record is unusually high", "DNS-TTL-002"),
+    ("SPF", "no spf record found", "MAIL-SPF-001"),
+    ("SPF", "multiple spf records found", "MAIL-SPF-002"),
+    ("SPF", "exceeding the rfc 7208", "MAIL-SPF-003"),
+    ("SPF", "approaching the", "MAIL-SPF-004"),
+    ("SPF", "has no 'all' mechanism", "MAIL-SPF-005"),
+    ("SPF", "uses '+all'", "MAIL-SPF-006"),
+    ("SPF", "uses '?all'", "MAIL-SPF-007"),
+    ("SPF", "uses '~all'", "MAIL-SPF-008"),
+    ("SPF", "uses '-all'", "MAIL-SPF-009"),
+    ("SPF", "deprecated 'ptr' mechanism", "MAIL-SPF-010"),
+    ("SPF", "characters long, exceeding", "MAIL-SPF-011"),
+    ("DMARC", "could not be verified", "MAIL-DMARC-005"),
+    ("DMARC", "policy is inherited", "MAIL-DMARC-006"),
+    ("DMARC", "policy is 'quarantine'", "MAIL-DMARC-007"),
+    ("DMARC", "policy is 'reject'", "MAIL-DMARC-008"),
+    ("DMARC", "no subdomain policy", "MAIL-DMARC-009"),
+    ("DKIM", "checks were inconclusive", "MAIL-DKIM-001"),
+    ("DKIM", "could not be fully verified", "MAIL-DKIM-002"),
+    ("DKIM", "no dkim records detected", "MAIL-DKIM-003"),
+    ("DKIM", "has an empty public key", "MAIL-DKIM-004"),
+    ("DKIM", "is in testing mode", "MAIL-DKIM-005"),
+    ("DKIM", "is configured for selector", "MAIL-DKIM-006"),
+    ("DNSSEC", "could not be verified", "DNSSEC-002"),
+    ("DNSSEC", "without usable digest data", "DNSSEC-003"),
+    ("DNSSEC", "does not match", "DNSSEC-004"),
+    ("DNSSEC", "none match the zone", "DNSSEC-004"),
+    ("DNSSEC", "without matching zone dnskey", "DNSSEC-005"),
+    ("DNSSEC", "no ds delegation record", "DNSSEC-006"),
+    ("DNSSEC", "not enabled", "DNSSEC-007"),
+    ("DNSSEC", "ds record matches zone dnskey", "DNSSEC-008"),
+    ("TAKEOVER", "potential dangling cname", "TAKEOVER-002"),
+    ("TAKEOVER", "unclaimed-service response fingerprint matched", "TAKEOVER-003"),
+    ("TAKEOVER", "could not be verified", "TAKEOVER-004"),
+    ("AXFR", "allowed an unauthenticated zone transfer", "DNS-AXFR-002"),
+    ("WILDCARD DNS", "random hostname resolved", "DNS-WILDCARD-002"),
+    ("WILDCARD DNS", "could not be evaluated", "DNS-WILDCARD-003"),
+    ("NS CONSISTENCY", "could not obtain both soa and ns answers", "DNS-NSCONS-001"),
+    ("NS CONSISTENCY", "different soa serial numbers", "DNS-NSCONS-002"),
+    ("NS CONSISTENCY", "disagree on soa mname", "DNS-NSCONS-003"),
+    ("NS CONSISTENCY", "different ns record sets", "DNS-NSCONS-004"),
+    ("MTA-STS", "no mta-sts dns record", "MAIL-MTASTS-002"),
+    ("MTA-STS", "policy file status is valid (mode=enforce)", "MAIL-MTASTS-001"),
+    ("MTA-STS", "policy file status is valid", "MAIL-MTASTS-003"),
+    ("MTA-STS", "policy file status is invalid", "MAIL-MTASTS-004"),
+    ("MTA-STS", "policy file status is unavailable", "MAIL-MTASTS-006"),
+    ("MTA-STS", "could not be verified", "MAIL-MTASTS-005"),
+    ("TLS-RPT", "configured with", "MAIL-TLSRPT-001"),
+    ("TLS-RPT", "no tls-rpt reporting record", "MAIL-TLSRPT-002"),
+    ("TLS-RPT", "could not be verified", "MAIL-TLSRPT-003"),
+    ("BIMI", "could not be verified", "MAIL-BIMI-001"),
+    ("BIMI", "not configured", "MAIL-BIMI-004"),
+    ("BIMI", "missing the required svg logo", "MAIL-BIMI-002"),
+    ("BIMI", "record found, but dmarc policy", "MAIL-BIMI-003"),
+    ("BIMI", "bimi is active", "MAIL-BIMI-005"),
+    ("INVENTORY", "stream reached", "RECON-CT-002"),
+    ("INVENTORY", "response exceeded", "RECON-CT-003"),
+    ("INVENTORY", "could not be parsed", "RECON-CT-004"),
+    ("INVENTORY", "returned http", "RECON-CT-005"),
+    ("INVENTORY", "lookup failed", "RECON-CT-006"),
+    ("INVENTORY", "limited to", "RECON-CT-007"),
+    ("INVENTORY", "dns resolution was inconclusive", "RECON-CT-008"),
+    ("SUBDOMAINS", "dangling cname pointers", "RECON-SUB-002"),
+    ("SUBDOMAIN TAKEOVER", "ct inventory found", "TAKEOVER-005"),
+    ("TLS", "ssrf safety guard", "WEB-TLS-001"),
+    ("TLS", "encountered an error", "WEB-TLS-002"),
+    ("TLS", "certificate verification failed", "WEB-TLS-003"),
+    ("TLS", "was inconclusive", "WEB-TLS-007"),
+    ("TLS", "certificate for", "WEB-TLS-004"),
+    ("TLS", "certificate expires soon", "WEB-TLS-005"),
+    ("TLS", "certificate is valid", "WEB-TLS-008"),
+    ("TLS", "san mismatch", "WEB-TLS-006"),
+    ("TLS", "modern encryption protocol", "WEB-TLS-009"),
+    ("TLS", "legacy or deprecated tls protocol", "WEB-TLS-010"),
+    ("HTTPS", "ssrf alert", "WEB-HTTPS-001"),
+    ("HTTPS", "automatically redirects to https", "WEB-HTTPS-003"),
+    ("HTTPS", "does not redirect to https", "WEB-HTTPS-002"),
+    ("HTTPS", "redirect check was inconclusive", "WEB-HTTPS-004"),
+    ("CSP", "common weaknesses", "WEB-CSP-001"),
+    ("CSP", "is present; common", "WEB-CSP-003"),
+    ("COOKIE", "observed cookie(s) miss", "WEB-COOKIE-001"),
+    ("HTTPS", "security header inspection on port", "WEB-HEADERS-001"),
+    ("HTTP METHODS", "advertises potentially sensitive", "WEB-METHODS-001"),
+    ("SECURITY.TXT", "security.txt is missing", "WEB-SECURITYTXT-001"),
+    ("SECURITY.TXT", "security.txt is malformed", "WEB-SECURITYTXT-002"),
+    ("SECURITY.TXT", "security.txt is expired", "WEB-SECURITYTXT-003"),
+    ("HTTPS", "additional browser isolation headers", "WEB-HEADERS-002"),
+    ("HTTPS", "port 80 http", "WEB-HTTPS-005"),
+    ("SPF LOOKUP COUNT", "check could not complete", "SCAN-SPF-001"),
+    ("SPF FLATTENING", "check could not complete", "SCAN-SPF-002"),
+    ("DNSSEC", "check could not complete", "SCAN-DNSSEC-001"),
+    ("TAKEOVER", "check could not complete", "SCAN-TAKEOVER-001"),
+    ("TLS", "check could not complete", "SCAN-TLS-001"),
+    ("SUBDOMAINS", "check could not complete", "SCAN-SUBDOMAINS-001"),
+    ("MAIL TRANSPORT", "check could not complete", "SCAN-MAIL-001"),
+    ("AXFR", "check could not complete", "SCAN-AXFR-001"),
+    ("WILDCARD DNS", "check could not complete", "SCAN-WILDCARD-001"),
+    ("NS CONSISTENCY", "check could not complete", "SCAN-NSCONS-001"),
+    ("DMARC", "check could not complete", "SCAN-DMARC-001"),
+    ("DKIM", "check could not complete", "SCAN-DKIM-001"),
+    ("BIMI", "check could not complete", "SCAN-BIMI-001"),
+    ("HTTPS", "hsts is active", "WEB-HSTS-001"),
+    ("HTTPS", "content-security-policy (csp) header is not published", "WEB-CSP-002"),
+    ("HTTPS", "hsts header is missing", "WEB-HSTS-002"),
+)
+
+_LEGACY_CODE_BY_CONDITION = {
+    (record_type, code): _CATALOG.get(record_type, {"code": "GEN-001"})["code"]
+    for record_type, _marker, code in _CONDITION_CODES
+}
+_LEGACY_CODE_BY_CONDITION.update({("DMARC", code): _CATALOG["DMARC"]["code"] for _marker, code, *_ in _DMARC_RULES})
+_logger = logging.getLogger(__name__)
+
+
+def legacy_codes_for(guidance: dict[str, str], record_type: str | None = None) -> list[str]:
+    """Return broad pre-condition codes as migration aliases when applicable."""
+    code = guidance.get("code", "")
+    legacy = _LEGACY_CODE_BY_CONDITION.get((str(record_type or "").upper(), code))
+    return [legacy] if legacy and legacy != code else []
 
 
 def get_finding_guidance(record_type: str, message: str = "") -> dict[str, str]:
@@ -61,6 +216,11 @@ def get_finding_guidance(record_type: str, message: str = "") -> dict[str, str]:
                     "technical": "Verify the authoritative _dmarc TXT answer and confirm changes after DNS caches expire.",
                     "reference": reference,
                 }
+    for record_type, marker, code in _CONDITION_CODES:
+        if key == record_type and marker in normalized_message:
+            entry = dict(_CATALOG.get(key, _CATALOG["GENERAL"]))
+            entry["code"] = code
+            return entry
     if key in _CATALOG:
         return dict(_CATALOG[key])
     return {
@@ -76,3 +236,51 @@ def get_finding_guidance(record_type: str, message: str = "") -> dict[str, str]:
 
 def catalog_for_export() -> dict[str, dict[str, str]]:
     return {key: dict(value) for key, value in _CATALOG.items()}
+
+
+def known_finding_codes() -> set[str]:
+    """Every code that the shared Finding model is permitted to emit."""
+    return {
+        *(entry["code"] for entry in _CATALOG.values()),
+        *(code for _marker, code, *_ in _DMARC_RULES),
+        *(code for _record_type, _marker, code in _CONDITION_CODES),
+        "GEN-001",
+    }
+
+
+def condition_catalog() -> list[dict[str, str]]:
+    """Return condition-level rules with stable codes and broad legacy aliases."""
+    rows = []
+    for record_type, marker, code in _CONDITION_CODES:
+        legacy = _LEGACY_CODE_BY_CONDITION.get((record_type, code), "")
+        rows.append({"module": record_type, "condition": marker, "code": code, "legacy_alias": legacy})
+    for marker, code, _title, _fix, _reference in _DMARC_RULES:
+        rows.append({"module": "DMARC", "condition": marker, "code": code, "legacy_alias": _CATALOG["DMARC"]["code"]})
+    return rows
+
+
+def render_condition_catalog_markdown() -> str:
+    """Render the checked-in condition table directly from the runtime catalog."""
+    lines = [
+        "# Finding condition codes", "",
+        "Each row is a condition rule used to assign a finding code. Legacy alias is the earlier broad record-type code retained for existing consumers; `—` means no earlier distinct code existed.", "",
+        "| Module/type | Condition marker | Stable code | Legacy alias |",
+        "|---|---|---|---|",
+    ]
+    for row in condition_catalog():
+        lines.append("| {} | `{}` | `{}` | `{}` |".format(
+            row["module"], row["condition"], row["code"], row["legacy_alias"] or "—",
+        ))
+    rows = condition_catalog()
+    primary_codes = {row["code"] for row in rows} | {"GEN-001"}
+    alias_codes = {row["legacy_alias"] for row in rows if row["legacy_alias"]}
+    alias_only = sorted(alias_codes - primary_codes)
+    lines.extend(["", "## Alias-only codes", "", "These broad compatibility codes are not emitted as the primary `code`; matching findings retain them in `legacy_codes`."])
+    lines.append(", ".join(f"`{code}`" for code in alias_only) if alias_only else "None.")
+    reserved = sorted({entry["code"] for entry in _CATALOG.values()} - primary_codes - alias_codes)
+    lines.extend(["", "## Reserved codes", ""])
+    if reserved:
+        lines.extend(f"- `{code}` — reserved; not currently emitted as a primary or legacy code." for code in reserved)
+    else:
+        lines.append("None. Every catalog code is used as a primary code or a legacy alias.")
+    return "\n".join(lines) + "\n"
