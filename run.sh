@@ -50,6 +50,7 @@ for arg in "$@"; do
     echo "  bash run.sh --docker, -d Build & launch containerized service via Docker"
     echo "  bash run.sh --test, -t   Run the automated pytest suite"
     echo "  bash run.sh --setup-only Prepare environment and install the CLI"
+    echo "  Set scan-policy environment variables before launch to enable approved network scans"
     echo "  bash run.sh --reload     Enable development auto-reload"
     echo "  DNS_ANALYZER_HOST=0.0.0.0 bash run.sh  Expose on the local network"
     echo "  ./venv/bin/dns-analyzer <domain> Run the shared scan pipeline from the CLI"
@@ -71,7 +72,14 @@ if [ "$RUN_DOCKER" = true ]; then
   echo -e "  ${CYAN}➜ Building and starting DNS Analyzer v2 container via Docker...${NC}"
   docker build -t kanishkchahar/dns-analyzer:v2.2.0 -t kanishkchahar/dns-analyzer:v2 .
   docker rm -f dns-analyzer-v2 2>/dev/null || true
-  docker run -d --name dns-analyzer-v2 --restart unless-stopped -p "${PORT:-8000}:8000" kanishkchahar/dns-analyzer:v2.2.0
+  docker run -d --name dns-analyzer-v2 --restart unless-stopped -p "${PORT:-8000}:8000" \
+    -e ENABLE_ACTIVE_PORT_SCAN \
+    -e PORT_SCAN_API_KEY \
+    -e PORT_SCAN_ALLOWED_DOMAINS \
+    -e ENABLE_WIDE_DIRECTORY_SCAN \
+    -e WIDE_PATH_SCAN_API_KEY \
+    -e WIDE_PATH_SCAN_ALLOWED_DOMAINS \
+    kanishkchahar/dns-analyzer:v2.2.0
   echo ""
   echo -e "  ${GREEN}✔ Container running on http://127.0.0.1:${PORT:-8000}/${NC}"
   echo -e "  To view logs:  ${YELLOW}docker logs -f dns-analyzer-v2${NC}"
@@ -130,6 +138,12 @@ if [ "$SETUP_ONLY" = true ]; then
   echo -e "  ${GREEN}✔ Setup complete! Run ${YELLOW}bash run.sh${GREEN} to start the server.${NC}"
   echo ""
   exit 0
+fi
+
+if command -v nmap >/dev/null 2>&1; then
+  echo -e "  ${GREEN}✔ Nmap available: $(nmap --version | head -n 1)${NC}"
+else
+  echo -e "  ${YELLOW}⚠ Nmap not found. Install it for Nmap mode; Basic TCP mode remains available.${NC}"
 fi
 
 if [ "$RUN_TESTS" = true ]; then

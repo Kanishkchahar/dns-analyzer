@@ -132,6 +132,50 @@ class TestNetworkScan:
         assert all(path["state"] == "inconclusive" for path in target["paths"])
         assert all("budget exhausted" in path["error"].lower() for path in target["paths"])
 
+    async def test_common_path_scan_completes_with_budget_for_all_seven_paths(self, monkeypatch):
+        from app import network_scan
+        from app.work_budget import ScanWorkBudget
+
+        class Response:
+            status_code = 404
+            headers = {}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            def stream(self, *_args, **_kwargs):
+                return Response()
+
+        async def safe_public_target(*_args, **_kwargs):
+            return True, ["93.184.216.34"], "Public IP"
+
+        monkeypatch.setattr(network_scan, "resolve_and_verify_all_ips", safe_public_target)
+        monkeypatch.setattr(network_scan, "PinnedIPTransport", lambda *_args, **_kwargs: object())
+        monkeypatch.setattr(network_scan.httpx, "AsyncClient", lambda **_kwargs: Client())
+
+        budget = ScanWorkBudget(
+            profile="network_scan",
+            dns_queries=500,
+            http_requests=len(COMMON_WEB_PATHS),
+        )
+        result = await run_common_path_scan(["example.com"], work_budget=budget)
+
+        target = result["targets"][0]
+        assert target["status"] == "complete"
+        assert len(target["paths"]) == len(COMMON_WEB_PATHS) == 7
+        assert all(path["state"] == "not_found" for path in target["paths"])
+        assert budget.http_remaining == 0
+
     async def test_port_scan_disabled_by_default(self, monkeypatch):
         monkeypatch.delenv("ENABLE_ACTIVE_PORT_SCAN", raising=False)
         res = await run_port_scan("93.184.216.34", ports=[80], confirmed=True)

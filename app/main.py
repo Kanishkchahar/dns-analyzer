@@ -1,7 +1,7 @@
 """FastAPI application — routes, static file serving, error handling."""
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 import logging
 import os
@@ -15,9 +15,17 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from app.analyzer import analyze, summarize
+from app.auth import require_api_key
+from app.check_registry import run_registered_checks
 from app.bimi import check_bimi
 from app.dnssec import check_dnssec
-from app.dns_posture import check_nameserver_consistency, check_wildcard_dns, check_zone_transfers
+from app.dns_posture import (
+    check_nameserver_asn_diversity,
+    check_nameserver_consistency,
+    check_parent_child_delegation,
+    check_wildcard_dns,
+    check_zone_transfers,
+)
 from app.email_auth import (
     analyze_dkim,
     analyze_dmarc,
@@ -28,6 +36,7 @@ from app.email_auth import (
 )
 from app.models import (
     AnalyzeRequest,
+    BatchAnalyzeRequest,
     AnalyzeResponse,
     DomainScore,
     EmailAuth,
@@ -37,12 +46,20 @@ from app.models import (
     ListScanRequest,
     PortScanRequest,
     PathScanRequest,
-    RemediationFix,
     SecurityAudit,
     Summary,
 )
 from app.mail_transport import check_mail_transport
-from app.network_scan import run_common_path_scan, run_list_scan, run_port_scan
+from app.network_scan import (
+    COMMON_PATH_SCAN_HTTP_BUDGET,
+    WIDE_PATH_SCAN_HTTP_BUDGET,
+    is_active_scan_allowed,
+    run_common_path_scan,
+    run_list_scan,
+    run_port_scan,
+    verify_port_scan_authorization,
+    verify_wide_path_authorization,
+)
 from app.remediation import generate_bind_zone_file, generate_remediation_fixes
 from app.report import build_report
 from app.resolver import resolve_domain
@@ -51,7 +68,7 @@ from app.subdomains import discover_passive_subdomains
 from app.takeover import check_subdomain_takeover
 from app.tls_check import audit_tls_and_https
 from app.work_budget import ScanWorkBudget
-from app.http_config import outbound_http_headers, warn_if_placeholder_documentation_url
+from app.http_config import warn_if_placeholder_documentation_url
 
 logger = logging.getLogger("dns_analyzer")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -102,6 +119,14 @@ _CLIENT_REQUESTS: dict[str, list[float]] = {}
 _RATE_WINDOW = 60.0
 _MAX_REQ_PER_WINDOW = 60
 _MAX_TRACKED_IPS = 2048
+_TARGET_LAST_SCAN: dict[str, float] = {}
+
+
+def _configured_limit(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, str(default))))
+    except ValueError:
+        return default
 
 
 def _get_cached_scan(domain: str) -> AnalyzeResponse | None:
@@ -183,27 +208,33 @@ def _extract_client_ip(request: Request) -> str:
     """
     trust_proxy = os.environ.get("TRUST_REVERSE_PROXY", "false").strip().lower() in ("true", "1", "yes")
     if trust_proxy and "x-forwarded-for" in request.headers:
-        # Proxies commonly append the address they observed. The rightmost value
-        # is therefore the one supplied by the nearest trusted proxy, not by the
-        # original client. Ignore malformed values and fall back to the peer.
-        forwarded = request.headers["x-forwarded-for"].split(",")
-        if forwarded:
-            candidate = forwarded[-1].strip()
-            try:
-                import ipaddress
-                return str(ipaddress.ip_address(candidate))
-            except ValueError:
-                pass
+        # Walk from the nearest proxy toward the client, skipping malformed
+        # entries. The configured hop count must match the trusted proxy chain.
+        try:
+            trusted_count = int(os.environ.get("TRUSTED_PROXY_COUNT", "1"))
+        except ValueError:
+            trusted_count = 1
+        if trusted_count > 0:
+            import ipaddress
+            valid_forwarded = []
+            for value in reversed(request.headers["x-forwarded-for"].split(",")):
+                try:
+                    valid_forwarded.append(str(ipaddress.ip_address(value.strip())))
+                except ValueError:
+                    continue
+            if len(valid_forwarded) >= trusted_count:
+                return valid_forwarded[trusted_count - 1]
     return request.client.host if request.client else "unknown"
 
 
-def _enforce_rate_limit(request: Request) -> None:
+def _enforce_rate_limit(request: Request, cost: int = 1, *, limit: int | None = None) -> None:
     client_ip = _extract_client_ip(request)
+    bucket_key = f"{client_ip}:expensive" if limit is not None else client_ip
     now = asyncio.get_running_loop().time()
     cutoff = now - _RATE_WINDOW
 
     # Bounded cache cleanup: purge stale IP records if table exceeds limit
-    if len(_CLIENT_REQUESTS) >= _MAX_TRACKED_IPS and client_ip not in _CLIENT_REQUESTS:
+    if len(_CLIENT_REQUESTS) >= _MAX_TRACKED_IPS and bucket_key not in _CLIENT_REQUESTS:
         stale_keys = [ip for ip, timestamps in _CLIENT_REQUESTS.items() if not timestamps or timestamps[-1] <= cutoff]
         for ip in stale_keys:
             del _CLIENT_REQUESTS[ip]
@@ -214,17 +245,37 @@ def _enforce_rate_limit(request: Request) -> None:
             oldest_ip = min(_CLIENT_REQUESTS, key=lambda ip: _CLIENT_REQUESTS[ip][-1] if _CLIENT_REQUESTS[ip] else 0)
             del _CLIENT_REQUESTS[oldest_ip]
 
-    reqs = _CLIENT_REQUESTS.setdefault(client_ip, [])
-    _CLIENT_REQUESTS[client_ip] = [t for t in reqs if t > cutoff]
+    reqs = _CLIENT_REQUESTS.setdefault(bucket_key, [])
+    _CLIENT_REQUESTS[bucket_key] = [t for t in reqs if t > cutoff]
 
-    # Limit: 60 req/min for public clients, 120 req/min for local loopback
-    max_reqs = 120 if client_ip == "127.0.0.1" else _MAX_REQ_PER_WINDOW
-    if len(_CLIENT_REQUESTS[client_ip]) >= max_reqs:
+    # General API traffic has a configurable limit; expensive endpoints use
+    # their own lower configured limit. Loopback gets a larger general budget.
+    max_reqs = limit or _configured_limit("DNS_ANALYZER_RATE_LIMIT_PER_MIN", _MAX_REQ_PER_WINDOW)
+    if limit is None and client_ip == "127.0.0.1":
+        max_reqs = max(max_reqs, 120)
+    if len(_CLIENT_REQUESTS[bucket_key]) + max(1, cost) > max_reqs:
         raise HTTPException(
             status_code=429,
             detail="Rate limit exceeded. Please wait a moment before sending additional requests.",
         )
-    _CLIENT_REQUESTS[client_ip].append(now)
+    _CLIENT_REQUESTS[bucket_key].extend([now] * max(1, cost))
+
+
+def _enforce_target_cooldown(target: str, check_type: str = "analysis") -> None:
+    now = asyncio.get_running_loop().time()
+    cooldown = _configured_limit("DNS_ANALYZER_TARGET_COOLDOWN_SECONDS", 10)
+    key = f"{check_type}:{target.strip().lower().rstrip('.')}"
+    last_scan = _TARGET_LAST_SCAN.get(key)
+    if last_scan is not None and now - last_scan < cooldown:
+        raise HTTPException(status_code=429, detail="This target was scanned recently. Retry after the cooldown.")
+    if len(_TARGET_LAST_SCAN) >= 2048:
+        expired = [name for name, timestamp in _TARGET_LAST_SCAN.items() if now - timestamp >= cooldown]
+        for name in expired:
+            _TARGET_LAST_SCAN.pop(name, None)
+        if len(_TARGET_LAST_SCAN) >= 2048:
+            oldest = min(_TARGET_LAST_SCAN, key=_TARGET_LAST_SCAN.get)
+            _TARGET_LAST_SCAN.pop(oldest, None)
+    _TARGET_LAST_SCAN[key] = now
 
 
 @asynccontextmanager
@@ -241,6 +292,27 @@ async def _scan_slot():
         yield
     finally:
         SCAN_SEMAPHORE.release()
+
+
+async def _await_scan_or_disconnect(request: Request, operation: Any) -> Any:
+    """Cancel outbound scan work when the browser closes its request."""
+    task = asyncio.ensure_future(operation)
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=0.15)
+            if done:
+                return task.result()
+            if await request.is_disconnected():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+                raise HTTPException(status_code=499, detail="Scan cancelled because the client disconnected.")
+    except asyncio.CancelledError:
+        if not task.done():
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        raise
 
 
 
@@ -312,6 +384,18 @@ def _build_scan_coverage(
         f"{len(consistency.get('observations', []))} direct observations",
     ))
     result.append(item("Wildcard DNS", "partial" if wildcard.get("status") == "inconclusive" else "complete", f"Result: {wildcard.get('status', 'unavailable')}"))
+    asn_diversity = posture.get("nameserver_asn_diversity", {})
+    result.append(item(
+        "Nameserver network diversity",
+        "partial" if asn_diversity.get("status") != "complete" else "complete",
+        f"Origin ASNs: {', '.join(asn_diversity.get('asns', [])) or 'unavailable'}",
+    ))
+    delegation = posture.get("parent_child_delegation", {})
+    result.append(item(
+        "Parent-child delegation and glue",
+        "partial" if delegation.get("status") != "complete" else "complete",
+        f"Parent responses: {len(delegation.get('parent_observations', []))}; glue records: {len(delegation.get('glue', []))}",
+    ))
     return result
 
 
@@ -414,6 +498,7 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         (axfr_data, axfr_findings),
         (wildcard_data, wildcard_findings),
         (ns_consistency_data, ns_consistency_findings),
+        (ns_asn_data, ns_asn_findings),
     ) = await asyncio.gather(
         _isolated_data_check("DMARC", fetch_dmarc(domain, work_budget.resolver_for(base_resolver, "dmarc"), apex=zone_apex), {"status": "inconclusive", "policy": None, "reason": "DMARC lookup failed."}),
         _isolated_data_check("DKIM", check_dkim_selectors(domain, work_budget.resolver_for(base_resolver, "dkim")), {"status": "inconclusive", "selectors_found": [], "selectors_checked": [], "has_dkim": False}),
@@ -425,6 +510,17 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         _isolated_pair_check("AXFR", check_zone_transfers(zone_apex, ns_hosts, work_budget.resolver_for(base_resolver, "dns_posture"), work_budget=work_budget), {"zone": zone_apex, "status": "inconclusive", "nameservers_checked": 0, "servers": []}),
         _isolated_pair_check("WILDCARD DNS", check_wildcard_dns(zone_apex, work_budget.resolver_for(base_resolver, "dns_posture")), {"status": "inconclusive", "addresses": [], "records": {"A": [], "AAAA": []}}),
         _isolated_pair_check("NS CONSISTENCY", check_nameserver_consistency(zone_apex, ns_hosts, work_budget.resolver_for(base_resolver, "dns_posture"), work_budget=work_budget), {"status": "inconclusive", "observations": [], "serials_match": None, "ns_sets_match": None}),
+        _isolated_pair_check("NS DIVERSITY", check_nameserver_asn_diversity(ns_hosts, work_budget.resolver_for(base_resolver, "dns_posture"), work_budget=work_budget), {"status": "inconclusive", "nameservers": [], "asns": [], "single_asn": None}),
+    )
+    parent_child_data, parent_child_findings = await _isolated_pair_check(
+        "NS DELEGATION",
+        check_parent_child_delegation(
+            zone_apex, base_resolver, ns_consistency_data.get("observations", []),
+            work_budget=work_budget,
+        ),
+        {"status": "inconclusive", "zone": zone_apex, "parent_zone": None,
+         "parent_observations": [], "parent_nameservers": [], "child_nameservers": [],
+         "glue": [], "delegation_matches": None},
     )
     wildcard_ips = set(wildcard_data.get("addresses", []))
     if wildcard_data.get("status") == "detected" and sub_data.get("subdomains"):
@@ -448,6 +544,13 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
     )
     bimi_findings = bimi_scan_findings
 
+    extensions, extension_findings = await run_registered_checks(
+        domain,
+        base_resolver,
+        work_budget,
+        records,
+    )
+
     # Email health score
     email_score_data = compute_email_score(spf_findings, dmarc_findings, dkim_findings)
 
@@ -459,7 +562,7 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         dnssec_data=dnssec_data,
         takeover_data=takeover_data,
         tls_data=tls_data,
-        dns_posture_data={"axfr": axfr_data, "wildcard": wildcard_data, "nameserver_consistency": ns_consistency_data},
+        dns_posture_data={"axfr": axfr_data, "wildcard": wildcard_data, "nameserver_consistency": ns_consistency_data, "nameserver_asn_diversity": ns_asn_data, "parent_child_delegation": parent_child_data},
         mail_transport_data=mail_transport_data,
         subdomains_data=sub_data,
         email_data={
@@ -467,7 +570,7 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
             "dmarc_status": (dmarc_data or {}).get("status", "complete"),
             "dkim_status": dkim_data.get("status", "inconclusive"),
         },
-        module_findings=(spf_findings + dmarc_findings + dkim_findings + mail_transport_findings + dnssec_findings + takeover_findings + tls_findings + sub_findings + axfr_findings + wildcard_findings + ns_consistency_findings),
+        module_findings=(spf_findings + dmarc_findings + dkim_findings + mail_transport_findings + dnssec_findings + takeover_findings + tls_findings + sub_findings + axfr_findings + wildcard_findings + ns_consistency_findings + ns_asn_findings + parent_child_findings),
     )
 
     email_auth = EmailAuth(
@@ -502,11 +605,16 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
         + axfr_findings
         + wildcard_findings
         + ns_consistency_findings
+        + ns_asn_findings
+        + parent_child_findings
+        + extension_findings
     )
     all_counts = summarize(all_findings)
     # Findings carry severity counts; scan completeness is counted from the
     # canonical scoring checks so the summary agrees with its detailed score.
-    all_counts["inconclusive"] = domain_score_data["inconclusive_count"]
+    all_counts["inconclusive"] = domain_score_data["inconclusive_count"] + sum(
+        finding.severity == "inconclusive" for finding in extension_findings
+    )
 
     # Generate Tailored 1-Click DNS Fixes
     fixes = generate_remediation_fixes(domain, all_findings, email_auth, security_audit, records=records)
@@ -514,8 +622,17 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
     coverage = _build_scan_coverage(
         records, spf_lookup_data, dmarc_data, dkim_data, dnssec_data,
         takeover_data, tls_data, sub_data, bimi_data, mail_transport_data,
-        {"axfr": axfr_data, "wildcard": wildcard_data, "nameserver_consistency": ns_consistency_data},
+        {"axfr": axfr_data, "wildcard": wildcard_data, "nameserver_consistency": ns_consistency_data, "nameserver_asn_diversity": ns_asn_data, "parent_child_delegation": parent_child_data},
     )
+    for name, data in extensions.items():
+        checks = data if data and all(isinstance(value, dict) for value in data.values()) else {name: data}
+        for check_name, check_data in checks.items():
+            status = check_data.get("status", "complete")
+            coverage.append({
+                "name": check_name.replace("_", " ").title(),
+                "status": "partial" if status in ("inconclusive", "unavailable", "partial") else "complete",
+                "detail": f"Result: {status}",
+            })
 
     return AnalyzeResponse(
         domain=domain,
@@ -534,7 +651,10 @@ async def run_full_scan(domain: str) -> AnalyzeResponse:
             "axfr": axfr_data,
             "wildcard": wildcard_data,
             "nameserver_consistency": ns_consistency_data,
+            "nameserver_asn_diversity": ns_asn_data,
+            "parent_child_delegation": parent_child_data,
         },
+        extensions=extensions,
         coverage=coverage,
         remediation=fixes,
         bind_zone_snippet=zone_snippet,
@@ -562,8 +682,12 @@ async def health_ready() -> JSONResponse:
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 async def api_analyze(req: AnalyzeRequest, request: Request) -> AnalyzeResponse:
-    _enforce_rate_limit(request)
+    require_api_key(request)
+    _enforce_rate_limit(request, limit=_configured_limit("DNS_ANALYZER_EXPENSIVE_RATE_LIMIT_PER_MIN", 10))
+    return await _await_scan_or_disconnect(request, _analyze_domain(req))
 
+
+async def _analyze_domain(req: AnalyzeRequest) -> AnalyzeResponse:
     # Fast-path cache lookup unless force_refresh is requested
     if not req.force_refresh:
         cached = _get_cached_scan(req.domain)
@@ -571,6 +695,7 @@ async def api_analyze(req: AnalyzeRequest, request: Request) -> AnalyzeResponse:
             return cached
 
     async with _scan_slot():
+        _enforce_target_cooldown(req.domain)
         try:
             res = await asyncio.wait_for(run_full_scan(req.domain), timeout=SCAN_TIMEOUT_SECONDS)
             _store_cached_scan(req.domain, res)
@@ -588,35 +713,80 @@ async def api_analyze(req: AnalyzeRequest, request: Request) -> AnalyzeResponse:
             ) from exc
 
 
+@app.post("/api/analyze/batch")
+async def api_analyze_batch(req: BatchAnalyzeRequest, request: Request) -> dict[str, Any]:
+    """Analyze a small domain set concurrently for dashboard comparison."""
+    require_api_key(request)
+    _enforce_rate_limit(
+        request,
+        cost=len(req.domains),
+        limit=_configured_limit("DNS_ANALYZER_EXPENSIVE_RATE_LIMIT_PER_MIN", 10),
+    )
+
+    async def analyze_one(domain: str) -> dict[str, Any]:
+        try:
+            result = await _analyze_domain(AnalyzeRequest(domain=domain, force_refresh=req.force_refresh))
+            return {"domain": domain, "status": "complete", "data": result.model_dump(mode="json")}
+        except HTTPException as exc:
+            return {"domain": domain, "status": "error", "status_code": exc.status_code, "error": exc.detail}
+
+    results = await _await_scan_or_disconnect(request, asyncio.gather(*(analyze_one(domain) for domain in req.domains)))
+    return {"results": results}
+
+
 @app.post("/api/network/list-scan")
 async def api_network_list_scan(req: ListScanRequest, request: Request) -> dict[str, Any]:
     """Execute non-intrusive DNS list scan across user-specified target scope."""
-    _enforce_rate_limit(request)
+    require_api_key(request)
+    _enforce_rate_limit(request, limit=_configured_limit("DNS_ANALYZER_EXPENSIVE_RATE_LIMIT_PER_MIN", 10))
     if not req.targets or len(req.targets) > 50:
         raise HTTPException(status_code=400, detail="Provide between 1 and 50 target hostnames or IPs.")
-    async with _scan_slot():
-        import dns.asyncresolver
-        budget = ScanWorkBudget(profile="network_scan")
-        resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
-        return await run_list_scan(req.targets, resolver=resolver, work_budget=budget)
+    async def execute() -> dict[str, Any]:
+        async with _scan_slot():
+            for target in req.targets:
+                _enforce_target_cooldown(target, "resolve")
+            import dns.asyncresolver
+            budget = ScanWorkBudget(profile="network_scan")
+            resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
+            return await run_list_scan(req.targets, resolver=resolver, work_budget=budget)
+
+    return await _await_scan_or_disconnect(request, execute())
 
 
 @app.post("/api/network/path-scan")
 async def api_network_path_scan(req: PathScanRequest, request: Request) -> dict[str, Any]:
     """Check a fixed, bounded set of public website paths without crawling."""
-    _enforce_rate_limit(request)
+    require_api_key(request)
+    _enforce_rate_limit(request, limit=_configured_limit("DNS_ANALYZER_EXPENSIVE_RATE_LIMIT_PER_MIN", 10))
     if not req.targets or len(req.targets) > 5:
         raise HTTPException(status_code=400, detail="Provide between 1 and 5 target hostnames or public IPs.")
-    async with _scan_slot():
-        try:
-            import dns.asyncresolver
-            budget = ScanWorkBudget(profile="network_scan")
-            resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
-            result = await asyncio.wait_for(run_common_path_scan(req.targets, resolver=resolver, work_budget=budget), timeout=30.0)
-            _store_path_scan_results(result)
-            return result
-        except asyncio.TimeoutError as exc:
-            raise HTTPException(status_code=504, detail="Common web path checks timed out. Retry with fewer targets.") from exc
+    if req.wide and not req.confirmed:
+        raise HTTPException(status_code=400, detail="Explicit confirmation is required for wide directory discovery.")
+    if req.wide and len(req.targets) > 2:
+        raise HTTPException(status_code=400, detail="Wide directory discovery is limited to 2 targets per request.")
+    if req.wide:
+        wide_token = request.headers.get("x-wide-path-token")
+        auth_header = f"Bearer {wide_token}" if wide_token else request.headers.get("authorization")
+        denied = [target for target in req.targets if not verify_wide_path_authorization(auth_header, target)[0]]
+        if denied:
+            _, message = verify_wide_path_authorization(auth_header, denied[0])
+            raise HTTPException(status_code=403, detail=message)
+    async def execute() -> dict[str, Any]:
+        async with _scan_slot():
+            for target in req.targets:
+                _enforce_target_cooldown(target, "paths")
+            try:
+                import dns.asyncresolver
+                http_budget = WIDE_PATH_SCAN_HTTP_BUDGET if req.wide else COMMON_PATH_SCAN_HTTP_BUDGET
+                budget = ScanWorkBudget(profile="network_scan", http_requests=http_budget)
+                resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
+                result = await asyncio.wait_for(run_common_path_scan(req.targets, resolver=resolver, work_budget=budget, wide=req.wide), timeout=60.0 if req.wide else 30.0)
+                _store_path_scan_results(result)
+                return result
+            except asyncio.TimeoutError as exc:
+                raise HTTPException(status_code=504, detail="Common web path checks timed out. Retry with fewer targets.") from exc
+
+    return await _await_scan_or_disconnect(request, execute())
 
 
 @app.post("/api/email/dkim-selectors")
@@ -641,26 +811,39 @@ async def api_dkim_selector_check(req: DkimSelectorRequest, request: Request) ->
 @app.post("/api/network/port-scan")
 async def api_network_port_scan(req: PortScanRequest, request: Request) -> dict[str, Any]:
     """Execute scoped, opt-in port & service verification on explicitly approved target."""
-    _enforce_rate_limit(request)
+    require_api_key(request)
+    _enforce_rate_limit(request, limit=_configured_limit("DNS_ANALYZER_EXPENSIVE_RATE_LIMIT_PER_MIN", 10))
     if not req.target or len(req.target) > 253:
         raise HTTPException(status_code=400, detail="Invalid target provided.")
     auth_header = request.headers.get("authorization")
-    auth_token = req.auth_token
-    if auth_token:
-        logger.warning("Deprecated port-scan auth_token body field used; use Authorization header")
-        if not auth_header:
-            auth_header = f"Bearer {auth_token}"
-    async with _scan_slot():
-        import dns.asyncresolver
-        budget = ScanWorkBudget(profile="network_scan")
-        resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
-        return await run_port_scan(
-            req.target,
-            ports=req.ports,
-            confirmed=req.confirmed,
-            auth_header=auth_header,
-            resolver=resolver,
-        )
+    port_token = request.headers.get("x-port-scan-token")
+    if req.auth_token:
+        logger.warning("Deprecated port-scan auth_token body field used; use X-Port-Scan-Token")
+        port_token = port_token or req.auth_token
+    if port_token:
+        auth_header = f"Bearer {port_token}"
+    target_cooldown_eligible = (
+        req.confirmed
+        and is_active_scan_allowed()
+        and verify_port_scan_authorization(auth_header, req.target)[0]
+    )
+    async def execute() -> dict[str, Any]:
+        async with _scan_slot():
+            if target_cooldown_eligible:
+                _enforce_target_cooldown(req.target, "ports")
+            import dns.asyncresolver
+            budget = ScanWorkBudget(profile="network_scan")
+            resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
+            return await run_port_scan(
+                req.target,
+                ports=req.ports,
+                confirmed=req.confirmed,
+                auth_header=auth_header,
+                resolver=resolver,
+                scanner=req.scanner,
+            )
+
+    return await _await_scan_or_disconnect(request, execute())
 
 
 @app.get("/api/subdomains/{domain}")
@@ -730,7 +913,8 @@ async def api_grade_badge(domain: str, request: Request) -> Response:
 @app.get("/api/report/{domain}", response_class=HTMLResponse)
 async def api_report(domain: str, request: Request) -> HTMLResponse:
     """Return a downloadable self-contained HTML report (reusing recent scan if available)."""
-    _enforce_rate_limit(request)
+    require_api_key(request)
+    _enforce_rate_limit(request, limit=_configured_limit("DNS_ANALYZER_EXPENSIVE_RATE_LIMIT_PER_MIN", 10))
     try:
         req = AnalyzeRequest(domain=domain)
     except ValidationError as exc:
@@ -747,6 +931,7 @@ async def api_report(domain: str, request: Request) -> HTMLResponse:
                     detail="Server is experiencing high scan volume. Please retry shortly.",
                 )
             try:
+                _enforce_target_cooldown(req.domain)
                 scan = await asyncio.wait_for(run_full_scan(req.domain), timeout=SCAN_TIMEOUT_SECONDS)
                 _store_cached_scan(req.domain, scan)
             finally:
@@ -789,6 +974,7 @@ async def api_report(domain: str, request: Request) -> HTMLResponse:
             coverage=report_coverage,
             dns_posture=scan.dns_posture,
             domain_score=scan.domain_score,
+            extensions=scan.extensions,
         )
         return HTMLResponse(
             content=html,

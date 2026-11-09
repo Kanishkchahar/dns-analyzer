@@ -1,11 +1,11 @@
 """Tests for DNS resolver layer (app/resolver.py)."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 import dns.exception
 import dns.resolver
 import pytest
 
-from app.resolver import _resolve_host_to_a, _safe_query, resolve_domain
+from app.resolver import _resolve_host_addresses, _resolve_host_to_a, _safe_query, resolve_domain
 from tests.conftest import MockAnswer, MockResolver, MockRR
 
 
@@ -74,9 +74,43 @@ class TestResolverLayer:
         fails = await _resolve_host_to_a(resolver, "broken.host.com")
         assert fails is False
 
+    async def test_address_check_accepts_ipv6_only_nameserver_or_mail_host(self):
+        resolver = MockResolver({
+            ("ns-v6.example.com", "A"): dns.resolver.NoAnswer(),
+            ("ns-v6.example.com", "AAAA"): MockAnswer([MockRR(address="2001:db8::53")]),
+            ("mx-v6.example.com", "A"): dns.resolver.NXDOMAIN(),
+            ("mx-v6.example.com", "AAAA"): MockAnswer([MockRR(address="2001:db8::25")]),
+        })
+
+        ns = await _resolve_host_addresses(resolver, "ns-v6.example.com")
+        mx = await _resolve_host_addresses(resolver, "mx-v6.example.com")
+        assert ns == {"resolves": True, "resolution_status": "resolved", "address_families": ["AAAA"]}
+        assert mx == {"resolves": True, "resolution_status": "resolved", "address_families": ["AAAA"]}
+
+    async def test_address_check_keeps_failed_lookup_inconclusive(self):
+        resolver = MockResolver({
+            ("partial.example.com", "A"): dns.exception.Timeout(),
+            ("partial.example.com", "AAAA"): dns.resolver.NoAnswer(),
+        })
+
+        result = await _resolve_host_addresses(resolver, "partial.example.com")
+        assert result["resolves"] is False
+        assert result["resolution_status"] == "inconclusive"
+
+    async def test_address_check_reports_absent_only_when_both_families_are_absent(self):
+        resolver = MockResolver({
+            ("missing.example.com", "A"): dns.resolver.NoAnswer(),
+            ("missing.example.com", "AAAA"): dns.resolver.NoAnswer(),
+        })
+
+        result = await _resolve_host_addresses(resolver, "missing.example.com")
+        assert result["resolves"] is False
+        assert result["resolution_status"] == "unresolved"
+
     async def test_resolve_domain_all_types(self):
         a_ans = MockAnswer([MockRR(address="1.2.3.4")])
         aaaa_ans = MockAnswer([MockRR(address="2001:db8::1")])
+        target_v6_ans = MockAnswer([MockRR(address="2001:db8::53")])
         mx_ans = MockAnswer([MockRR(preference=10, exchange="mx.example.com.")])
         ns_ans = MockAnswer([MockRR(target="ns1.example.com.")])
         txt_ans = MockAnswer([MockRR(strings=[b"v=spf1 -all"])])
@@ -99,8 +133,8 @@ class TestResolverLayer:
             ("example.com", "TXT"): txt_ans,
             ("example.com", "CNAME"): dns.resolver.NXDOMAIN(),
             ("example.com", "SOA"): soa_ans,
-            ("ns1.example.com", "A"): a_ans,
-            ("mx.example.com", "A"): a_ans,
+            ("ns1.example.com", "AAAA"): target_v6_ans,
+            ("mx.example.com", "AAAA"): target_v6_ans,
         }
         mock_resolver = MockResolver(responses)
 
@@ -116,3 +150,5 @@ class TestResolverLayer:
         assert "SOA" in data
         assert data["NS"]["records"][0]["resolves"] is True
         assert data["MX"]["records"][0]["resolves"] is True
+        assert data["NS"]["records"][0]["address_families"] == ["AAAA"]
+        assert data["MX"]["records"][0]["address_families"] == ["AAAA"]

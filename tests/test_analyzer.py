@@ -1,7 +1,5 @@
 """Tests for DNS infrastructure analyzer rules (app/analyzer.py)."""
 
-from typing import Any
-import pytest
 
 from app.analyzer import (
     analyze,
@@ -16,7 +14,6 @@ from app.analyzer import (
     check_ttl_sanity,
     summarize,
 )
-from app.models import Finding
 
 
 class TestAnalyzerChecks:
@@ -94,6 +91,13 @@ class TestAnalyzerChecks:
         assert findings[0].severity == "error"
         assert "ns2.dead.com" in findings[0].message
 
+        uncertain = check_ns_resolves({"NS": {"status": "ok", "records": [
+            {"host": "ns-timeout.example", "resolves": False, "resolution_status": "inconclusive"},
+        ]}})
+        assert len(uncertain) == 1
+        assert uncertain[0].severity == "inconclusive"
+        assert "ns-timeout.example" in uncertain[0].message
+
     def test_check_mx_exists(self):
         data_ok = {"MX": {"status": "ok", "records": [{"priority": 10, "host": "mail.com"}]}}
         assert check_mx_exists(data_ok) == []
@@ -120,6 +124,13 @@ class TestAnalyzerChecks:
         assert len(findings) == 1
         assert findings[0].severity == "error"
         assert "mx1.broken.net" in findings[0].message
+
+        uncertain = check_mx_resolves({"MX": {"status": "ok", "records": [
+            {"priority": 10, "host": "mx-timeout.example", "resolves": False, "resolution_status": "inconclusive"},
+        ]}})
+        assert len(uncertain) == 1
+        assert uncertain[0].severity == "inconclusive"
+        assert "mx-timeout.example" in uncertain[0].message
 
     def test_check_cname_conflict(self):
         # CNAME alone is fine

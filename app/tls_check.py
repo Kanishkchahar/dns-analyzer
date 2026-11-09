@@ -23,6 +23,7 @@ from app.work_budget import ScanBudgetExhausted, ScanWorkBudget
 from app.http_config import outbound_http_headers
 
 logger = logging.getLogger(__name__)
+CERT_EXPIRY_WARNING_DAYS = 30
 
 
 class PinnedIPBackend(httpcore.AsyncNetworkBackend):
@@ -64,16 +65,82 @@ class PinnedIPBackend(httpcore.AsyncNetworkBackend):
         await self._backend.sleep(seconds)
 
 
-class PinnedIPTransport(httpx.AsyncHTTPTransport):
-    """Transport that routes TCP traffic strictly to target_ip while preserving SNI and Host header."""
+class _PinnedResponseStream(httpx.AsyncByteStream):
+    def __init__(self, stream: Any):
+        self._stream = stream
 
-    def __init__(self, target_ip: str, *args: Any, **kwargs: Any):
-        super().__init__(*args, **kwargs)
-        # Use supported constructor parameter to attach the pinned network backend
+    async def __aiter__(self):
+        async for part in self._stream:
+            yield part
+
+    async def aclose(self) -> None:
+        close = getattr(self._stream, "aclose", None)
+        if close:
+            await close()
+
+
+class PinnedIPTransport(httpx.AsyncBaseTransport):
+    """HTTPX transport that connects to a prevalidated IP and keeps URL-host TLS identity."""
+
+    def __init__(
+        self,
+        target_ip: str,
+        *,
+        verify: bool | str | ssl.SSLContext = True,
+        limits: httpx.Limits | None = None,
+        http1: bool = True,
+        http2: bool = False,
+    ):
+        self.target_ip = target_ip
+        if isinstance(verify, ssl.SSLContext):
+            ssl_context = verify
+        elif isinstance(verify, str):
+            ssl_context = ssl.create_default_context(cafile=verify)
+        elif verify:
+            ssl_context = ssl.create_default_context()
+        else:
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
+        limits = limits or httpx.Limits()
         self._pool = httpcore.AsyncConnectionPool(
-            ssl_context=self._pool._ssl_context,
+            ssl_context=ssl_context,
             network_backend=PinnedIPBackend(target_ip),
+            max_connections=limits.max_connections,
+            max_keepalive_connections=limits.max_keepalive_connections,
+            keepalive_expiry=limits.keepalive_expiry,
+            http1=http1,
+            http2=http2,
         )
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        core_request = httpcore.Request(
+            method=request.method,
+            url=httpcore.URL(
+                scheme=request.url.raw_scheme,
+                host=request.url.raw_host,
+                port=request.url.port,
+                target=request.url.raw_path,
+            ),
+            headers=request.headers.raw,
+            content=request.stream,
+            extensions=request.extensions,
+        )
+        try:
+            response = await self._pool.handle_async_request(core_request)
+        except httpcore.HTTPError as exc:
+            raise httpx.TransportError(str(exc), request=request) from exc
+        return httpx.Response(
+            status_code=response.status,
+            headers=response.headers,
+            stream=_PinnedResponseStream(response.stream),
+            extensions=response.extensions,
+            request=request,
+        )
+
+    async def aclose(self) -> None:
+        await self._pool.aclose()
 
 
 
@@ -141,7 +208,7 @@ async def resolve_and_verify_all_ips(hostname: str, port: int = 443, resolver: A
             if not addr_info:
                 return False, [], "Hostname did not resolve to any addresses"
             all_ips = list(dict.fromkeys(info[4][0] for info in addr_info))
-        except Exception as exc:
+        except Exception:
             return False, [], "Resolution failed; result is inconclusive."
 
     for ip in all_ips:
@@ -293,6 +360,52 @@ def _summarize_set_cookie(headers: httpx.Headers) -> list[dict[str, Any]]:
     return summaries
 
 
+async def _probe_tls_protocols(host: str, address: str, port: int, timeout: float = 1.5) -> list[dict[str, Any]]:
+    """Try one bounded handshake per protocol version to inventory server support."""
+    versions = (
+        ("TLSv1", ssl.TLSVersion.TLSv1),
+        ("TLSv1.1", ssl.TLSVersion.TLSv1_1),
+        ("TLSv1.2", ssl.TLSVersion.TLSv1_2),
+        ("TLSv1.3", ssl.TLSVersion.TLSv1_3),
+    )
+
+    async def probe(name: str, version: ssl.TLSVersion) -> dict[str, Any]:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        context.minimum_version = version
+        context.maximum_version = version
+        if version in (ssl.TLSVersion.TLSv1, ssl.TLSVersion.TLSv1_1):
+            try:
+                context.set_ciphers("ALL:@SECLEVEL=0")
+            except ssl.SSLError:
+                return {"protocol": name, "status": "probe_unavailable", "cipher": None}
+        writer = None
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(address, port, ssl=context, server_hostname=host), timeout=timeout,
+            )
+            ssl_object = writer.get_extra_info("ssl_object")
+            cipher_info = ssl_object.cipher() if ssl_object else None
+            cipher = cipher_info[0] if cipher_info else None
+            weak = bool(cipher and re.search(r"(RC4|3DES|DES-CBC|NULL|EXPORT|MD5|ANON)", cipher, re.IGNORECASE))
+            return {"protocol": name, "status": "supported", "cipher": cipher,
+                    "weak_cipher_observed": weak}
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return {"protocol": name, "status": "not_observed", "cipher": None}
+        finally:
+            if writer is not None:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+
+    return await asyncio.gather(*(probe(name, version) for name, version in versions))
+
+
 async def audit_tls_and_https(
     domain: str,
     port: int = 443,
@@ -389,9 +502,9 @@ async def audit_tls_and_https(
             result["status"] = "certificate_error"
             result["reason"] = "TLS certificate verification failed."
             continue
-        except (asyncio.TimeoutError, ConnectionRefusedError, OSError) as exc:
+        except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
             connection_errors.append(f"{candidate_ip}: connection failed")
-        except Exception as exc:
+        except Exception:
             logger.exception("TLS handshake failed")
             result["status"] = "error"
             result["reason"] = "TLS handshake failed; result is inconclusive."
@@ -401,6 +514,17 @@ async def audit_tls_and_https(
                 message="TLS/HTTPS audit encountered an error; result is inconclusive.",
             ))
             return result, findings
+
+    # A default TLS handshake reports only the best mutually negotiated version.
+    # Probe each version separately to detect legacy protocol support.
+    result["protocol_sweep"] = await _probe_tls_protocols(norm_domain, target_ip, port)
+    old_protocols = [item["protocol"] for item in result["protocol_sweep"]
+                     if item["status"] == "supported" and item["protocol"] in ("TLSv1", "TLSv1.1")]
+    weak_ciphers = [item for item in result["protocol_sweep"] if item.get("weak_cipher_observed")]
+    if old_protocols:
+        findings.append(Finding(severity="warning", record_type="TLS", message=f"The protocol sweep observed deprecated TLS support: {', '.join(old_protocols)}."))
+    if weak_ciphers:
+        findings.append(Finding(severity="warning", record_type="TLS", message="The protocol sweep negotiated a weak TLS cipher in at least one protocol probe."))
 
     if certificate_error is not None:
         if not connected:
@@ -468,7 +592,7 @@ async def audit_tls_and_https(
                 record_type="TLS",
                 message=f"TLS certificate for '{norm_domain}' expired on {not_after_str}. Browsers will block connections.",
             ))
-        elif days_remaining <= 14:
+        elif days_remaining <= CERT_EXPIRY_WARNING_DAYS:
             findings.append(Finding(
                 severity="warning",
                 record_type="TLS",
@@ -544,7 +668,7 @@ async def audit_tls_and_https(
                         record_type="HTTPS",
                         message=f"Port 80 HTTP does not redirect to HTTPS (HTTP {status_code}). Cleartext web traffic may be exposed to interception.",
                     ))
-    except Exception as exc:
+    except Exception:
         result["https_redirect"] = {"enforced": None, "status_code": None, "location": None, "status": "inconclusive"}
         findings.append(Finding(
             severity="info",
@@ -645,7 +769,7 @@ async def audit_tls_and_https(
                         record_type="COOKIE",
                         message=f"{len(cookies_with_gaps)} of {len(cookies)} observed cookie(s) miss one or more Secure, HttpOnly, or SameSite attributes. Cookie values were not retained.",
                     ))
-    except Exception as exc:
+    except Exception:
         findings.append(Finding(
             severity="info",
             record_type="HTTPS",
@@ -674,7 +798,7 @@ async def audit_tls_and_https(
                         record_type="HTTP METHODS",
                         message=f"OPTIONS advertises potentially sensitive HTTP methods: {', '.join(risky)}. This is an advertisement, not proof that each method accepts requests; no write request was sent.",
                     ))
-    except Exception as exc:
+    except Exception:
         result["http_methods"] = {"status": "inconclusive", "http_status": None, "advertised": [], "review_methods": [], "probe": "OPTIONS", "reason": "HTTP method check could not be completed."}
 
     # RFC 9116 security.txt is a small, fixed-path request. Bound the response

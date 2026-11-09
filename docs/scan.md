@@ -57,7 +57,7 @@ DKIM discovery queries a built-in list of common selectors and can additionally 
 
 By default, DNSSEC checks whether DNSKEY and parent DS data are present and whether a comparable DS digest matches a DNSKEY. It can identify a missing key, a missing DS delegation, a matching delegation, a mismatch, or an inconclusive lookup.
 
-The default check is a **DS-to-DNSKEY delegation comparison**, not complete cryptographic validation of every answer or the entire chain to the root. Setting `ENABLE_DNSSEC_CHAIN_VALIDATION=true` enables the separate chain validator and its `chain_status` evidence. That opt-in result is not used for scoring. Authenticated denial proofs are not fully validated, so some absence states remain inconclusive. See [deployment notes](DEPLOYMENT.md#safe-defaults).
+The default check is a **DS-to-DNSKEY delegation comparison**, not complete cryptographic validation of every answer or the entire chain to the root. Setting `ENABLE_DNSSEC_CHAIN_VALIDATION=true` enables the separate chain validator and its `chain_status` evidence plus a Root-to-zone graph payload. That opt-in result is not used for scoring. Authenticated denial proofs are not fully validated, so some absence states remain inconclusive. See [deployment notes](DEPLOYMENT.md#safe-defaults).
 
 ### BIMI
 
@@ -71,25 +71,43 @@ These checks inspect published policy and reporting configuration. DNS Analyzer 
 
 ### Certificate Transparency subdomains and takeover indicators
 
-Passive discovery queries the public Certificate Transparency service `crt.sh`, retries a bounded number of times, parses and deduplicates returned names, then checks discovered names through DNS. The result distinguishes a completed search with no names from partial results, timeouts, and source failures. A failed CT lookup is not evidence that no other subdomains exist. CT only lists names represented in the queried certificate data; it is not a complete inventory of an organization's assets. Its `state` distinguishes `DISCOVERY_COMPLETED`, `NO_RESULTS`, `PARTIAL_RESULTS`, `SOURCE_UNAVAILABLE`, and `TIMEOUT`.
+Passive discovery queries `crt.sh` and SSLMate Cert Spotter, retries a bounded number of times, parses and deduplicates returned names, then checks discovered names through DNS. Cert Spotter's unauthenticated access is rate-limited; configure `CERTSPOTTER_API_KEY` for higher availability. The result distinguishes a completed search with no names from partial results, timeouts, and source failures. A failed CT lookup is not evidence that no other subdomains exist. CT only lists names represented in the queried certificate data; it is not a complete inventory of an organization's assets. Its `state` distinguishes `DISCOVERY_COMPLETED`, `NO_RESULTS`, `PARTIAL_RESULTS`, `SOURCE_UNAVAILABLE`, and `TIMEOUT`.
 
 For the scanned hostname, and for discovered names, takeover checks inspect CNAME chains against the repository's service fingerprint catalog. They may also make bounded HTTP requests to public targets when a signature requires page evidence. Results distinguish no CNAME, candidate, confirmed fingerprint, and inconclusive checks. A dangling CNAME or matching page is a lead for review, not proof that an attacker can claim the resource. The catalog is not exhaustive and can become stale. A fingerprint must be explicitly verified and dated within the last year before it can produce a confirmed result.
 
+The scanner also reports NXDOMAIN nameserver and MX targets as unverified dangling-dependency candidates. It does not claim these targets are registrable or exploitable. The bundled provider fingerprints remain explicitly unverified until independently checked; they can only produce candidate results.
+
 ### TLS and HTTPS
 
-The TLS/HTTPS check first resolves the hostname and blocks non-public or mixed unsafe address results. It connects to validated public addresses and reports the negotiated protocol and cipher, certificate issuer and validity dates, and whether the certificate names cover the hostname. A certificate failure, unreachable service, and a completed handshake are different outcomes.
+The TLS/HTTPS check first resolves the hostname and blocks non-public or mixed unsafe address results. It connects to validated public addresses and reports the negotiated protocol and cipher, certificate issuer and validity dates, and whether the certificate names cover the hostname. Certificates expiring within 30 days are flagged. A certificate failure, unreachable service, and a completed handshake are different outcomes. The optional authorized Nmap mode checks the top 100 TCP ports with light service/version probes; it does not run vulnerability scripts or a UDP scan.
 
-The HTTP checks inspect whether the HTTP endpoint redirects toward HTTPS, selected response headers (including HSTS, CSP, frame/content-type/referrer and browser-isolation policies), and security attributes on observed cookies. CSP review checks for selected common weaknesses; it is not a full policy audit. The TLS result is based on the negotiated connection and does not enumerate every supported cipher suite or protocol configuration.
+The HTTP checks inspect whether the HTTP endpoint redirects toward HTTPS, selected response headers (including HSTS, CSP, frame/content-type/referrer and browser-isolation policies), and security attributes on observed cookies. CSP review checks for selected common weaknesses; it is not a full policy audit. TLS performs separate bounded handshakes for TLS 1.0 through TLS 1.3 and reports weak ciphers when observed. This is not an exhaustive cipher-suite or vulnerability sweep.
+
+## RDAP, RPKI, DANE and SMTP TLS
+
+The full scan queries the IANA RDAP DNS bootstrap and the responsible RDAP registry for a registration-expiry event. Some registries omit expiry or restrict responses; those outcomes are reported as unavailable or inconclusive.
+
+RPKI results come from RIPEstat's observed route prefix/origin ASN and its RPKI validation endpoint. This is routing data at scan time, not a complete routing monitor. TLSA checks query the HTTPS hostname and up to three MX hosts, then compare observed leaf certificates/SPKIs with supported DANE-EE associations. HTTPS certificate probes use the pinned public IP while preserving the hostname for SNI; SMTP probes use a pinned public MX IP and send EHLO/STARTTLS only. A match is not a complete DANE validation: DNSSEC authenticity is not established, and DANE-TA / PKIX usage chain validation remains unsupported. Unsupported usages or failed probes remain inconclusive. No mail or authentication credentials are sent.
+
+MX reputation checks use DNS queries for up to three MX hosts and up to two public IPv4 addresses per host against Spamhaus ZEN, Barracuda BRBL, and SpamCop. A source-specific positive DNS return code is required before the scanner reports a listing. DNSBL access-limit responses, timeouts, and budget exhaustion are inconclusive; they are not treated as clean results. The DNSBL operators can observe the queried mail-server IP addresses through the configured recursive resolver.
+
+The separate wide path mode is a fixed, non-recursive list of at most 64 same-host HTTPS paths. It is disabled by default and requires server-side policy, an approved target list and/or an API key, plus user confirmation in the dashboard. Nmap mode performs a bounded TCP connect scan of the top 100 ports with light service/version probes. It uses the configured active-scan authorization and does not run vulnerability scripts or UDP probes.
+
+## Check plugins
+
+Independent checks run through the `app.check_registry` plugin contract. Built-in plugins live in `app/checks/` and are discovered automatically. Installed external plugins register through the `dns_analyzer.checks` Python entry-point group. Each check receives the domain, base resolver, shared work budget, and DNS record results, then returns a data object and findings. The registry applies a per-plugin timeout and records plugin output under `AnalyzeResponse.extensions`; adding a check does not require editing `main.py`.
 
 The scanner also sends an `OPTIONS` request and reports methods advertised in the `Allow` header. An advertised method is not proof that the method accepts a request; the scanner does not send write-method probes. It requests `/.well-known/security.txt` with a small response limit and checks for Contact and a single valid, future Expires timestamp. Redirects, unavailable responses, and inconclusive requests are not treated as valid or missing content.
 
 ### Authoritative DNS posture
 
-Three additional checks query authoritative infrastructure directly:
+Five additional checks query authoritative infrastructure directly or compare its routed network origin:
 
 - **AXFR**: attempts a TCP zone transfer from listed nameservers. If a transfer is allowed, the finding reports the server and record count; it does not return zone contents. A refused, unavailable, unresolved, or untested server must not be interpreted as proof that all transfer paths are safe.
 - **Wildcard DNS**: queries a random high-entropy label for A and AAAA records. A match suggests wildcard behavior and helps distinguish wildcard-only CT names. One random-label result is an observation, not a complete characterization of every DNS wildcard rule.
 - **Nameserver consistency**: queries listed authoritative nameserver addresses directly and compares observed SOA serials, selected SOA fields, and NS sets. Incomplete direct answers are reported as partial; they may reflect reachability or query limitations.
+- **Parent-child delegation and glue**: queries up to four parent authorities directly, requires two agreeing parent referrals, and compares their NS set with direct authoritative child answers. It reports missing glue only for in-bailiwick nameservers; out-of-bailiwick glue is not required. A query or budget failure, or disagreement among authorities, is inconclusive.
+- **Nameserver network diversity**: resolves public A/AAAA addresses for each listed nameserver and queries Team Cymru's origin service through the configured recursive resolver. It reports a warning only when complete observations for at least two nameservers all map to one ASN. This is routing-origin evidence, not proof of shared physical infrastructure, and it does not affect the grade. DNS or budget failures remain inconclusive.
 
 ### Scores, findings, and remediation
 

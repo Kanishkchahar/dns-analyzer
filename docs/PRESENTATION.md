@@ -47,14 +47,15 @@ Python CLI ─────────┘                         │
                                               └── findings, scores, coverage, and reports
 ```
 
-`app/main.py` coordinates the shared scan pipeline used by the API and CLI. Individual checks live in focused modules under `app/`. DNS and HTTP work is bounded by timeouts, concurrency limits, and per-scan budgets. The static dashboard uses HTML, CSS, and JavaScript; Jinja2 generates offline reports.
+`app/main.py` coordinates the shared scan pipeline used by the API and CLI. Built-in checks are discovered from `app/checks/`; installed checks can register through Python entry points. DNS and HTTP work is bounded by timeouts, concurrency limits, and per-scan budgets. The static dashboard uses HTML, CSS, and JavaScript; Jinja2 generates offline reports.
 
 ## Check groups
 
 - **DNS infrastructure:** A/AAAA, MX, NS, TXT, CNAME, SOA, and CAA; zone-apex discovery; selected resolution, redundancy, CNAME, SOA, TTL, and CAA checks.
 - **Email authentication:** SPF syntax and DNS lookup expansion, DMARC policy, common and custom DKIM selectors, MTA-STS, TLS-RPT, and BIMI.
 - **DNSSEC and authoritative posture:** default DS-to-DNSKEY comparison; optional chain evidence; count-only AXFR detection; wildcard DNS and direct nameserver consistency.
-- **Web and inventory:** certificate validity and negotiated TLS, HTTPS behavior and selected headers, passive Certificate Transparency inventory, and takeover fingerprints.
+- **Web and inventory:** certificate validity and bounded TLS-version observations, HTTPS behavior and selected headers, passive CT data from crt.sh and Cert Spotter, and takeover candidates.
+- **Additional bounded checks:** RDAP expiry, RIPEstat RPKI observations, TLSA publication, SMTP STARTTLS negotiation, and optional Nmap/service and directory-path scans.
 - **Optional diagnostics:** bounded common paths, DNS-only target lists, and authorized TCP port checks.
 
 See the [scan guide](scan.md) for details, statuses, and limitations.
@@ -66,6 +67,7 @@ See the [scan guide](scan.md) for details, statuses, and limitations.
 - A CT inventory is not a complete asset inventory. CT results can be missing, stale, or unavailable.
 - A published SPF, DKIM, DMARC, or mail-transport record does not prove that real mail is correctly configured or delivered.
 - TLS and header checks inspect bounded observations; they do not test every protocol option or application behavior.
+- Published TLSA data is not checked against an authenticated DNSSEC chain or matched to the negotiated certificate. RPKI reflects observed routes reported by RIPEstat.
 - Scan history is browser-local. The app has no built-in server-side scheduler, accounts, or alert delivery.
 - Cache and rate-limit state is process-local. Multi-worker deployments need a shared proxy or store for consistent behavior.
 

@@ -222,7 +222,7 @@ async def _check_single_selector(
         raw = b"".join(answer[0].strings).decode("utf-8", errors="replace")
     except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
         return None
-    except Exception as exc:
+    except Exception:
         return {"_query_error": "DNS selector lookup failed"}
 
     tags = _parse_tags(raw)

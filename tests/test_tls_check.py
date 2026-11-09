@@ -3,8 +3,8 @@
 from datetime import datetime, timezone
 
 import pytest
+import httpx
 from app.tls_check import (
-    PinnedIPBackend,
     PinnedIPTransport,
     audit_tls_and_https,
     is_safe_ip,
@@ -16,31 +16,67 @@ from app.tls_check import (
 
 
 class TestTLSUtilities:
-    def test_http_transport_versions_and_pinned_backend_are_explicit(self):
+    def test_pinned_transport_exposes_configured_target_ip(self):
+        transport = PinnedIPTransport("1.1.1.1", verify=True)
+        assert transport.target_ip == "1.1.1.1"
+
+    async def test_pinned_transport_uses_ip_and_preserves_tls_and_http_host(self, monkeypatch):
         import httpcore
-        import httpx
 
-        assert httpx.__version__ == "0.28.1"
-        assert httpcore.__version__ == "1.0.9"
-        transport = PinnedIPTransport("1.1.1.1", verify=True)
-        backend = transport._pool._network_backend
-        assert isinstance(backend, PinnedIPBackend)
-        assert backend.target_ip == "1.1.1.1"
+        class MemoryStream(httpcore.AsyncNetworkStream):
+            def __init__(self):
+                self.request_bytes = bytearray()
+                self.response_bytes = bytearray(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                )
+                self.server_hostname = None
 
-    def test_pinned_transport_private_pool_api_change_has_clear_failure(self):
-        transport = PinnedIPTransport("1.1.1.1", verify=True)
-        try:
-            pool = transport._pool
-            ssl_context = pool._ssl_context
-            backend = pool._network_backend
-        except AttributeError as exc:
-            pytest.fail(
-                "PinnedIPTransport depends on httpcore's private AsyncConnectionPool "
-                "._ssl_context and ._network_backend API; update the pinned transport "
-                f"for this httpcore version ({exc})."
-            )
-        assert ssl_context is not None
-        assert isinstance(backend, PinnedIPBackend)
+            async def read(self, max_bytes, timeout=None):
+                chunk = bytes(self.response_bytes[:max_bytes])
+                del self.response_bytes[:max_bytes]
+                return chunk
+
+            async def write(self, buffer, timeout=None):
+                self.request_bytes.extend(buffer)
+
+            async def aclose(self):
+                return None
+
+            async def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+                self.server_hostname = server_hostname
+                return self
+
+            def get_extra_info(self, info):
+                return None
+
+        class RecordingBackend:
+            def __init__(self):
+                self.target = None
+                self.port = None
+                self.stream = MemoryStream()
+
+            async def connect_tcp(self, host, port, **_kwargs):
+                self.target = host
+                self.port = port
+                return self.stream
+
+            async def connect_unix_socket(self, *_args, **_kwargs):
+                raise AssertionError("Pinned transport must use TCP")
+
+            async def sleep(self, _seconds):
+                return None
+
+        backend = RecordingBackend()
+        monkeypatch.setattr("app.tls_check.httpcore.AnyIOBackend", lambda: backend)
+        transport = PinnedIPTransport("1.1.1.1", verify=False)
+        async with httpx.AsyncClient(transport=transport, trust_env=False) as client:
+            response = await client.get("https://example.test:8443/pinned")
+
+        assert response.status_code == 200
+        assert backend.target == "1.1.1.1"
+        assert backend.port == 8443
+        assert backend.stream.server_hostname == "example.test"
+        assert b"Host: example.test:8443" in backend.stream.request_bytes
 
     async def test_resolve_and_verify_all_ips_blocks_loopback(self):
         safe, ips, reason = await resolve_and_verify_all_ips("127.0.0.1", 80)

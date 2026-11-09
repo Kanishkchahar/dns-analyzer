@@ -9,7 +9,9 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import logging
+import os
 from typing import Any
+from urllib.parse import urlencode
 import httpx
 import dns.asyncresolver
 
@@ -25,18 +27,20 @@ CT_RETRY_DELAY_SECONDS = 0.1
 CT_MAX_RESPONSE_BYTES = 512 * 1024
 
 
-async def _fetch_ct_response(url: str, timeout: float, budget: ScanWorkBudget) -> tuple[int, str, bool, int]:
+async def _fetch_ct_response(url: str, timeout: float, budget: ScanWorkBudget, module: str = "ct") -> tuple[int, str, bool, int]:
     """Fetch a bounded CT response with a small retry limit and budget accounting."""
     last_status = 0
     last_error: Exception | None = None
     for attempt in range(1, CT_MAX_ATTEMPTS + 1):
-        if not await budget.reserve_http("ct"):
+        if not await budget.reserve_http(module):
             error = ScanBudgetExhausted("outbound request budget exhausted")
             error.attempts = attempt - 1
             raise error
         try:
+            api_key = os.environ.get("CERTSPOTTER_API_KEY", "").strip() if module == "ct_secondary" else ""
             async with httpx.AsyncClient(timeout=timeout, verify=True, headers=outbound_http_headers()) as client:
-                async with client.stream("GET", url) as response:
+                request_headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
+                async with client.stream("GET", url, headers=request_headers) as response:
                     last_status = response.status_code
                     if response.status_code == 200:
                         chunks = []
@@ -70,7 +74,7 @@ async def discover_passive_subdomains(
 
     result: dict[str, Any] = {
         "domain": norm_domain,
-        "source": "Certificate Transparency (crt.sh)",
+        "source": "Certificate Transparency (crt.sh + SSLMate Cert Spotter)",
         "status": "complete",
         "state": "SOURCE_UNAVAILABLE",
         "discovered_count": 0,
@@ -80,6 +84,8 @@ async def discover_passive_subdomains(
     }
 
     discovered_names: dict[str, str | None] = {}
+    sources_succeeded: list[str] = []
+    sources_failed: list[str] = []
     budget = work_budget or ScanWorkBudget()
 
     try:
@@ -109,6 +115,7 @@ async def discover_passive_subdomains(
                 ))
             )
             if valid_rows:
+                sources_succeeded.append("crt.sh")
                 for item in raw_json:
                     if isinstance(item, dict):
                         name_val = item.get("name_value", "")
@@ -150,6 +157,7 @@ async def discover_passive_subdomains(
                     message="Certificate Transparency results could not be parsed; subdomain inventory is unavailable.",
                 ))
         else:
+            sources_failed.append("crt.sh")
             result["status"] = "unavailable"
             result["state"] = "SOURCE_UNAVAILABLE"
             result["reason"] = f"Certificate Transparency service returned HTTP {status_code}."
@@ -159,6 +167,7 @@ async def discover_passive_subdomains(
                 message=f"Certificate Transparency lookup returned HTTP {status_code}; no subdomain inventory was produced.",
             ))
     except Exception as exc:
+        sources_failed.append("crt.sh")
         result["status"] = "inconclusive" if isinstance(exc, ScanBudgetExhausted) else "unavailable"
         result["state"] = "SOURCE_UNAVAILABLE" if isinstance(exc, ScanBudgetExhausted) else "TIMEOUT" if isinstance(exc, (httpx.TimeoutException, TimeoutError)) else "SOURCE_UNAVAILABLE"
         result["attempts"] = getattr(exc, "attempts", CT_MAX_ATTEMPTS)
@@ -169,6 +178,47 @@ async def discover_passive_subdomains(
             record_type="Inventory",
             message="Certificate Transparency lookup failed; subdomain inventory is unavailable.",
         ))
+
+    # A second CT index improves coverage when a source is temporarily missing
+    # an issuance. This remains passive: it sends no requests to found hosts.
+    try:
+        query = urlencode({"domain": norm_domain, "include_subdomains": "true", "expand": "dns_names"})
+        status_code, raw_text, truncated, attempts = await _fetch_ct_response(
+            f"https://api.certspotter.com/v1/issuances?{query}", timeout, budget, module="ct_secondary",
+        )
+        result["secondary_attempts"] = attempts
+        issuance_rows = json.loads(raw_text) if status_code == 200 and not truncated else None
+        if isinstance(issuance_rows, list):
+            sources_succeeded.append("SSLMate Cert Spotter")
+            for issuance in issuance_rows:
+                if not isinstance(issuance, dict) or not isinstance(issuance.get("dns_names"), list):
+                    continue
+                first_seen = str(issuance.get("not_before") or "") or None
+                for name in issuance["dns_names"]:
+                    if not isinstance(name, str):
+                        continue
+                    clean_name = name.strip().lower().lstrip("*.").rstrip(".")
+                    if clean_name.endswith(f".{norm_domain}") and clean_name != norm_domain:
+                        prior = discovered_names.get(clean_name)
+                        if clean_name not in discovered_names or (first_seen and (not prior or first_seen < prior)):
+                            discovered_names[clean_name] = first_seen
+        else:
+            sources_failed.append("SSLMate Cert Spotter")
+    except Exception as exc:
+        sources_failed.append("SSLMate Cert Spotter")
+        logger.info("Secondary CT source unavailable (%s)", type(exc).__name__)
+
+    result["sources"] = sources_succeeded
+    if sources_succeeded and sources_failed and result["status"] == "complete":
+        result["status"] = "partial"
+        result["state"] = "PARTIAL_RESULTS"
+        result["incomplete"] = True
+        result["reason"] = "One or more Certificate Transparency sources could not be queried."
+    elif sources_succeeded and result["status"] == "unavailable":
+        result["status"] = "partial"
+        result["state"] = "PARTIAL_RESULTS"
+        result["incomplete"] = True
+        result["reason"] = "Only one Certificate Transparency source returned data."
 
     # Cap to max_hosts for responsive performance
     discovered_total = len(discovered_names)
@@ -217,7 +267,7 @@ async def discover_passive_subdomains(
                 )
             return {
                 "subdomain": sub,
-                "source": "crt.sh",
+                "source": "Certificate Transparency",
                 "ips": ips,
                 "cname": cname_target,
                 "cnames": cnames,

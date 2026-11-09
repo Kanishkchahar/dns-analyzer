@@ -29,6 +29,9 @@
       </a>
       <span class="logo-tagline">v2</span>
       <div class="header-actions">
+        <button id="theme-toggle" class="header-action-btn theme-toggle" type="button" aria-label="Switch to light theme" title="Theme: system">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1v2m0 10v2M1 8h2m10 0h2M3.05 3.05l1.42 1.42m7.06 7.06 1.42 1.42m0-9.9-1.42 1.42m-7.06 7.06-1.42 1.42"/></svg><span>Theme</span>
+        </button>
         <button id="shortcuts-btn" class="header-action-btn" type="button" aria-label="Open keyboard shortcuts">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
             <rect x="1" y="3" width="14" height="10" rx="2"/>
@@ -47,7 +50,7 @@
     <section class="hero" aria-labelledby="hero-title">
       <h1 class="hero-title" id="hero-title">DNS Lookup<br>&amp; Analyzer</h1>
       <p class="hero-sub">
-        Enter any domain to fetch its DNS records, run misconfiguration checks,
+        Enter one domain or a comma/newline-separated set of domains to compare DNS records and security checks,
         and analyze email authentication (SPF, DMARC, DKIM)
         — all concurrently.
       </p>
@@ -59,7 +62,7 @@
             id="domain-input"
             class="domain-input"
             type="text"
-            placeholder="example.com or https://example.com/path"
+            placeholder="example.com, example.org or https://example.com/path"
             autocomplete="off"
             autocorrect="off"
             autocapitalize="none"
@@ -79,6 +82,19 @@
           <span class="btn-text">Analyze</span>
         </button>
       </div>
+
+      <details class="api-access-details">
+        <summary>API access <span>only needed when this server requires a key</span></summary>
+        <div class="api-access-controls">
+          <label for="dashboard-api-key" class="sr-only">Dashboard API key</label>
+          <input id="dashboard-api-key" type="password" autocomplete="off" spellcheck="false"
+            placeholder="Server API key" aria-describedby="dashboard-api-key-note" />
+          <button id="save-dashboard-api-key" class="btn btn-secondary" type="button">Use for this tab</button>
+          <button id="clear-dashboard-api-key" class="btn btn-secondary" type="button">Clear</button>
+        </div>
+        <p id="dashboard-api-key-note">The key stays in this browser tab’s session and is sent only to this analyzer.</p>
+        <span id="dashboard-api-key-status" class="api-access-status" role="status" aria-live="polite"></span>
+      </details>
 
       <!-- Quick-pick suggested domains -->
       <div class="quick-chips" aria-label="Suggested sample domains">
@@ -103,6 +119,15 @@
           <span id="loading-status-text">Analyzing DNS records and security posture…</span>
           <span id="loading-elapsed" class="loading-elapsed" aria-hidden="true">0:00 elapsed</span>
         </div>
+        <button id="stop-scan-btn" class="btn-stop-scan" type="button" hidden>
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg>
+          <span>Stop scan</span>
+        </button>
+      </div>
+
+      <div id="results-skeleton" class="results-skeleton" aria-hidden="true">
+        <div class="skeleton-score"><span class="skeleton skeleton-ring"></span><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-line short"></span></div>
+        <div class="skeleton-bento"><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span></div>
       </div>
 
       <!-- Error banner -->
@@ -113,6 +138,14 @@
         </svg>
         <span id="error-msg"></span>
       </div>
+    </section>
+
+    <section id="multi-domain-dashboard" class="multi-domain-dashboard" aria-labelledby="multi-domain-title" aria-live="polite">
+      <div class="overview-detail-header">
+        <div><h2 id="multi-domain-title">Domain Comparison</h2><p>Compare scores and highest-priority findings across this scan set.</p></div>
+        <button id="clear-multi-domain" class="btn-clear-recent" type="button">New comparison</button>
+      </div>
+      <div id="multi-domain-results" class="multi-domain-results"></div>
     </section>
 
     <!-- Screen Reader Status Announcer -->
@@ -156,48 +189,17 @@
       </div>
 
       <!-- Segmented Navigation Bar -->
-      <nav class="segment-nav" id="segment-nav" role="tablist" aria-label="Analysis report segments">
-        <button class="segment-tab active" type="button" role="tab" id="tab-overview" data-target="panel-overview" aria-controls="panel-overview" aria-selected="true">
-          <span>Overview</span>
-        </button>
-        <button class="segment-tab" type="button" role="tab" id="tab-email" data-target="panel-email" aria-controls="panel-email" aria-selected="false">
-          <span>Email Security</span>
-          <span class="tab-badge" id="tab-badge-email">--</span>
-        </button>
-        <button class="segment-tab" type="button" role="tab" id="tab-threats" data-target="panel-threats" aria-controls="panel-threats" aria-selected="false">
-          <span>Threat Defense</span>
-          <span class="tab-badge" id="tab-badge-threats">--</span>
-        </button>
-        <button class="segment-tab" type="button" role="tab" id="tab-tls" data-target="panel-tls" aria-controls="panel-tls" aria-selected="false">
-          <span>TLS &amp; HTTPS</span>
-          <span class="tab-badge" id="tab-badge-tls">--</span>
-        </button>
-        <button class="segment-tab" type="button" role="tab" id="tab-subdomains" data-target="panel-subdomains" aria-controls="panel-subdomains" aria-selected="false">
-          <span>Subdomains</span>
-          <span class="tab-badge" id="tab-badge-subdomains">0</span>
-        </button>
-        <button class="segment-tab" type="button" role="tab" id="tab-network" data-target="panel-network" aria-controls="panel-network" aria-selected="false">
-          <span>Network &amp; Scope</span>
-        </button>
-        <button class="segment-tab" type="button" role="tab" id="tab-remediation" data-target="panel-remediation" aria-controls="panel-remediation" aria-selected="false">
-          <span>Remediation</span>
-          <span class="tab-badge fix-badge" id="tab-badge-fixes">0</span>
-        </button>
-        <button class="segment-tab" type="button" role="tab" id="tab-records" data-target="panel-records" aria-controls="panel-records" aria-selected="false">
-          <span>DNS Records</span>
-          <span class="tab-badge" id="tab-badge-records">8</span>
-        </button>
-        <button class="segment-tab" type="button" role="tab" id="tab-findings" data-target="panel-findings" aria-controls="panel-findings" aria-selected="false">
-          <span>Findings</span>
-          <span class="tab-badge findings-badge" id="tab-badge-findings">0</span>
-        </button>
-        <button class="segment-tab segment-tab-all" type="button" role="tab" id="tab-all" data-target="all" aria-selected="false">
-          <span>All Sections</span>
-        </button>
+      <nav class="segment-nav" id="segment-nav" role="tablist" aria-label="Analysis report sections">
+        <button class="segment-tab active" type="button" role="tab" id="tab-overview" data-target="overview" aria-controls="panel-overview" aria-selected="true"><span>Overview &amp; Findings</span><span class="tab-badge findings-badge" id="tab-badge-findings">0</span></button>
+        <button class="segment-tab" type="button" role="tab" id="tab-records" data-target="dns" aria-controls="panel-records" aria-selected="false"><span>DNS &amp; Infrastructure</span><span class="tab-badge" id="tab-badge-records">8</span></button>
+        <button class="segment-tab" type="button" role="tab" id="tab-email" data-target="email" aria-controls="panel-email" aria-selected="false"><span>Email Security</span><span class="tab-badge" id="tab-badge-email">--</span></button>
+        <button class="segment-tab" type="button" role="tab" id="tab-tls" data-target="web" aria-controls="panel-tls" aria-selected="false"><span>Web &amp; TLS</span><span class="tab-badge" id="tab-badge-tls">--</span></button>
+        <button class="segment-tab" type="button" role="tab" id="tab-subdomains" data-target="scope" aria-controls="panel-subdomains" aria-selected="false"><span>Subdomains &amp; Scope</span><span class="tab-badge" id="tab-badge-subdomains">0</span></button>
+        <span id="tab-badge-threats" aria-hidden="true" style="display:none"></span><span id="tab-badge-fixes" aria-hidden="true" style="display:none"></span>
       </nav>
 
       <!-- Panel 1: Overview — Security Posture Cockpit (Asymmetric Bento Grid) -->
-      <div class="results-tab-panel active" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+      <div class="results-tab-panel active" id="panel-overview" data-segment="overview" role="tabpanel" aria-labelledby="tab-overview">
         <div class="bento-cockpit">
           <!-- Left Hero: Overall Security Posture (spans 2 rows) -->
           <div class="bento-hero" id="bento-hero">
@@ -242,7 +244,7 @@
           <!-- Top-Right: DNS Infrastructure -->
           <div class="bento-card bento-dns" id="bento-dns">
             <div class="bento-card-header">
-              <span class="bento-card-icon">🌐</span>
+              <span class="bento-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9Z"/></svg></span>
               <span class="bento-card-title">DNS Infrastructure</span>
             </div>
             <div class="bento-card-headline" id="bento-dns-headline">Evaluating…</div>
@@ -263,7 +265,7 @@
           <!-- Top-Right: Email Authentication -->
           <div class="bento-card bento-email" id="bento-email">
             <div class="bento-card-header">
-              <span class="bento-card-icon">✉️</span>
+              <span class="bento-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/></svg></span>
               <span class="bento-card-title">Email Authentication</span>
             </div>
             <div class="bento-card-headline" id="bento-email-headline">Evaluating…</div>
@@ -284,7 +286,7 @@
           <!-- Bottom-Right: Cryptography & Takeover -->
           <div class="bento-card bento-crypto" id="bento-crypto">
             <div class="bento-card-header">
-              <span class="bento-card-icon">🔐</span>
+              <span class="bento-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z"/><rect x="9" y="10" width="6" height="5" rx="1"/><path d="M10 10V8a2 2 0 0 1 4 0v2"/></svg></span>
               <span class="bento-card-title">Cryptography &amp; Takeover</span>
             </div>
             <div class="bento-card-headline" id="bento-crypto-headline">Evaluating…</div>
@@ -305,7 +307,7 @@
           <!-- Bottom-Right: Copy-paste remediation drafts -->
           <div class="bento-card bento-fixes" id="bento-fixes">
             <div class="bento-card-header">
-              <span class="bento-card-icon">🔧</span>
+              <span class="bento-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 7a5 5 0 0 0-6.6 6.6L3 18l3 3 4.4-4.4A5 5 0 0 0 17 10l-3 3-3-3 3-3Z"/></svg></span>
               <span class="bento-card-title">Copy-paste Fix Drafts</span>
             </div>
             <div class="bento-card-headline" id="bento-fixes-headline">Evaluating…</div>
@@ -341,7 +343,7 @@
       </div>
 
       <!-- Panel 2: Email Security Suite -->
-      <div class="results-tab-panel" id="panel-email" role="tabpanel" aria-labelledby="tab-email">
+      <div class="results-tab-panel" id="panel-email" data-segment="email" role="tabpanel" aria-labelledby="tab-email">
         <!-- Email Health Score -->
         <div id="email-score-section" class="email-score-section" style="display:none;">
           <div class="score-ring-container">
@@ -362,7 +364,7 @@
 
         <!-- Email Authentication Cards -->
         <div id="email-auth-section" class="email-auth-section" style="display:none;">
-          <h2 class="section-title">📧 Email Authentication Protocols</h2>
+          <h2 class="section-title"><svg class="heading-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/></svg>Email Authentication Protocols</h2>
           <div class="custom-dkim-tool">
             <label for="custom-dkim-selectors">Check custom DKIM selectors</label>
             <div><input id="custom-dkim-selectors" type="text" placeholder="selector, selector2" autocomplete="off" maxlength="400" />
@@ -374,28 +376,32 @@
       </div>
 
       <!-- Panel 3: Threat Defense -->
-      <div class="results-tab-panel" id="panel-threats" role="tabpanel" aria-labelledby="tab-threats">
+      <div class="results-tab-panel" id="panel-threats" data-segment="dns" role="tabpanel" aria-labelledby="tab-records">
         <!-- Advanced Security Suite (DNSSEC, Subdomain Takeover, BIMI) -->
         <div id="security-suite-section" class="security-suite-section" style="display:none;">
-          <h2 class="section-title">🛡️ Advanced Security &amp; Threat Defense</h2>
+          <h2 class="section-title"><svg class="heading-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z"/></svg>Advanced Security &amp; Threat Defense</h2>
           <div id="security-cards" class="security-cards-grid"></div>
         </div>
+        <section id="extension-checks-section" class="security-suite-section extension-checks-section" style="display:none;" aria-labelledby="extension-checks-heading">
+          <h2 class="section-title" id="extension-checks-heading">Additional Domain &amp; Network Checks</h2>
+          <div id="extension-checks-cards" class="security-cards-grid"></div>
+        </section>
       </div>
 
       <!-- Panel 4: TLS & HTTPS Diagnostics -->
-      <div class="results-tab-panel" id="panel-tls" role="tabpanel" aria-labelledby="tab-tls">
+      <div class="results-tab-panel" id="panel-tls" data-segment="web" role="tabpanel" aria-labelledby="tab-tls">
         <div id="tls-section" class="tls-section" style="display:none;">
-          <h2 class="section-title">🔒 TLS Encryption &amp; HTTPS Posture</h2>
+          <h2 class="section-title"><svg class="heading-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3"/></svg>TLS Encryption &amp; HTTPS Posture</h2>
           <div id="tls-cards" class="security-cards-grid"></div>
         </div>
       </div>
 
       <!-- Panel 5: Passive Subdomain Inventory -->
-      <div class="results-tab-panel" id="panel-subdomains" role="tabpanel" aria-labelledby="tab-subdomains">
+      <div class="results-tab-panel" id="panel-subdomains" data-segment="scope" role="tabpanel" aria-labelledby="tab-subdomains">
         <div id="subdomains-section" class="subdomains-section" style="display:none;">
           <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
             <div>
-              <h2 class="section-title" style="margin-bottom:4px;">🌐 Passive Subdomain Footprint</h2>
+              <h2 class="section-title" style="margin-bottom:4px;"><svg class="heading-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9Z"/></svg>Passive Subdomain Footprint</h2>
               <p class="remediation-sub">Discovered via public Certificate Transparency (CT) logs. Zero packets transmitted to target hosts.</p>
               <p class="subdomains-meta" id="subdomains-meta"></p>
             </div>
@@ -409,11 +415,11 @@
       </div>
 
       <!-- Panel 6: Network Scope & Port Auditing -->
-      <div class="results-tab-panel" id="panel-network" role="tabpanel" aria-labelledby="tab-network">
+      <div class="results-tab-panel" id="panel-network" data-segment="scope" role="tabpanel" aria-labelledby="tab-subdomains">
         <div class="network-scope-section">
           <div class="network-scope-header">
             <div>
-              <h2 class="section-title">🎯 Network Scope &amp; Web Exposure</h2>
+              <h2 class="section-title"><svg class="heading-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="m16 8 5-5m-3 0h3v3"/></svg>Network Scope &amp; Web Exposure</h2>
               <p class="remediation-sub">Choose a bounded check for targets you own or are authorized to assess. Each option has a different network impact.</p>
             </div>
             <div class="scope-guard-badge">
@@ -422,13 +428,20 @@
           </div>
 
           <div class="scope-box-card">
+            <div class="scope-scan-toolbar">
+              <div><strong id="scope-scan-status" role="status" aria-live="polite">Ready to check your authorized targets</strong><span>Choose one bounded check below. Results appear here and can be stopped at any time.</span></div>
+              <button id="stop-scope-scan" class="btn-stop-scan" type="button" hidden>
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg>
+                <span>Stop scan</span>
+              </button>
+            </div>
             <div class="scope-box-header">
               <label for="list-scan-input" class="scope-label">
                 <span>Targets to check</span>
                 <span class="scope-hint">Enter hostnames or public IPs, separated by commas or new lines.</span>
               </label>
             </div>
-            <textarea id="list-scan-input" class="scope-textarea" rows="3" placeholder="example.com&#10;www.example.com&#10;93.184.216.34" aria-describedby="scope-safety-note"></textarea>
+            <textarea id="list-scan-input" class="scope-textarea" rows="2" placeholder="example.com&#10;www.example.com&#10;93.184.216.34" aria-describedby="scope-safety-note"></textarea>
             <p class="scope-safety-note" id="scope-safety-note">Private, loopback, link-local, and other non-public addresses are blocked. Use only targets you are authorized to assess.</p>
             
             <div class="scope-actions-bar">
@@ -449,9 +462,15 @@
                 <article class="scope-scan-option">
                   <div class="scope-option-heading">
                     <h3>Check common website paths</h3>
-                    <span class="scope-option-limit">Up to 5</span>
+                    <span class="scope-option-limit">Up to 5 targets</span>
                   </div>
-                  <p>Requests 7 known HTTPS paths and may check up to 3 sitemap-listed paths. No crawling; redirects are not followed off-host.</p>
+                  <p>Checks 7 common HTTPS paths and same-host redirects. Optional extended mode checks up to 64 paths on 2 targets; it never crawls or follows off-host redirects.</p>
+                  <label class="scope-confirm-label" for="wide-path-confirm">
+                    <input type="checkbox" id="wide-path-confirm" class="scope-checkbox" />
+                    <span>Use the extended list (requires server enablement and authorization).</span>
+                  </label>
+                  <input type="password" id="wide-path-auth-token" class="port-scan-auth-input" placeholder="Extended scan key (if configured)" aria-label="Extended scan API key" autocomplete="off" />
+                  <p class="scope-option-note">If disabled by the server, the standard 7-path check remains available.</p>
                   <button class="btn btn-secondary" id="btn-run-path-scan" type="button">
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
                       <path d="M2 3h12v10H2zM2 6h12M5 3v3" stroke-linejoin="round"/>
@@ -464,13 +483,18 @@
 
               <div class="scope-auth-group">
                 <div class="port-scan-copy">
-                  <strong>Verify standard service ports</strong>
-                  <span>Checks the first target listed by attempting TCP connections to 8 common services, including HTTP(S), mail, DNS, and SSH. Runs only when enabled by server policy and authorized.</span>
+                  <strong>Identify exposed services</strong>
+                  <span>Checks only the first target above. This makes active TCP connections and requires your permission plus server authorization.</span>
                 </div>
                 <label class="scope-confirm-label" for="port-scan-confirm">
                   <input type="checkbox" id="port-scan-confirm" class="scope-checkbox" />
                   <span>I have permission to make these active TCP connection checks.</span>
                 </label>
+                <label class="scope-label" for="port-scan-mode">Scan method</label>
+                <select id="port-scan-mode" class="port-scan-auth-input">
+                  <option value="nmap">Nmap service detection (top 100 TCP ports)</option>
+                  <option value="connect">Basic TCP check (8 common ports)</option>
+                </select>
                 <div class="port-scan-auth-row">
                   <input
                     type="password"
@@ -498,12 +522,12 @@
       </div>
 
       <!-- Panel 4: Remediation -->
-      <div class="results-tab-panel" id="panel-remediation" role="tabpanel" aria-labelledby="tab-remediation">
+      <div class="results-tab-panel" id="panel-remediation" data-segment="overview" role="tabpanel" aria-labelledby="tab-overview">
         <!-- Copy-paste remediation draft generator -->
         <div id="remediation-section" class="remediation-section" style="display:none;">
           <div class="remediation-header">
             <div>
-              <h2 class="section-title" style="margin-bottom:4px;">🔧 Copy-paste DNS Fix Drafts</h2>
+              <h2 class="section-title" style="margin-bottom:4px;"><svg class="heading-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M14 7a5 5 0 0 0-6.6 6.6L3 18l3 3 4.4-4.4A5 5 0 0 0 17 10l-3 3-3-3 3-3Z"/></svg>Copy-paste DNS Fix Drafts</h2>
               <p class="remediation-sub">Copy-pasteable records tailored for Cloudflare, AWS Route 53, and GoDaddy to achieve an A+ security posture.</p>
             </div>
             <button class="btn-download-zone" id="download-zone-btn" type="button">
@@ -519,7 +543,7 @@
       </div>
 
       <!-- Panel 5: Findings -->
-      <div class="results-tab-panel" id="panel-findings" role="tabpanel" aria-labelledby="tab-findings">
+      <div class="results-tab-panel" id="panel-findings" data-segment="overview" role="tabpanel" aria-labelledby="tab-overview">
         <!-- Findings list -->
         <div class="findings-section" id="findings-section">
           <div class="findings-header">
@@ -552,7 +576,7 @@
       </div>
 
       <!-- Panel 6: DNS Records -->
-      <div class="results-tab-panel" id="panel-records" role="tabpanel" aria-labelledby="tab-records">
+      <div class="results-tab-panel" id="panel-records" data-segment="dns" role="tabpanel" aria-labelledby="tab-records">
         <!-- DNS Records -->
         <div class="records-section" id="records-section">
           <div class="records-header-row">

@@ -10,12 +10,14 @@ from app.main import app
 
 @pytest.fixture(autouse=True)
 def reset_scan_cache():
-    from app.main import _CLIENT_REQUESTS, _SCAN_CACHE
+    from app.main import _CLIENT_REQUESTS, _SCAN_CACHE, _TARGET_LAST_SCAN
     _SCAN_CACHE.clear()
     _CLIENT_REQUESTS.clear()
+    _TARGET_LAST_SCAN.clear()
     yield
     _SCAN_CACHE.clear()
     _CLIENT_REQUESTS.clear()
+    _TARGET_LAST_SCAN.clear()
 
 
 class MockRR:

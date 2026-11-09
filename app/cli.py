@@ -35,7 +35,7 @@ def _render_text(scan, *, min_grade: str | None = None) -> str:
         _color(f"DNS Analyzer · {scan.domain}", "1;36"),
         f"Scan: {scan.scan_timestamp}",
         f"Grade: {_color(grade, '1;32' if grade.startswith('A') else '1;33' if grade in ('B', 'C') else '1;31')} ({numeric}/100)",
-        (f"Grade status: provisional; excluded factor weight exceeds 30%" if "(incomplete)" in grade else ""),
+        ("Grade status: provisional; excluded factor weight exceeds 30%" if "(incomplete)" in grade else ""),
         (f"Warning: provisional grade is treated as base grade for --min-grade {min_grade}." if min_grade and "(incomplete)" in grade else ""),
         f"Findings: {scan.summary.errors} errors · {scan.summary.warnings} warnings · {scan.summary.info} info · {getattr(scan.summary, 'inconclusive', 0)} inconclusive checks",
         "",
@@ -119,7 +119,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("Scan interrupted.", file=sys.stderr)
         return EXIT_TOOL_ERROR
-    except Exception as exc:
+    except Exception:
         print("Scan failed. Check the server logs for diagnostic details.", file=sys.stderr)
         return EXIT_TOOL_ERROR
 

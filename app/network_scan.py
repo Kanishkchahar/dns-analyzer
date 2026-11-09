@@ -5,11 +5,12 @@ and opt-in Port & Service checks against explicitly approved public targets.
 """
 
 import asyncio
+from contextlib import suppress
 import ipaddress
 import hmac
 import os
 import re
-import socket
+import shutil
 from typing import Any
 from urllib.parse import urljoin, urlparse
 import defusedxml.ElementTree as ET
@@ -19,7 +20,6 @@ import dns.exception
 import dns.resolver
 import httpx
 
-from app.models import Finding
 from app.tls_check import PinnedIPTransport, is_safe_ip, resolve_and_verify_all_ips
 from app.http_config import outbound_http_headers
 from app.work_budget import ScanBudgetExhausted, ScanWorkBudget
@@ -38,6 +38,10 @@ STANDARD_PORTS: dict[int, str] = {
 
 # Server-side controls: active scanning requires server-side policy authorization
 MAX_PORTS_PER_SCAN = 10
+MAX_NMAP_PORTS_PER_SCAN = 256
+MAX_WIDE_PATHS = 64
+COMMON_PATH_SCAN_HTTP_BUDGET = 20
+WIDE_PATH_SCAN_HTTP_BUDGET = 160
 GLOBAL_PORT_SCAN_SEMAPHORE = asyncio.Semaphore(4)
 TARGET_SYNTAX_REGEX = re.compile(r"^[a-zA-Z0-9.\-_:\[\]]+$")
 
@@ -52,6 +56,22 @@ COMMON_WEB_PATHS: tuple[str, ...] = (
     "/manifest.json",
     "/favicon.ico",
 )
+WIDE_DIRECTORY_PATHS: tuple[str, ...] = tuple(
+    "/" + path for path in (
+        "admin/", "login", "dashboard/", "api/", "api/v1/", "docs/", "openapi.json",
+        "swagger/", "graphql", "health", "status", "metrics", "debug/", "server-status",
+        "backup/", "backups/", "old/", "archive/", "tmp/", "temp/", "test/", "staging/",
+        "dev/", "config/", "settings/", ".env", ".git/HEAD", ".well-known/",
+        "wp-login.php", "wp-admin/", "xmlrpc.php", "phpinfo.php", "composer.json",
+        "package.json", "robots.txt", "sitemap.xml", "security.txt", ".well-known/security.txt",
+        "crossdomain.xml", "clientaccesspolicy.xml", "favicon.ico", "humans.txt", "ads.txt",
+        "app/", "uploads/", "files/", "assets/", "static/", "media/", "images/",
+        "cgi-bin/", "console/", "manage/", "oauth/", "auth/", "register", "search",
+        "actuator/", "actuator/health", "actuator/env", ".DS_Store", "web.config",
+        "error.log", "access.log", "dump.sql", "database.sql",
+    )
+)
+WIDE_SCAN_PATHS: tuple[str, ...] = tuple(dict.fromkeys((*COMMON_WEB_PATHS, *WIDE_DIRECTORY_PATHS)))[:MAX_WIDE_PATHS]
 MAX_PUBLICATION_BODY_BYTES = 256 * 1024
 MAX_ADVERTISED_PATHS = 200
 
@@ -134,6 +154,26 @@ def is_active_scan_allowed() -> bool:
     """Check if server configuration permits active port scanning (disabled by default)."""
     val = os.environ.get("ENABLE_ACTIVE_PORT_SCAN", "false").strip().lower()
     return val in ("true", "1", "yes", "enabled")
+
+
+def verify_wide_path_authorization(auth_header: str | None, target: str) -> tuple[bool, str]:
+    """Apply server policy to the higher-volume fixed directory list."""
+    if os.environ.get("ENABLE_WIDE_DIRECTORY_SCAN", "false").strip().lower() not in ("true", "1", "yes", "enabled"):
+        return False, "Wide directory discovery is disabled by server policy. Set ENABLE_WIDE_DIRECTORY_SCAN=true and configure WIDE_PATH_SCAN_API_KEY and/or WIDE_PATH_SCAN_ALLOWED_DOMAINS, then restart the server."
+    expected_key = os.environ.get("WIDE_PATH_SCAN_API_KEY", "").strip()
+    allowed_env = os.environ.get("WIDE_PATH_SCAN_ALLOWED_DOMAINS", "").strip()
+    if not expected_key and not allowed_env:
+        return False, "Wide directory discovery requires WIDE_PATH_SCAN_API_KEY and/or WIDE_PATH_SCAN_ALLOWED_DOMAINS in the server environment."
+    if expected_key:
+        provided = auth_header[7:].strip() if auth_header and auth_header.lower().startswith("bearer ") else (auth_header or "").strip()
+        if not provided or not hmac.compare_digest(provided, expected_key):
+            return False, "Authorization required for wide directory discovery."
+    if allowed_env:
+        allowed = [item.strip().lower().rstrip(".") for item in allowed_env.split(",") if item.strip()]
+        normalized = target.strip().lower().rstrip(".")
+        if not any(normalized == item or normalized.endswith(f".{item}") for item in allowed):
+            return False, "Target is outside the server's approved wide directory scan scope."
+    return True, "Authorized"
 
 
 def verify_port_scan_authorization(
@@ -299,11 +339,14 @@ async def run_common_path_scan(
     timeout: float = 3.0,
     resolver: dns.asyncresolver.Resolver | None = None,
     work_budget: ScanWorkBudget | None = None,
+    wide: bool = False,
 ) -> dict[str, Any]:
     """Check fixed public paths and parse same-origin robots/sitemap data, without crawling."""
     clean_targets = [target.strip() for target in targets if target.strip()]
     if not clean_targets or len(clean_targets) > 5:
         raise ValueError("Provide between 1 and 5 target hostnames or public IPs.")
+    if wide and len(clean_targets) > 2:
+        raise ValueError("Wide directory search is limited to 2 targets per request.")
 
     target_semaphore = asyncio.Semaphore(5)
     budget = work_budget or ScanWorkBudget(profile="network_scan")
@@ -411,7 +454,8 @@ async def run_common_path_scan(
                             errors.append("Connection failed; result is inconclusive.")
                     return {"path": path, "status_code": None, "state": "inconclusive" if "budget exhausted" in ";".join(errors).lower() else "unavailable", "location": None, "error": "; ".join(errors)}
 
-            path_results = await asyncio.gather(*(_check_path(path) for path in COMMON_WEB_PATHS))
+            paths_to_check = list(WIDE_SCAN_PATHS if wide else COMMON_WEB_PATHS)
+            path_results = await asyncio.gather(*(_check_path(path) for path in paths_to_check))
             custom_sitemaps = [
                 path for path in declared_sitemap_paths
                 if path not in COMMON_WEB_PATHS
@@ -419,14 +463,16 @@ async def run_common_path_scan(
             if custom_sitemaps:
                 path_results.extend(await asyncio.gather(*(_check_path(path) for path in custom_sitemaps)))
             unavailable_count = sum(item["state"] == "unavailable" for item in path_results)
+            inconclusive_count = sum(item["state"] == "inconclusive" for item in path_results)
             redirect_failures = sum(bool(item.get("error")) for item in path_results)
-            incomplete_count = max(unavailable_count, redirect_failures)
+            incomplete_count = max(unavailable_count, inconclusive_count, redirect_failures)
             return {
                 "target": target,
                 "status": "partial" if incomplete_count else "complete",
-                "reason": f"{unavailable_count} path checks could not connect; {redirect_failures} same-host redirect checks were incomplete." if incomplete_count else None,
+                "reason": f"{unavailable_count} path checks could not connect; {inconclusive_count} exhausted their work budget; {redirect_failures} same-host redirect checks were incomplete." if incomplete_count else None,
                 "resolved_ips": resolved_ips,
                 "paths": path_results,
+                "scan_mode": "wide_directory" if wide else "common_paths",
                 "advertised_paths": [
                     {"path": path, **details}
                     for path, details in list(advertised.items())[:MAX_ADVERTISED_PATHS]
@@ -435,8 +481,8 @@ async def run_common_path_scan(
 
     results = await asyncio.gather(*(_scan_target(target) for target in clean_targets))
     return {
-        "scan_mode": "Common Web Paths + Public Robots/Sitemap (No Crawling)",
-        "path_count": len(COMMON_WEB_PATHS),
+        "path_count": len(WIDE_SCAN_PATHS) if wide else len(COMMON_WEB_PATHS),
+        "scan_mode": "Wide HTTPS Directory Discovery (Bounded; No Recursion)" if wide else "Common Web Paths + Public Robots/Sitemap (No Crawling)",
         "total_targets": len(clean_targets),
         "targets": results,
     }
@@ -449,12 +495,13 @@ async def run_port_scan(
     timeout: float = 1.5,
     auth_header: str | None = None,
     resolver: dns.asyncresolver.Resolver | None = None,
+    scanner: str = "connect",
 ) -> dict[str, Any]:
     """Execute scoped, opt-in port and service verification on approved target."""
     if not is_active_scan_allowed():
         return {
             "status": "disabled",
-            "message": "Active port scanning is disabled by server deployment policy. Enable server-side authorization via ENABLE_ACTIVE_PORT_SCAN=true.",
+            "message": "Active port scanning is disabled by server deployment policy. Set ENABLE_ACTIVE_PORT_SCAN=true and configure PORT_SCAN_API_KEY and/or PORT_SCAN_ALLOWED_DOMAINS for approved targets, then restart the server.",
         }
 
     auth_ok, auth_msg = verify_port_scan_authorization(auth_header, target)
@@ -462,13 +509,16 @@ async def run_port_scan(
         return {"status": "unauthorized", "message": auth_msg}
 
 
-    target_ports = sorted(list(set(ports or list(STANDARD_PORTS.keys()))))
+    if scanner not in ("connect", "nmap"):
+        return {"status": "error", "message": "Scanner must be 'connect' or 'nmap'."}
+    target_ports = sorted(list(set(ports))) if ports else ([] if scanner == "nmap" else sorted(STANDARD_PORTS))
 
     # Validate port numbers and cap ports per request
-    if len(target_ports) > MAX_PORTS_PER_SCAN:
+    max_ports = MAX_NMAP_PORTS_PER_SCAN if scanner == "nmap" else MAX_PORTS_PER_SCAN
+    if len(target_ports) > max_ports:
         return {
             "status": "error",
-            "message": f"Port count exceeds allowed limit: maximum {MAX_PORTS_PER_SCAN} ports allowed per scan request.",
+            "message": f"Port count exceeds allowed limit: maximum {max_ports} ports allowed for {scanner} scans.",
         }
 
     for p in target_ports:
@@ -489,7 +539,7 @@ async def run_port_scan(
 
     # Resolve target and enforce strict SSRF check across all resolved IPs
     clean_host = target.strip().lower().rstrip(".")
-    safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(clean_host, port=target_ports[0], resolver=resolver)
+    safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(clean_host, port=target_ports[0] if target_ports else 443, resolver=resolver)
     if not safe_all or not resolved_ips:
         return {
             "status": "inconclusive" if reason.startswith("DNS query budget exhausted") else "blocked",
@@ -498,12 +548,78 @@ async def run_port_scan(
 
     target_ip = resolved_ips[0]
 
+    if scanner == "nmap":
+        nmap = shutil.which("nmap")
+        if not nmap:
+            return {"status": "nmap_unavailable", "target": clean_host,
+                    "message": "Nmap is not installed on this server. Install Nmap or select the basic TCP check."}
+        port_arg = ",".join(str(port) for port in target_ports)
+        args = [nmap, "-sT", "-sV", "--version-light", "-Pn", "--open", "-T3",
+                "--max-retries", "1", "--host-timeout", "45s", "-oX", "-"]
+        if port_arg:
+            args.extend(["-p", port_arg])
+        else:
+            args.extend(["--top-ports", "100"])
+        args.append(target_ip)
+        async with GLOBAL_PORT_SCAN_SEMAPHORE:
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+                )
+                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=55.0)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                return {"status": "timeout", "target": clean_host,
+                        "message": "Nmap service identification exceeded the 55 second limit."}
+            except asyncio.CancelledError:
+                if process.returncode is None:
+                    with suppress(ProcessLookupError):
+                        process.kill()
+                    with suppress(Exception):
+                        await process.communicate()
+                raise
+            except OSError:
+                return {"status": "nmap_unavailable", "target": clean_host,
+                        "message": "Nmap could not be started on this server."}
+        if process.returncode not in (0, 1):
+            return {"status": "error", "target": clean_host,
+                    "message": "Nmap did not complete successfully."}
+        try:
+            root = ET.fromstring(stdout)
+            port_results = []
+            for port_node in root.findall(".//port"):
+                state_node = port_node.find("state")
+                if state_node is None or state_node.get("state") != "open":
+                    continue
+                service_node = port_node.find("service")
+                service = service_node.get("name", "unknown") if service_node is not None else "unknown"
+                parts = [service_node.get(key, "") for key in ("product", "version", "extrainfo")] if service_node is not None else []
+                banner = " ".join(part for part in parts if part).strip() or None
+                port_results.append({"port": int(port_node.get("portid", "0")),
+                                     "service": service, "state": "open", "banner": banner,
+                                     "confidence": "nmap_version_probe"})
+        except (ET.ParseError, ValueError):
+            return {"status": "error", "target": clean_host,
+                    "message": "Nmap returned unparseable results."}
+        port_results.sort(key=lambda item: item["port"])
+        findings = [{"severity": "info", "category": "NETWORK",
+                     "target": f"{target_ip}:{item['port']}",
+                     "message": f"Nmap identified {item['service']} on TCP/{item['port']}: {item['banner'] or 'version not identified'}.",
+                     "evidence": item["banner"] or "TCP service probe response",
+                     "confidence": item["confidence"]} for item in port_results]
+        return {"status": "completed", "scanner": "nmap -sT -sV --version-light",
+                "target": clean_host, "target_ip": target_ip,
+                "probed_ports_count": len(target_ports) if target_ports else 100,
+                "open_ports_count": len(port_results), "ports": port_results, "findings": findings}
+
     async with GLOBAL_PORT_SCAN_SEMAPHORE:
         semaphore = asyncio.Semaphore(4)
 
         async def _probe_port(port: int) -> dict[str, Any]:
             svc_name = STANDARD_PORTS.get(port, "Unknown Service")
             async with semaphore:
+                writer = None
                 try:
                     conn = asyncio.open_connection(target_ip, port)
                     reader, writer = await asyncio.wait_for(conn, timeout=timeout)
@@ -517,6 +633,7 @@ async def run_port_scan(
                         pass
                     writer.close()
                     await writer.wait_closed()
+                    writer = None
                     return {
                         "port": port,
                         "service": svc_name,
@@ -540,6 +657,12 @@ async def run_port_scan(
                         "banner": None,
                         "confidence": "confirmed",
                     }
+                except asyncio.CancelledError:
+                    if writer is not None:
+                        writer.close()
+                        with suppress(Exception):
+                            await writer.wait_closed()
+                    raise
 
         tasks = [_probe_port(p) for p in target_ports]
         port_results = await asyncio.gather(*tasks)

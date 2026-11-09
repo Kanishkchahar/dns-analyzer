@@ -1,12 +1,7 @@
 .git
 .gitignore
 .dockerignore
-Dockerfile
 docker-compose*.yml
-README.md
-PRESENTATION.md
-PROJECT_PRESENTATION_AND_QA.md
-*.md
 venv
 .venv
 __pycache__

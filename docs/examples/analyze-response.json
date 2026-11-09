@@ -1,0 +1,14 @@
+{
+  "domain": "example.com",
+  "scan_timestamp": "2026-11-08T00:00:00Z",
+  "records": {},
+  "findings": [],
+  "summary": {
+    "errors": 0,
+    "warnings": 0,
+    "info": 0,
+    "inconclusive": 0
+  },
+  "domain_score": null,
+  "extensions": {}
+}

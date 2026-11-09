@@ -59,6 +59,18 @@ class TestAnalyzeRequest:
         with pytest.raises(ValidationError):
             AnalyzeRequest(domain=invalid_input)
 
+    @pytest.mark.parametrize("domain", ["printer.local", "admin.internal", "service.onion", "host.test"])
+    def test_private_and_special_use_suffixes_are_rejected(self, domain: str):
+        with pytest.raises(ValidationError, match="Private or special-use"):
+            AnalyzeRequest(domain=domain)
+
+    def test_configured_server_hostname_is_rejected(self, monkeypatch):
+        monkeypatch.setenv("DNS_ANALYZER_BLOCKED_TARGETS", "scanner.example.net,203.0.113.8")
+        with pytest.raises(ValidationError, match="server's own hostname or address"):
+            AnalyzeRequest(domain="scanner.example.net")
+        with pytest.raises(ValidationError, match="server's own hostname or address"):
+            AnalyzeRequest(domain="203.0.113.8")
+
 
 class TestDataSchemas:
     def test_api_response_json_preserves_provisional_grade_suffix(self):

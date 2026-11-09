@@ -423,7 +423,11 @@ async def validate_dnssec_chain(
                     chain.append(entry)
                     state, reason = "inconclusive", "DS absence could not be authenticated"
                     break
-                entry["ds_digests"] = [{"digest_type": ds.digest_type, "digest": ds.digest.hex().upper()} for ds in ds_rrset]
+                entry["ds_digests"] = [
+                    {"key_tag": ds.key_tag, "algorithm": ds.algorithm,
+                     "digest_type": ds.digest_type, "digest": ds.digest.hex().upper()}
+                    for ds in ds_rrset
+                ]
                 if any(ds.digest_type == 1 for ds in ds_rrset):
                     all_findings.append(Finding(severity="warning", record_type="DNSSEC", message="DNSSEC uses a SHA-1 DS digest type."))
                 checked_ds = _validate(ds_rrset, ds_sigs, parent_keys, chain_zones[index - 1], now)
@@ -444,6 +448,10 @@ async def validate_dnssec_chain(
                 state, reason = result, code
                 break
             entry["key_tags"] = [dns.dnssec.key_id(k) for k in keys]
+            entry["dnskeys"] = [
+                {"key_tag": dns.dnssec.key_id(key), "algorithm": key.algorithm}
+                for key in keys
+            ]
             entry["algorithms"] = sorted({ALGORITHM_NAMES.get(k.algorithm, f"algorithm-{k.algorithm}") for k in keys})
             deprecated = sorted({k.algorithm for k in keys if k.algorithm in DEPRECATED_ALGORITHMS})
             entry["deprecated_algorithms"] = deprecated
@@ -467,6 +475,12 @@ async def validate_dnssec_chain(
                     chain.append(entry)
                     state, reason = "bogus", "root DNSKEY did not match a valid IANA anchor"
                     break
+                entry["matched_key_tags"] = [dns.dnssec.key_id(key) for key in matched]
+                entry["trust_anchors"] = [
+                    {"key_tag": item.key_tag, "algorithm": item.algorithm,
+                     "digest_type": item.digest_type, "digest": item.digest.hex().upper()}
+                    for item in anchor_ds
+                ]
             else:
                 ds_rrset, _ = _rrset(ds_answer, current, dns.rdatatype.DS)
                 matched, comparable = _matching_ds_keys(current, keys, ds_rrset)
@@ -480,6 +494,7 @@ async def validate_dnssec_chain(
                     chain.append(entry)
                     state, reason = "bogus", "DS did not match a child DNSKEY"
                     break
+                entry["matched_key_tags"] = [dns.dnssec.key_id(key) for key in matched]
             checked_key = _validate(keys, key_sigs, matched if index else matched, current, now)
             if checked_key[0] != "secure":
                 entry.update(result=checked_key[0], reason_code=checked_key[1])
@@ -546,6 +561,7 @@ async def validate_dnssec_chain(
                    "keys": [{"key_tag": k, "algorithm": a} for k, a in zip(chain[-1]["key_tags"], chain[-1]["algorithms"])] if chain else [],
                    "delegation_signers": chain[-1]["ds_digests"] if chain else [], "matching_key_tag": chain[-1]["key_tags"][0] if verified and chain[-1]["key_tags"] else None,
                    "nsec": chain[-1].get("nsec", {"type": None, "nsec3_opt_out": None, "iterations": None}) | {"iteration_limit": NSEC3_MAX_ITERATIONS, "denial_validated": False}})
+    result["chain_graph"] = _chain_graph(chain)
     severity, message = (("info", "DNSSEC chain validated from the IANA root trust anchor to the zone.") if state == "secure" else ("error", f"DNSSEC validation failed: {reason}.") if state == "bogus" else ("warning", f"DNSSEC is {reason}.") if state == "insecure" else ("info", "DNSSEC validation is inconclusive; this does not prove the zone is bogus or unsigned."))
     if reason == "signature_expired":
         all_findings.append(Finding(severity="error", record_type="DNSSEC", message="DNSSEC signature expired."))
@@ -553,6 +569,40 @@ async def validate_dnssec_chain(
         all_findings.append(Finding(severity="error", record_type="DNSSEC", message="DNSSEC signature is not yet valid."))
     findings = [Finding(severity=severity, record_type="DNSSEC", message=message), *all_findings]
     return result, findings
+
+
+def _chain_graph(chain: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Produce a stable, UI-neutral Root → zone → DS/key/signature graph payload."""
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    for index, entry in enumerate(chain):
+        zone = str(entry.get("zone", "."))
+        zone_id = f"zone:{zone}"
+        nodes.append({"id": zone_id, "type": "zone", "label": zone, "status": entry.get("result", "inconclusive")})
+        if index:
+            parent_zone = str(chain[index - 1].get("zone", "."))
+            edges.append({"source": f"zone:{parent_zone}", "target": zone_id, "type": "delegation"})
+        ds_records = entry.get("ds_digests", []) or entry.get("trust_anchors", [])
+        for ds in ds_records:
+            ds_id = f"ds:{zone}:{ds.get('key_tag')}:{ds.get('digest_type')}"
+            nodes.append({"id": ds_id, "type": "ds", "label": f"DS {ds.get('key_tag')} · digest {ds.get('digest_type')}", "status": entry.get("result", "inconclusive"), "digest": ds.get("digest")})
+            parent = str(chain[index - 1].get("zone", ".")) if index else zone
+            edges.append({"source": f"zone:{parent}", "target": ds_id, "type": "publishes"})
+            key_id = f"dnskey:{zone}:{ds.get('key_tag')}"
+            if ds.get("key_tag") in entry.get("matched_key_tags", []):
+                edges.append({"source": ds_id, "target": key_id, "type": "matches"})
+        for key in entry.get("dnskeys", []):
+            key_id = f"dnskey:{zone}:{key.get('key_tag')}"
+            nodes.append({"id": key_id, "type": "dnskey", "label": f"DNSKEY {key.get('key_tag')} · alg {key.get('algorithm')}", "status": entry.get("result", "inconclusive")})
+            edges.append({"source": zone_id, "target": key_id, "type": "contains"})
+        if entry.get("signature_inception") or entry.get("signature_expiration"):
+            signature_id = f"rrsig:{zone}"
+            nodes.append({"id": signature_id, "type": "rrsig", "label": "RRSIG", "status": entry.get("result", "inconclusive"), "valid_from": entry.get("signature_inception"), "valid_until": entry.get("signature_expiration")})
+            edges.extend([
+                {"source": zone_id, "target": signature_id, "type": "signs"},
+                *[{"source": f"dnskey:{zone}:{tag}", "target": signature_id, "type": "signed_by"} for tag in entry.get("matched_key_tags", [])],
+            ])
+    return {"nodes": nodes, "edges": edges}
 
 
 def _base(status: str, reason: str | None) -> dict[str, Any]:

@@ -8,9 +8,11 @@ The scanner assigns a stable code to each recognized finding condition. Legacy a
 | NS | `no nameservers found` | `DNS-NS-001` | `DNS-004` |
 | NS | `only one nameserver` | `DNS-NS-003` | `DNS-004` |
 | NS | `does not resolve` | `DNS-NS-004` | `DNS-004` |
+| NS | `could not verify address records for nameserver` | `DNS-NS-006` | `DNS-004` |
 | NS | `operates under authoritative zone` | `DNS-NS-005` | `DNS-004` |
 | MX | `no mx records found` | `MAIL-MX-001` | `MAIL-001` |
 | MX | `does not resolve` | `MAIL-MX-002` | `MAIL-001` |
+| MX | `could not verify address records for mail server` | `MAIL-MX-003` | `MAIL-001` |
 | CNAME | `coexists with other record types` | `DNS-CNAME-001` | `DNS-005` |
 | SOA | `no soa record found` | `DNS-SOA-001` | `DNS-006` |
 | SOA | `refresh interval` | `DNS-SOA-002` | `DNS-006` |
@@ -79,6 +81,15 @@ The scanner assigns a stable code to each recognized finding condition. Legacy a
 | NS CONSISTENCY | `different soa serial numbers` | `DNS-NSCONS-002` | `DNS-NS-002` |
 | NS CONSISTENCY | `disagree on soa mname` | `DNS-NSCONS-003` | `DNS-NS-002` |
 | NS CONSISTENCY | `different ns record sets` | `DNS-NSCONS-004` | `DNS-NS-002` |
+| NS DIVERSITY | `all public addresses for` | `DNS-NS-ASN-001` | — |
+| NS DELEGATION | `parent and child nameserver sets differ` | `DNS-NS-DELEGATION-002` | `DNS-NS-DELEGATION-001` |
+| NS DELEGATION | `missing glue in the parent referral` | `DNS-NS-DELEGATION-003` | `DNS-NS-DELEGATION-001` |
+| NS DELEGATION | `parent authorities disagree on glue` | `DNS-NS-DELEGATION-005` | `DNS-NS-DELEGATION-001` |
+| NS DELEGATION | `did not serve the child zone authoritatively` | `DNS-NS-DELEGATION-004` | `DNS-NS-DELEGATION-001` |
+| NS DELEGATION | `check could not complete` | `SCAN-NS-DELEGATION-001` | `DNS-NS-DELEGATION-001` |
+| MAIL-DNSBL | `is listed by` | `MAIL-DNSBL-001` | — |
+| DANE/TLSA | `matches a supported DANE-EE TLSA association` | `MAIL-DANE-001` | — |
+| DANE/TLSA | `does not match an observed service certificate` | `MAIL-DANE-002` | `MAIL-DANE-001` |
 | MTA-STS | `no mta-sts dns record` | `MAIL-MTASTS-002` | `MAIL-005` |
 | MTA-STS | `policy file status is valid (mode=enforce)` | `MAIL-MTASTS-001` | `MAIL-005` |
 | MTA-STS | `policy file status is valid` | `MAIL-MTASTS-003` | `MAIL-005` |
@@ -121,18 +132,18 @@ The scanner assigns a stable code to each recognized finding condition. Legacy a
 | COOKIE | `observed cookie(s) miss` | `WEB-COOKIE-001` | `WEB-004` |
 | HTTPS | `security header inspection on port` | `WEB-HEADERS-001` | `WEB-001` |
 | HTTP METHODS | `advertises potentially sensitive` | `WEB-METHODS-001` | `WEB-005` |
-| SECURITY.TXT | `security.txt is missing` | `WEB-SECURITYTXT-001` | `GEN-001` |
-| SECURITY.TXT | `security.txt is malformed` | `WEB-SECURITYTXT-002` | `GEN-001` |
-| SECURITY.TXT | `security.txt is expired` | `WEB-SECURITYTXT-003` | `GEN-001` |
+| SECURITY.TXT | `security.txt is missing` | `WEB-SECURITYTXT-001` | — |
+| SECURITY.TXT | `security.txt is malformed` | `WEB-SECURITYTXT-002` | — |
+| SECURITY.TXT | `security.txt is expired` | `WEB-SECURITYTXT-003` | — |
 | HTTPS | `additional browser isolation headers` | `WEB-HEADERS-002` | `WEB-001` |
 | HTTPS | `port 80 http` | `WEB-HTTPS-005` | `WEB-001` |
-| SPF LOOKUP COUNT | `check could not complete` | `SCAN-SPF-001` | `GEN-001` |
-| SPF FLATTENING | `check could not complete` | `SCAN-SPF-002` | `GEN-001` |
+| SPF LOOKUP COUNT | `check could not complete` | `SCAN-SPF-001` | — |
+| SPF FLATTENING | `check could not complete` | `SCAN-SPF-002` | — |
 | DNSSEC | `check could not complete` | `SCAN-DNSSEC-001` | `DNSSEC-001` |
 | TAKEOVER | `check could not complete` | `SCAN-TAKEOVER-001` | `TAKEOVER-001` |
 | TLS | `check could not complete` | `SCAN-TLS-001` | `WEB-002` |
 | SUBDOMAINS | `check could not complete` | `SCAN-SUBDOMAINS-001` | `RECON-SUB-001` |
-| MAIL TRANSPORT | `check could not complete` | `SCAN-MAIL-001` | `GEN-001` |
+| MAIL TRANSPORT | `check could not complete` | `SCAN-MAIL-001` | — |
 | AXFR | `check could not complete` | `SCAN-AXFR-001` | `DNS-AXFR-001` |
 | WILDCARD DNS | `check could not complete` | `SCAN-WILDCARD-001` | `DNS-WILDCARD-001` |
 | NS CONSISTENCY | `check could not complete` | `SCAN-NSCONS-001` | `DNS-NS-002` |
@@ -152,7 +163,7 @@ The scanner assigns a stable code to each recognized finding condition. Legacy a
 ## Alias-only codes
 
 These broad compatibility codes are not emitted as the primary `code`; matching findings retain them in `legacy_codes`.
-`CERT-001`, `DNS-001`, `DNS-002`, `DNS-003`, `DNS-004`, `DNS-005`, `DNS-006`, `DNS-007`, `DNS-AXFR-001`, `DNS-NS-002`, `DNS-WILDCARD-001`, `DNSSEC-001`, `MAIL-001`, `MAIL-002`, `MAIL-003`, `MAIL-004`, `MAIL-005`, `MAIL-006`, `MAIL-007`, `RECON-CT-001`, `RECON-SUB-001`, `TAKEOVER-001`, `WEB-001`, `WEB-002`, `WEB-003`, `WEB-004`, `WEB-005`
+`CERT-001`, `DNS-001`, `DNS-002`, `DNS-003`, `DNS-004`, `DNS-005`, `DNS-006`, `DNS-007`, `DNS-AXFR-001`, `DNS-NS-002`, `DNS-NS-DELEGATION-001`, `DNS-WILDCARD-001`, `DNSSEC-001`, `MAIL-001`, `MAIL-002`, `MAIL-003`, `MAIL-004`, `MAIL-005`, `MAIL-006`, `MAIL-007`, `RECON-CT-001`, `RECON-SUB-001`, `TAKEOVER-001`, `WEB-001`, `WEB-002`, `WEB-003`, `WEB-004`, `WEB-005`
 
 ## Reserved codes
 

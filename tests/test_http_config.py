@@ -1,7 +1,6 @@
 import ast
 from pathlib import Path
 import logging
-import pytest
 
 from app.http_config import DEFAULT_DOCUMENTATION_URL, outbound_http_headers
 

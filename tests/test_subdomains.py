@@ -120,8 +120,10 @@ async def test_ct_retries_provider_error_and_preserves_per_host_source(monkeypat
     data, _ = await discover_passive_subdomains("example.com", MockResolver(), work_budget=budget)
 
     assert attempts == data["attempts"] == 2
-    assert data["state"] == "DISCOVERY_COMPLETED"
-    assert data["subdomains"][0]["source"] == "crt.sh"
+    # crt.sh succeeded, but the separately reserved secondary-source budget
+    # was not configured in this test, so the combined result is partial.
+    assert data["state"] == "PARTIAL_RESULTS"
+    assert data["subdomains"][0]["source"] == "Certificate Transparency"
 
 
 @pytest.mark.asyncio

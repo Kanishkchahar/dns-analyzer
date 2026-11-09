@@ -31,7 +31,6 @@ def _legacy_resolver(mode="match"):
     ds = dns.dnssec.make_ds(ZONE, key, "SHA256")
     if mode == "mismatch":
         from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import serialization
         private = ec.generate_private_key(ec.SECP256R1())
         other = dns.dnssec.make_dnskey(private.public_key(), 13, flags=257)
         ds = dns.dnssec.make_ds(ZONE, other, "SHA256")
@@ -183,6 +182,11 @@ async def test_chain_validation_accepts_injected_anchor_and_clock_and_sets_do_cd
     )
     assert result["status"] == "secure"
     assert result["cryptographically_verified"] is True
+    graph = result["chain_graph"]
+    assert {node["type"] for node in graph["nodes"]} >= {"zone", "ds", "dnskey", "rrsig"}
+    assert any(edge["type"] == "matches" for edge in graph["edges"])
+    root = next(node for node in graph["nodes"] if node["id"] == "zone:.")
+    assert root["status"] == "secure"
     assert all(call[3] & dns.flags.DO and call[4] & dns.flags.CD for call in fixture["resolver"].calls)
     queried = [(name, kind) for name, kind, *_ in fixture["resolver"].calls]
     assert queried.index((ZONE, dns.rdatatype.DS)) < queried.index((ZONE, dns.rdatatype.DNSKEY))

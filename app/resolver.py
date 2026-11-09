@@ -73,13 +73,31 @@ async def _safe_query(resolver: dns.asyncresolver.Resolver, domain: str, rtype: 
 
 
 
+async def _resolve_host_addresses(resolver: dns.asyncresolver.Resolver, host: str) -> dict[str, Any]:
+    """Check both address families without treating lookup failures as absence."""
+    async def query(rtype: str) -> tuple[str, str]:
+        try:
+            answer = await resolver.resolve(host, rtype)
+            return rtype, "present" if len(answer) else "absent"
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+            return rtype, "absent"
+        except Exception:
+            # Timeout, SERVFAIL, budget exhaustion, and resolver errors do not
+            # prove that the hostname has no address records.
+            return rtype, "inconclusive"
+
+    outcomes = dict(await asyncio.gather(query("A"), query("AAAA")))
+    families = [rtype for rtype, status in outcomes.items() if status == "present"]
+    if families:
+        return {"resolves": True, "resolution_status": "resolved", "address_families": families}
+    if all(status == "absent" for status in outcomes.values()):
+        return {"resolves": False, "resolution_status": "unresolved", "address_families": []}
+    return {"resolves": False, "resolution_status": "inconclusive", "address_families": []}
+
+
 async def _resolve_host_to_a(resolver: dns.asyncresolver.Resolver, host: str) -> bool:
-    """Check whether a hostname resolves to at least one A record."""
-    try:
-        await resolver.resolve(host, "A")
-        return True
-    except Exception:
-        return False
+    """Backward-compatible predicate: true when A or AAAA resolves."""
+    return (await _resolve_host_addresses(resolver, host))["resolves"]
 
 
 async def discover_zone_apex(domain: str, resolver: dns.asyncresolver.Resolver) -> str:
@@ -113,7 +131,7 @@ async def resolve_domain(domain: str, resolver: dns.asyncresolver.Resolver | Non
     """
     Query all required record types concurrently and return a structured dict.
     Discovers authoritative zone apex for subdomains to prevent false missing-NS/SOA alerts.
-    Also performs secondary A-record lookups for each NS and MX host.
+    Also performs secondary A and AAAA lookups for each NS and MX host.
     """
     resolver = resolver or dns.asyncresolver.Resolver()
     resolver.timeout = 3.0
@@ -168,20 +186,20 @@ async def resolve_domain(domain: str, resolver: dns.asyncresolver.Resolver | Non
     # Secondary: resolve each NS host
     if data["NS"]["status"] == "ok":
         ns_hosts: list[str] = data["NS"]["records"]
-        resolve_tasks = [_resolve_host_to_a(resolver, h) for h in ns_hosts]
+        resolve_tasks = [_resolve_host_addresses(resolver, h) for h in ns_hosts]
         resolve_results = await asyncio.gather(*resolve_tasks)
         data["NS"]["records"] = [
-            {"host": h, "resolves": r}
+            {"host": h, **r}
             for h, r in zip(ns_hosts, resolve_results)
         ]
 
     # Secondary: resolve each MX host
     if data["MX"]["status"] == "ok":
         mx_entries = data["MX"]["records"]
-        resolve_tasks = [_resolve_host_to_a(resolver, e["host"]) for e in mx_entries]
+        resolve_tasks = [_resolve_host_addresses(resolver, e["host"]) for e in mx_entries]
         resolve_results = await asyncio.gather(*resolve_tasks)
         data["MX"]["records"] = [
-            {**entry, "resolves": res}
+            {**entry, **res}
             for entry, res in zip(mx_entries, resolve_results)
         ]
 

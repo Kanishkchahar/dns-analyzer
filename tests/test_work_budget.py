@@ -11,7 +11,6 @@ from app.work_budget import (
     DEFAULT_HTTP_REQUEST_BUDGET,
     DNS_MODULE_SHARES,
     HTTP_MODULE_SHARES,
-    BudgetedResolver,
     ScanWorkBudget,
 )
 from tests.conftest import MockAnswer, MockResolver, MockRR
@@ -20,10 +19,10 @@ from tests.dnssec_fixtures import ZONE, make_signed_hierarchy
 
 def test_default_module_reservations_match_global_caps():
     assert sum(DNS_MODULE_SHARES.values()) == DEFAULT_DNS_QUERY_BUDGET == 500
-    assert sum(HTTP_MODULE_SHARES.values()) == DEFAULT_HTTP_REQUEST_BUDGET == 25
+    assert sum(HTTP_MODULE_SHARES.values()) == DEFAULT_HTTP_REQUEST_BUDGET == 37
     budget = ScanWorkBudget()
     assert sum(budget.dns_module_remaining.values()) == 500
-    assert sum(budget.http_module_remaining.values()) == 25
+    assert sum(budget.http_module_remaining.values()) == 37
 
 
 @pytest.mark.asyncio
@@ -122,4 +121,4 @@ async def test_ct_and_takeover_exhaustion_leaves_tls_dnssec_and_email_checks_ava
 def test_network_scan_profile_gets_the_full_standalone_cap():
     budget = ScanWorkBudget(profile="network_scan")
     assert budget.dns_module_remaining == {"network_scan": 500}
-    assert budget.http_module_remaining == {"network_scan": 25}
+    assert budget.http_module_remaining == {"network_scan": 37}

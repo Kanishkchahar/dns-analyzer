@@ -253,7 +253,7 @@ async def flatten_spf(domain: str, resolver: dns.asyncresolver.Resolver) -> dict
     try:
         answer = await resolver.resolve(domain, "TXT")
         txt_records = [b"".join(rr.strings).decode("utf-8", errors="replace") for rr in answer]
-    except Exception as exc:
+    except Exception:
         return {
             "can_flatten": False,
             "flattened_record": None,
@@ -344,7 +344,7 @@ async def _flatten_terms_recursive(
     try:
         answer = await resolver.resolve(domain, "TXT")
         txt_records = [b"".join(rr.strings).decode("utf-8", errors="replace") for rr in answer]
-    except Exception as exc:
+    except Exception:
         return False, f"Failed resolving TXT record for '{domain}'; flattening is inconclusive."
 
     spf = parse_spf(txt_records)
@@ -436,7 +436,7 @@ async def _resolve_host_ips(
             a_ips.append(rr.address)
     except dns.resolver.NoAnswer:
         pass  # A query succeeded; this name has no A records.
-    except Exception as exc:
+    except Exception:
         errors.append("A lookup failed; SPF result is inconclusive.")
 
     try:
@@ -445,7 +445,7 @@ async def _resolve_host_ips(
             aaaa_ips.append(rr.address)
     except dns.resolver.NoAnswer:
         pass  # A query succeeded; this name has no AAAA records.
-    except Exception as exc:
+    except Exception:
         errors.append("AAAA lookup failed; SPF result is inconclusive.")
 
     err = "; ".join(errors) if errors else None
@@ -460,7 +460,7 @@ async def _resolve_mx_ips(
     try:
         answer = await resolver.resolve(domain, "MX")
         hosts = [str(rr.exchange).rstrip(".") for rr in answer if str(rr.exchange).strip() != "."]
-    except Exception as exc:
+    except Exception:
         return [], [], "MX lookup failed; SPF expansion is inconclusive."
 
     if not hosts:

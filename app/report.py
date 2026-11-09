@@ -2,7 +2,6 @@
 
 import html
 import re
-from datetime import datetime
 from typing import Any
 
 from jinja2 import Environment, BaseLoader
@@ -356,6 +355,27 @@ _TEMPLATE = """<!DOCTYPE html>
   </div>
   {% endif %}
 
+  {% if extensions %}
+  <h2>Additional Domain &amp; Network Checks</h2>
+  {% for plugin_name, plugin_data in extensions.items() %}
+    {% if plugin_name == 'extended_security' %}
+      {% for check_name, check_data in plugin_data.items() %}
+      <div class="auth-card">
+        <div class="auth-card-title">{{ check_name|replace('_', ' ')|title }} · {{ check_data.status|default('unavailable') }}</div>
+        {% if check_data.expires %}<div class="auth-card-row"><span class="auth-card-key">Domain expiry</span><span class="auth-card-val">{{ check_data.expires }} · {{ check_data.days_remaining }} days remaining</span></div>{% endif %}
+        {% for item in check_data.observations or [] %}<div class="auth-card-row"><span class="auth-card-key">{{ item.address or item.name or item.host or 'Observation' }}</span><span class="auth-card-val">{{ item.prefix or '' }}{% if item.asn %} · AS{{ item.asn }}{% endif %} · {{ item.status }}{% if item.records %} · {{ item.records|length }} TLSA record(s){% endif %}</span></div>{% for endpoint in item.addresses or [] %}<div class="auth-card-row"><span class="auth-card-key">{{ endpoint.address }} · certificate</span><span class="auth-card-val">{{ endpoint.certificate_sha256 or endpoint.status }}</span></div>{% for match in endpoint.matches or [] %}<div class="auth-card-row"><span class="auth-card-key">DANE usage {{ match.usage }} · selector {{ match.selector }} · matching {{ match.matching_type }}</span><span class="auth-card-val">{% if match.matched is sameas true %}matched{% elif match.matched is sameas false %}mismatch{% else %}not evaluated{% endif %}</span></div>{% endfor %}{% endfor %}{% for list in item.lists or [] %}<div class="auth-card-row"><span class="auth-card-key">{{ list.provider }}</span><span class="auth-card-val">{{ list.status }}{% if list.return_codes %} · {{ list.return_codes|join(', ') }}{% endif %}</span></div>{% endfor %}{% endfor %}
+        {% for item in check_data.hosts or [] %}<div class="auth-card-row"><span class="auth-card-key">{{ item.host }}</span><span class="auth-card-val">{{ item.status }}{% if item.tls_version %} · {{ item.tls_version }} · {{ item.cipher }}{% endif %}</span></div>{% endfor %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="auth-card"><div class="auth-card-title">{{ plugin_name|replace('_', ' ')|title }} · {{ plugin_data.status|default('unavailable') }}</div>
+        {% if plugin_data.expires %}<div class="auth-card-row"><span class="auth-card-key">Expires</span><span class="auth-card-val">{{ plugin_data.expires }} · {{ plugin_data.days_remaining }} days remaining</span></div>{% endif %}
+        {% if plugin_data.reason %}<p>{{ plugin_data.reason }}</p>{% endif %}
+      </div>
+    {% endif %}
+  {% endfor %}
+  {% endif %}
+
   {% if tls %}
   <h2>🔒 TLS &amp; HTTPS Posture</h2>
   <div class="auth-card">
@@ -434,6 +454,10 @@ _TEMPLATE = """<!DOCTYPE html>
     {% set consistency = dns_posture.nameserver_consistency or {} %}
     <div class="auth-card-row"><span class="auth-card-key">Nameserver consistency</span><span class="auth-card-val">SOA serials {{ 'match' if consistency.serials_match else 'differ' }} · NS sets {{ 'match' if consistency.ns_sets_match else 'differ' }}</span></div>
     {% for observation in consistency.observations or [] %}<div class="auth-card-row"><span class="auth-card-key">{{ observation.nameserver }} ({{ observation.address }})</span><span class="auth-card-val">SOA {{ observation.soa_serial or 'unavailable' }} · {{ (observation.ns_records or [])|join(', ') }}{% if observation.errors %} · {{ observation.errors }}{% endif %}</span></div>{% endfor %}
+    {% set delegation = dns_posture.parent_child_delegation or {} %}
+    <div class="auth-card-row"><span class="auth-card-key">Parent-child delegation</span><span class="auth-card-val">{{ delegation.status|default('inconclusive') }} · {{ delegation.parent_zone or 'parent unavailable' }} · {{ 'NS sets match' if delegation.delegation_matches else 'NS sets differ' if delegation.delegation_matches is sameas false else 'not compared' }}</span></div>
+    {% for host in delegation.lame_nameservers or [] %}<div class="auth-card-row"><span class="auth-card-key">Lame authority</span><span class="auth-card-val">{{ host }}</span></div>{% endfor %}
+    {% for glue in delegation.glue or [] %}<div class="auth-card-row"><span class="auth-card-key">{{ glue.nameserver }} glue</span><span class="auth-card-val">{{ glue.status }}{% if glue.addresses %} · {{ glue.addresses|join(', ') }}{% endif %}</span></div>{% endfor %}
     {% set wildcard = dns_posture.wildcard or {} %}
     <div class="auth-card-row"><span class="auth-card-key">Wildcard DNS</span><span class="auth-card-val">{{ wildcard.status|default('unavailable') }}{% if wildcard.addresses %} · {{ wildcard.addresses|join(', ') }}{% endif %}</span></div>
   </div>
@@ -477,7 +501,7 @@ _TEMPLATE = """<!DOCTYPE html>
         <tr>
           <td>{{ r.priority }}</td>
           <td>{{ r.host }}</td>
-          <td><span class="pill {% if r.resolves %}pill-ok{% else %}pill-fail{% endif %}">{% if r.resolves %}yes{% else %}no{% endif %}</span></td>
+          <td><span class="pill {% if r.resolution_status == 'inconclusive' %}pill-warn{% elif r.resolves %}pill-ok{% else %}pill-fail{% endif %}">{% if r.resolution_status == 'inconclusive' %}could not verify{% elif r.resolves %}yes{% else %}no{% endif %}</span></td>
         </tr>
         {% endfor %}
       </table>
@@ -487,7 +511,7 @@ _TEMPLATE = """<!DOCTYPE html>
         {% for r in entry.records %}
         <tr>
           <td>{{ r.host }}</td>
-          <td><span class="pill {% if r.resolves %}pill-ok{% else %}pill-fail{% endif %}">{% if r.resolves %}yes{% else %}no{% endif %}</span></td>
+          <td><span class="pill {% if r.resolution_status == 'inconclusive' %}pill-warn{% elif r.resolves %}pill-ok{% else %}pill-fail{% endif %}">{% if r.resolution_status == 'inconclusive' %}could not verify{% elif r.resolves %}yes{% else %}no{% endif %}</span></td>
         </tr>
         {% endfor %}
       </table>
@@ -540,6 +564,7 @@ def build_report(
     coverage: Any = None,
     dns_posture: Any = None,
     domain_score: Any = None,
+    extensions: Any = None,
 ) -> str:
     """Render a self-contained HTML report string."""
     return _tmpl.render(
@@ -557,4 +582,5 @@ def build_report(
         coverage=coverage,
         dns_posture=dns_posture,
         domain_score=domain_score,
+        extensions=extensions,
     )

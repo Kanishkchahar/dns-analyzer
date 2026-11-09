@@ -18,17 +18,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt pyproject.toml ./
+COPY requirements.lock.txt pyproject.toml ./
 COPY app ./app
+COPY static ./static
 
 # Build isolated virtual environment
 RUN python -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt \
+    && /opt/venv/bin/pip install --no-cache-dir --require-hashes -r requirements.lock.txt \
     && /opt/venv/bin/pip install --no-cache-dir --no-build-isolation --no-deps .
 
 # ------------------------------------------------------------------------------
-# Stage 2: Production Runtime (v2)
+# Stage 2: Test gate. The runtime image depends on this stage, so a failed test
+# suite makes the default image build fail. Dev tools never enter the runtime.
+# ------------------------------------------------------------------------------
+FROM builder AS test
+
+COPY . ./
+
+RUN /opt/venv/bin/pip install --no-cache-dir -r requirements-dev.txt \
+    && /opt/venv/bin/pytest -q \
+    && touch /tmp/dns-analyzer-tests-passed
+
+# ------------------------------------------------------------------------------
+# Stage 3: Production Runtime (v2)
 # ------------------------------------------------------------------------------
 FROM python:${PYTHON_VERSION}-slim AS runtime
 
@@ -45,10 +57,16 @@ WORKDIR /app
 
 # Copy isolated virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=test /tmp/dns-analyzer-tests-passed /tmp/dns-analyzer-tests-passed
 
 # Copy only production application code and static assets
 COPY app ./app
 COPY static ./static
+
+# Nmap is optional at runtime but enables bounded service/version identification.
+RUN apt-get update && apt-get install -y --no-install-recommends nmap \
+    && nmap --version >/dev/null \
+    && rm -rf /var/lib/apt/lists/*
 
 # Security hardening: Create unprivileged system user
 RUN useradd -m -u 1000 -s /usr/sbin/nologin appuser \

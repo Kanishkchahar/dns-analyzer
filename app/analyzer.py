@@ -65,11 +65,17 @@ def check_ns_redundancy(data: dict[str, Any]) -> list[Finding]:
 
 
 def check_ns_resolves(data: dict[str, Any]) -> list[Finding]:
-    """Check 4: Each NS host should resolve to an A record."""
+    """Check 4: Each NS host should resolve to at least one address family."""
     findings: list[Finding] = []
     ns = data.get("NS", {})
     if ns.get("status") == "ok":
         for entry in ns.get("records", []):
+            if entry.get("resolution_status") == "inconclusive":
+                findings.append(_finding(
+                    "inconclusive", "NS",
+                    f"Could not verify address records for nameserver `{entry['host']}`."
+                ))
+                continue
             if not entry.get("resolves", True):
                 findings.append(_finding(
                     "error", "NS",
@@ -89,11 +95,17 @@ def check_mx_exists(data: dict[str, Any]) -> list[Finding]:
 
 
 def check_mx_resolves(data: dict[str, Any]) -> list[Finding]:
-    """Check 6: Each MX host should resolve to an A record."""
+    """Check 6: Each MX host should resolve to at least one address family."""
     findings: list[Finding] = []
     mx = data.get("MX", {})
     if mx.get("status") == "ok":
         for entry in mx.get("records", []):
+            if entry.get("resolution_status") == "inconclusive":
+                findings.append(_finding(
+                    "inconclusive", "MX",
+                    f"Could not verify address records for mail server `{entry['host']}`."
+                ))
+                continue
             if not entry.get("resolves", True):
                 findings.append(_finding(
                     "error", "MX",

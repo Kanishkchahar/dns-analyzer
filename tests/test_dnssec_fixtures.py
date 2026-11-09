@@ -1,5 +1,4 @@
 """Self-tests for the local signed DNSSEC hierarchy fixtures."""
-from datetime import datetime, timezone
 
 import dns.dnssec
 import dns.flags

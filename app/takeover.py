@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import date, datetime, timezone
 import ipaddress
 import json
@@ -232,10 +231,41 @@ async def check_subdomain_takeover(
     seeds = raw_records if isinstance(raw_records, list) else [raw_records]
     seeds = [str(target).rstrip(".") for target in seeds if str(target).strip()]
     if not seeds:
+        # A dead delegated nameserver or MX target is not proof of claimability,
+        # but can expose a dangling external dependency outside CNAME records.
+        checked = 0
+        for record_type, limit in (("NS", 3), ("MX", 2)):
+            entry = records.get(record_type, {})
+            values = entry.get("records", []) if entry.get("status") == "ok" else []
+            hosts = [str(item.get("host", "")).rstrip(".") for item in values
+                     if isinstance(item, dict) and item.get("host")][:limit]
+            for host in hosts:
+                if checked >= 5:
+                    break
+                checked += 1
+                addresses, states = await _resolve_addresses(host, resolver)
+                if not addresses and states == ["nxdomain", "nxdomain"]:
+                    result = {
+                        "scanned": True, "has_cname": False, "vulnerable": False,
+                        "status": "candidate", "target_type": record_type,
+                        "cname_target": host, "provider": "Unverified delegation target",
+                        "evidence_state": "nxdomain", "verification": "unverified",
+                        "details": f"The {record_type} target did not resolve. This may be a dangling dependency, but does not prove that it can be claimed.",
+                    }
+                    return result, [Finding(
+                        severity="warning", record_type="TAKEOVER",
+                        message=f"The {record_type} target `{host}` did not resolve. Verify its registration and remove or repair stale delegation if appropriate; this is not proof of claimability.",
+                    )]
         return {"scanned": True, "has_cname": False, "vulnerable": False, "status": "safe", "details": "No CNAME record at this hostname."}, []
 
     work_budget = budget or ScanWorkBudget()
     targets, chain_inconclusive = await _resolve_cname_chain(seeds, resolver)
+    if chain_inconclusive:
+        target = targets[0] if targets else seeds[0]
+        return _finding_result(
+            domain, target, _match_provider(target), "inconclusive", "lookup_or_fetch_failed",
+            "The CNAME chain could not be resolved completely; no takeover result is claimed.",
+        )
     candidates: list[tuple[str, dict[str, Any] | None, list[str], list[str]]] = []
     fingerprint_failure = False
     for target in targets:

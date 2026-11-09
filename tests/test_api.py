@@ -18,12 +18,123 @@ from app.main import (
     _CLIENT_REQUESTS,
     _CUSTOM_DKIM_CACHE,
     _MAX_TRACKED_IPS,
+    _TARGET_LAST_SCAN,
+    _enforce_target_cooldown,
     _enforce_rate_limit,
+    _await_scan_or_disconnect,
     _get_cached_custom_dkim,
     _store_custom_dkim,
     app,
 )
 from tests.conftest import MockAnswer, MockResolver, MockRR
+
+
+@pytest.mark.asyncio
+async def test_scan_work_is_cancelled_when_client_disconnects():
+    class DisconnectedRequest:
+        async def is_disconnected(self):
+            return True
+
+    cancelled = asyncio.Event()
+
+    async def long_running_scan():
+        try:
+            await asyncio.sleep(10)
+        finally:
+            cancelled.set()
+
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        await _await_scan_or_disconnect(DisconnectedRequest(), long_running_scan())
+    assert exc.value.status_code == 499
+    assert cancelled.is_set()
+
+
+def test_optional_api_key_auth_and_rejection(monkeypatch):
+    from starlette.requests import Request
+    from fastapi import HTTPException
+    from app.auth import require_api_key
+
+    scope = {"type": "http", "headers": []}
+    request = Request(scope)
+    monkeypatch.delenv("DNS_ANALYZER_API_KEYS", raising=False)
+    require_api_key(request)
+
+    monkeypatch.setenv("DNS_ANALYZER_API_KEYS", "first-secret, second-secret")
+    with pytest.raises(HTTPException) as missing:
+        require_api_key(request)
+    assert missing.value.status_code == 401
+
+    request = Request({"type": "http", "headers": [(b"authorization", b"Bearer second-secret")]})
+    require_api_key(request)
+    request = Request({"type": "http", "headers": [(b"authorization", b"Bearer wrong-secret")]})
+    with pytest.raises(HTTPException) as invalid:
+        require_api_key(request)
+    assert invalid.value.status_code == 401
+
+
+def test_local_hostname_lookups_are_cached_but_configured_names_stay_dynamic(monkeypatch):
+    from app import auth
+
+    auth._local_hostnames.cache_clear()
+    hostname = Mock(return_value="scanner")
+    fqdn = Mock(return_value="scanner.example.net")
+    monkeypatch.setattr(auth.socket, "gethostname", hostname)
+    monkeypatch.setattr(auth.socket, "getfqdn", fqdn)
+    try:
+        first = auth.blocked_target_names()
+        monkeypatch.setenv("DNS_ANALYZER_BLOCKED_TARGETS", "extra.example.org")
+        second = auth.blocked_target_names()
+        assert first == {"localhost", "localhost.localdomain", "scanner", "scanner.example.net"}
+        assert second == first | {"extra.example.org"}
+        hostname.assert_called_once_with()
+        fqdn.assert_called_once_with()
+    finally:
+        auth._local_hostnames.cache_clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,path,payload",
+    [
+        ("post", "/api/analyze", {"domain": "example.com"}),
+        ("get", "/api/report/example.com", None),
+        ("post", "/api/network/list-scan", {"targets": ["example.com"]}),
+    ],
+)
+async def test_scan_api_returns_401_when_api_keys_are_configured(monkeypatch, method, path, payload):
+    monkeypatch.setenv("DNS_ANALYZER_API_KEYS", "configured-secret")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.request(method, path, json=payload)
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_expensive_rate_limit_returns_429():
+    from fastapi import HTTPException
+
+    _CLIENT_REQUESTS.clear()
+    request = SimpleNamespace(headers={}, client=SimpleNamespace(host="198.51.100.19"))
+    _enforce_rate_limit(request, limit=1)
+    with pytest.raises(HTTPException) as limited:
+        _enforce_rate_limit(request, limit=1)
+    assert limited.value.status_code == 429
+    _CLIENT_REQUESTS.clear()
+
+
+@pytest.mark.asyncio
+async def test_target_cooldown_returns_429(monkeypatch):
+    from fastapi import HTTPException
+
+    _TARGET_LAST_SCAN.clear()
+    monkeypatch.setenv("DNS_ANALYZER_TARGET_COOLDOWN_SECONDS", "30")
+    _enforce_target_cooldown("Example.COM.")
+    _enforce_target_cooldown("example.com", "paths")
+    with pytest.raises(HTTPException) as limited:
+        _enforce_target_cooldown("example.com")
+    assert limited.value.status_code == 429
+    _TARGET_LAST_SCAN.clear()
 
 
 def test_dashboard_displays_incomplete_grade_marker():
@@ -36,6 +147,15 @@ def test_dashboard_uses_canonical_inconclusive_check_count():
     source = (Path(__file__).parents[1] / "static" / "app.js").read_text(encoding="utf-8")
     assert "Number.isInteger(data.summary.inconclusive)" in source
     assert 'currentFindings.filter((finding) => finding.severity === "inconclusive")' not in source
+
+
+def test_dashboard_exposes_tab_scoped_api_key_for_protected_deployments():
+    root = Path(__file__).parents[1]
+    html = (root / "static" / "index.html").read_text(encoding="utf-8")
+    script = (root / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'id="dashboard-api-key"' in html
+    assert "sessionStorage.setItem(API_KEY_STORAGE_KEY, value)" in script
+    assert 'apiFetch("/api/analyze"' in script
 
 
 @pytest.mark.asyncio
@@ -121,11 +241,15 @@ def mock_external_network_calls():
     mock_axfr = ({"zone": "example.com", "status": "complete", "nameservers_checked": 0, "servers": []}, [])
     mock_wildcard = ({"status": "not_detected", "addresses": [], "records": {"A": [], "AAAA": []}}, [])
     mock_ns_consistency = ({"status": "complete", "observations": [], "serials_match": True, "ns_sets_match": True}, [])
+    mock_ns_asn = ({"status": "inconclusive", "nameservers": [], "asns": [], "single_asn": None}, [])
+    mock_parent_child = ({"status": "inconclusive", "parent_observations": [], "parent_nameservers": [], "child_nameservers": [], "glue": [], "delegation_matches": None}, [])
     with patch("app.main.audit_tls_and_https", return_value=mock_tls), \
          patch("app.main.discover_passive_subdomains", return_value=mock_sub), \
          patch("app.main.check_zone_transfers", return_value=mock_axfr), \
          patch("app.main.check_wildcard_dns", return_value=mock_wildcard), \
-         patch("app.main.check_nameserver_consistency", return_value=mock_ns_consistency):
+         patch("app.main.check_nameserver_consistency", return_value=mock_ns_consistency), \
+         patch("app.main.check_nameserver_asn_diversity", return_value=mock_ns_asn), \
+         patch("app.main.check_parent_child_delegation", return_value=mock_parent_child):
         yield
 
 
@@ -170,6 +294,7 @@ class TestAPIEndpoints:
         assert token not in caplog.text
 
     async def test_network_path_scan_endpoint(self):
+        from app.network_scan import COMMON_PATH_SCAN_HTTP_BUDGET, COMMON_WEB_PATHS
         result = {"scan_mode": "Common Web Paths + Public Robots/Sitemap (No Crawling)", "path_count": 7, "targets": []}
         with patch("app.main.run_common_path_scan", return_value=result) as mocked:
             transport = ASGITransport(app=app)
@@ -180,7 +305,68 @@ class TestAPIEndpoints:
         assert resp.json()["path_count"] == 7
         assert mocked.await_count == 1
         assert mocked.await_args.args == (["example.com"],)
-        assert set(mocked.await_args.kwargs) == {"resolver", "work_budget"}
+        assert set(mocked.await_args.kwargs) == {"resolver", "work_budget", "wide"}
+        assert mocked.await_args.kwargs["wide"] is False
+        budget = mocked.await_args.kwargs["work_budget"].http_remaining
+        assert budget == COMMON_PATH_SCAN_HTTP_BUDGET
+        assert budget >= 2 * len(COMMON_WEB_PATHS)
+
+    async def test_wide_path_scan_gets_bounded_budget_for_paths_and_redirects(self, monkeypatch):
+        from app.network_scan import MAX_WIDE_PATHS, WIDE_PATH_SCAN_HTTP_BUDGET
+        monkeypatch.setenv("ENABLE_WIDE_DIRECTORY_SCAN", "true")
+        monkeypatch.setenv("WIDE_PATH_SCAN_ALLOWED_DOMAINS", "example.com")
+        result = {"scan_mode": "wide", "path_count": 64, "targets": []}
+        with patch("app.main.run_common_path_scan", return_value=result) as mocked:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.post(
+                    "/api/network/path-scan",
+                    json={"targets": ["example.com"], "wide": True, "confirmed": True},
+                )
+
+        assert response.status_code == 200
+        assert mocked.await_args.kwargs["wide"] is True
+        budget = mocked.await_args.kwargs["work_budget"].http_remaining
+        assert budget == WIDE_PATH_SCAN_HTTP_BUDGET
+        assert budget >= 2 * (MAX_WIDE_PATHS + 3)
+
+    async def test_wide_path_scan_accepts_separate_token_with_dashboard_auth(self, monkeypatch):
+        monkeypatch.setenv("DNS_ANALYZER_API_KEYS", "dashboard-key")
+        monkeypatch.setenv("ENABLE_WIDE_DIRECTORY_SCAN", "true")
+        monkeypatch.setenv("WIDE_PATH_SCAN_API_KEY", "wide-key")
+        monkeypatch.setenv("WIDE_PATH_SCAN_ALLOWED_DOMAINS", "example.com")
+        with patch("app.main.run_common_path_scan", return_value={"targets": [], "path_count": 64}) as mocked:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.post(
+                    "/api/network/path-scan",
+                    headers={
+                        "Authorization": "Bearer dashboard-key",
+                        "X-Wide-Path-Token": "wide-key",
+                    },
+                    json={"targets": ["example.com"], "wide": True, "confirmed": True},
+                )
+        assert response.status_code == 200
+        assert mocked.await_args.kwargs["wide"] is True
+
+    async def test_port_scan_accepts_separate_token_with_dashboard_auth(self, monkeypatch):
+        monkeypatch.setenv("DNS_ANALYZER_API_KEYS", "dashboard-key")
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        monkeypatch.setenv("PORT_SCAN_API_KEY", "port-key")
+        monkeypatch.setenv("PORT_SCAN_ALLOWED_DOMAINS", "example.com")
+        with patch("app.main.run_port_scan", return_value={"status": "completed"}) as mocked:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.post(
+                    "/api/network/port-scan",
+                    headers={
+                        "Authorization": "Bearer dashboard-key",
+                        "X-Port-Scan-Token": "port-key",
+                    },
+                    json={"target": "example.com", "confirmed": True},
+                )
+        assert response.status_code == 200
+        assert mocked.await_args.kwargs["auth_header"] == "Bearer port-key"
 
     async def test_network_path_scan_rejects_more_than_five_targets(self):
         transport = ASGITransport(app=app)
@@ -277,7 +463,7 @@ class TestAPIEndpoints:
         assert "remediation" in data
         assert "bind_zone_snippet" in data
         assert "domain_score" in data
-        assert data["summary"]["inconclusive"] == data["domain_score"]["inconclusive_count"]
+        assert data["summary"]["inconclusive"] >= data["domain_score"]["inconclusive_count"]
         assert data["domain_score"]["grade"].split(" ", 1)[0] in ("A+", "A", "B")
         assert data["domain_score"]["scope"].startswith("DNS, email authentication")
         assert "score_breakdown" in data
@@ -438,9 +624,30 @@ class TestAPIEndpoints:
         req = Request(req_scope)
         assert _extract_client_ip(req) == "192.168.1.50"
 
-        # Case 2: Proxy trust enabled
+        # Case 2: Trust one proxy hop (rightmost valid entry).
         monkeypatch.setenv("TRUST_REVERSE_PROXY", "true")
+        monkeypatch.delenv("TRUSTED_PROXY_COUNT", raising=False)
+        assert _extract_client_ip(req) == "10.0.0.1"
+
+        # Two trusted hops selects the second valid address from the right.
+        monkeypatch.setenv("TRUSTED_PROXY_COUNT", "2")
         assert _extract_client_ip(req) == "203.0.113.195"
+
+        # Too few valid entries fall back to the socket peer.
+        monkeypatch.setenv("TRUSTED_PROXY_COUNT", "3")
+        assert _extract_client_ip(req) == "192.168.1.50"
+
+        # Malformed values are ignored; a malformed hop does not become a bucket key.
+        req_scope["headers"] = [(b"x-forwarded-for", b"203.0.113.195, garbage, 10.0.0.1")]
+        req = Request(req_scope)
+        monkeypatch.setenv("TRUSTED_PROXY_COUNT", "2")
+        assert _extract_client_ip(req) == "203.0.113.195"
+
+        # IPv6 addresses are accepted and canonicalized.
+        req_scope["headers"] = [(b"x-forwarded-for", b"2001:db8::1, 2001:0db8::2")]
+        req = Request(req_scope)
+        monkeypatch.setenv("TRUSTED_PROXY_COUNT", "1")
+        assert _extract_client_ip(req) == "2001:db8::2"
 
     async def test_force_refresh_bypasses_cache(self, mock_dns_system):
         from app.main import _store_cached_scan, run_full_scan
@@ -471,7 +678,6 @@ class TestAPIEndpoints:
 
     async def test_semaphore_wait_timeout_returns_503(self):
         from app.main import SCAN_SEMAPHORE
-        import asyncio
 
         # Acquire all permits so next request times out waiting on semaphore
         permits = []

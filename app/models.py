@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.auth import validate_public_target_name
 from app.finding_catalog import get_finding_guidance, known_finding_codes, legacy_codes_for
 
 _finding_logger = logging.getLogger(__name__)
@@ -50,12 +51,26 @@ class AnalyzeRequest(BaseModel):
         except UnicodeError:
             raise ValueError(f"'{v}' contains invalid internationalized domain characters.")
 
+        validate_public_target_name(v_ascii)
         if not DOMAIN_RE.match(v_ascii):
             raise ValueError(
                 f"'{v}' does not look like a valid domain name. "
                 "Expected format: example.com"
             )
         return v_ascii
+
+
+class BatchAnalyzeRequest(BaseModel):
+    domains: list[str] = Field(min_length=2, max_length=8)
+    force_refresh: bool = False
+
+    @field_validator("domains")
+    @classmethod
+    def validate_domains(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(AnalyzeRequest(domain=value).domain for value in values))
+        if len(normalized) < 2:
+            raise ValueError("Provide at least two distinct domains.")
+        return normalized
 
 
 
@@ -169,6 +184,7 @@ class AnalyzeResponse(BaseModel):
     tls: dict[str, Any] | None = None
     subdomains: dict[str, Any] | None = None
     dns_posture: dict[str, Any] = Field(default_factory=dict)
+    extensions: dict[str, dict[str, Any]] = Field(default_factory=dict)
     coverage: list[dict[str, Any]] = Field(default_factory=list)
     remediation: list[RemediationFix] | None = None
     bind_zone_snippet: str | None = None
@@ -180,6 +196,8 @@ class ListScanRequest(BaseModel):
 
 class PathScanRequest(BaseModel):
     targets: list[str]
+    wide: bool = False
+    confirmed: bool = False
 
 
 class DkimSelectorRequest(BaseModel):
@@ -207,3 +225,4 @@ class PortScanRequest(BaseModel):
     ports: list[int] | None = None
     confirmed: bool = False
     auth_token: str | None = None
+    scanner: str = "connect"

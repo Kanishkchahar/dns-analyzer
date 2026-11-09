@@ -20,7 +20,7 @@ async def _query_txt(resolver: dns.asyncresolver.Resolver, name: str) -> tuple[l
         return [b"".join(rr.strings).decode("utf-8", errors="replace") for rr in answer], None
     except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
         return [], None
-    except Exception as exc:
+    except Exception:
         return [], "DNS lookup failed"
 
 
@@ -91,7 +91,7 @@ async def check_mail_transport(
                                         break
                                 policy_body = bytes(chunks).decode("utf-8", errors="replace")
                             break
-                except Exception as exc:
+                except Exception:
                     policy_errors.append("request failed")
             if policy_body is not None:
                 parsed = _parse_sts_policy(policy_body)

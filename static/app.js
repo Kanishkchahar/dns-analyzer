@@ -10,6 +10,8 @@ const analyzeBtn   = document.getElementById("analyze-btn");
 const errorBanner  = document.getElementById("error-banner");
 const errorMsg     = document.getElementById("error-msg");
 const results      = document.getElementById("results");
+const multiDomainDashboard = document.getElementById("multi-domain-dashboard");
+const multiDomainResults = document.getElementById("multi-domain-results");
 const resultDomain = document.getElementById("result-domain");
 const downloadBtn  = document.getElementById("download-btn");
 const findingsList = document.getElementById("findings-list");
@@ -36,6 +38,7 @@ const clearRecentBtn   = document.getElementById("clear-recent-btn");
 const loadingBar       = document.getElementById("loading-bar");
 const loadingStatusText= document.getElementById("loading-status-text");
 const loadingElapsedText = document.getElementById("loading-elapsed");
+const stopScanButton = document.getElementById("stop-scan-btn");
 
 // Email auth DOM refs
 const emailScoreSection = document.getElementById("email-score-section");
@@ -77,7 +80,85 @@ let currentViewMode = "cards"; // "cards" | "dig"
 let loadingInterval = null;
 let loadingStartedAt = 0;
 let analysisInFlight = false;
+let activeAnalysisController = null;
 const SCAN_HISTORY_KEY = "dns_analyzer_scan_history_v1";
+const API_KEY_STORAGE_KEY = "dns_analyzer_api_key_session";
+const THEME_STORAGE_KEY = "dns_analyzer_theme";
+const themeToggle = document.getElementById("theme-toggle");
+
+function setTheme(theme, persist = false) {
+  const root = document.documentElement;
+  if (theme === "system") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", theme);
+  if (persist) {
+    try {
+      if (theme === "system") localStorage.removeItem(THEME_STORAGE_KEY);
+      else localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch (_) {}
+  }
+  if (themeToggle) {
+    const next = theme === "system" ? "light" : theme === "light" ? "dark" : "system";
+    themeToggle.title = `Theme: ${theme}. Click for ${next}.`;
+    themeToggle.setAttribute("aria-label", `Switch to ${next} theme`);
+    themeToggle.querySelector("span").textContent = theme === "system" ? "System" : theme[0].toUpperCase() + theme.slice(1);
+  }
+}
+
+let selectedTheme = "system";
+try {
+  const storedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+  if (["light", "dark"].includes(storedTheme)) selectedTheme = storedTheme;
+} catch (_) {}
+setTheme(selectedTheme);
+themeToggle?.addEventListener("click", () => {
+  selectedTheme = selectedTheme === "system" ? "light" : selectedTheme === "light" ? "dark" : "system";
+  setTheme(selectedTheme, true);
+});
+
+function getDashboardApiKey() {
+  try { return sessionStorage.getItem(API_KEY_STORAGE_KEY) || ""; }
+  catch (_) { return ""; }
+}
+
+function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  const apiKey = getDashboardApiKey();
+  if (apiKey && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${apiKey}`);
+  return fetch(url, { ...options, headers });
+}
+
+function apiErrorMessage(response, payload, fallback) {
+  if (response.status === 401) {
+    return "This server requires a valid API key. Open “API access” above the domain field and enter the key.";
+  }
+  return payload?.detail || fallback;
+}
+
+const dashboardApiKeyInput = document.getElementById("dashboard-api-key");
+const saveDashboardApiKeyButton = document.getElementById("save-dashboard-api-key");
+const clearDashboardApiKeyButton = document.getElementById("clear-dashboard-api-key");
+const dashboardApiKeyStatus = document.getElementById("dashboard-api-key-status");
+
+if (dashboardApiKeyInput) dashboardApiKeyInput.value = getDashboardApiKey();
+if (saveDashboardApiKeyButton && dashboardApiKeyInput) {
+  saveDashboardApiKeyButton.addEventListener("click", () => {
+    const value = dashboardApiKeyInput.value.trim();
+    try {
+      if (value) sessionStorage.setItem(API_KEY_STORAGE_KEY, value);
+      else sessionStorage.removeItem(API_KEY_STORAGE_KEY);
+      dashboardApiKeyStatus.textContent = value ? "Key saved for this tab." : "No key entered.";
+    } catch (_) {
+      dashboardApiKeyStatus.textContent = "This browser cannot store the key for this tab.";
+    }
+  });
+}
+if (clearDashboardApiKeyButton && dashboardApiKeyInput) {
+  clearDashboardApiKeyButton.addEventListener("click", () => {
+    try { sessionStorage.removeItem(API_KEY_STORAGE_KEY); } catch (_) {}
+    dashboardApiKeyInput.value = "";
+    if (dashboardApiKeyStatus) dashboardApiKeyStatus.textContent = "Key cleared.";
+  });
+}
 
 // ── Recent Searches (localStorage) ───────────────────────────
 const STORAGE_KEY_RECENT = "dns_analyzer_recent";
@@ -417,15 +498,30 @@ if (findingsSearch) {
   });
 }
 
-downloadBtn.addEventListener("click", () => {
+downloadBtn.addEventListener("click", async () => {
   if (!currentDomain) return;
   const url = `/api/report/${encodeURIComponent(currentDomain)}`;
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `dns-report-${currentDomain}.html`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  downloadBtn.disabled = true;
+  try {
+    const response = await apiFetch(url);
+    if (!response.ok) {
+      let detail = "The report could not be downloaded.";
+      try { detail = apiErrorMessage(response, await response.json(), detail); } catch (_) {}
+      throw new Error(detail);
+    }
+    const blobUrl = URL.createObjectURL(await response.blob());
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = `dns-report-${currentDomain}.html`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+  } catch (err) {
+    showToast(err.message || "The report could not be downloaded.", "danger");
+  } finally {
+    downloadBtn.disabled = false;
+  }
 });
 
 if (downloadZoneBtn) {
@@ -456,20 +552,37 @@ async function runAnalysis() {
     return;
   }
 
+  const domains = raw.split(/[\n,;]+/).map(value => extractDomain(value)).filter(Boolean);
+  if (domains.length > 8) {
+    showError("Compare up to 8 domains at a time.");
+    return;
+  }
+  if (!domains.length) {
+    showError("Please enter one domain or a comma/newline separated list of domains.");
+    return;
+  }
+  if (domains.length > 1) {
+    domainInput.value = domains.join(", ");
+    return runBatchAnalysis(domains);
+  }
+
   // Auto-extract the hostname from any URL
-  const domain = extractDomain(raw);
+  const domain = domains[0];
   // Update the input so the user sees what was parsed
   domainInput.value = domain;
 
   analysisInFlight = true;
+  const scanController = new AbortController();
+  activeAnalysisController = scanController;
   setLoading(true);
   hideError();
   hideResults();
 
   let data;
   try {
-    const res = await fetch("/api/analyze", {
+    const res = await apiFetch("/api/analyze", {
       method: "POST",
+      signal: scanController.signal,
       headers: { "Content-Type": "application/json" },
       // Always bypass the short server cache so each user-triggered scan
       // re-runs DNS, TLS, and passive security checks against current data.
@@ -485,17 +598,20 @@ async function runAnalysis() {
 
     if (!res.ok) {
       // Backend validation error (400) or server error (500)
-      const detail = data?.detail ?? "An unexpected error occurred.";
+      const detail = apiErrorMessage(res, data, "An unexpected error occurred.");
       showError(typeof detail === "string" ? detail : JSON.stringify(detail));
       return;
     }
   } catch (err) {
-    showError(err instanceof TypeError
+    if (err.name === "AbortError") {
+      showToast("Scan stopped. The server is cancelling the disconnected request.");
+    } else showError(err instanceof TypeError
       ? "Network error — could not reach the server. Check your connection and try again."
       : (err.message || "The scan could not be completed. Please try again."));
-    console.error("Fetch error:", err);
+    if (err.name !== "AbortError") console.error("Fetch error:", err);
     return;
   } finally {
+    if (activeAnalysisController === scanController) activeAnalysisController = null;
     setLoading(false);
     analysisInFlight = false;
   }
@@ -513,12 +629,117 @@ async function runAnalysis() {
   }
 }
 
+async function runBatchAnalysis(domains) {
+  if (analysisInFlight) return;
+  analysisInFlight = true;
+  const scanController = new AbortController();
+  activeAnalysisController = scanController;
+  setLoading(true);
+  hideError();
+  hideResults();
+  try {
+    const response = await apiFetch("/api/analyze/batch", {
+      method: "POST",
+      signal: scanController.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domains, force_refresh: true }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(apiErrorMessage(response, payload, "Multi-domain analysis failed."));
+    const rows = payload.results || [];
+    for (const row of rows) if (row.status === "complete") saveRecentSearch(row.domain);
+    renderBatchDashboard(rows);
+  } catch (err) {
+    if (err.name === "AbortError") showToast("Comparison scan stopped.");
+    else showError(err instanceof TypeError
+      ? "Network error — could not reach the server. Check your connection and try again."
+      : (err.message || "The comparison could not be completed."));
+  } finally {
+    if (activeAnalysisController === scanController) activeAnalysisController = null;
+    setLoading(false);
+    analysisInFlight = false;
+  }
+}
+
+function renderBatchDashboard(rows) {
+  if (!multiDomainDashboard || !multiDomainResults) return;
+  multiDomainResults.replaceChildren();
+  for (const row of rows) {
+    const card = document.createElement("article");
+    card.className = "multi-domain-card";
+    const head = document.createElement("div");
+    head.className = "multi-domain-card-head";
+    const name = document.createElement("strong");
+    name.className = "multi-domain-card-domain";
+    name.textContent = row.domain;
+    const grade = document.createElement("span");
+    grade.className = "multi-domain-grade";
+    const data = row.status === "complete" ? row.data : null;
+    grade.textContent = data?.domain_score?.grade || (row.status === "complete" ? "—" : "!");
+    head.append(name, grade);
+    card.appendChild(head);
+
+    const metrics = document.createElement("div");
+    metrics.className = "multi-domain-metrics";
+    if (data) {
+      metrics.textContent = `Score ${data.domain_score?.score ?? "—"}/100 · ${data.summary?.errors || 0} errors · ${data.summary?.warnings || 0} warnings`;
+    } else {
+      metrics.textContent = row.error || "Scan did not complete.";
+    }
+    card.appendChild(metrics);
+
+    const priority = document.createElement("p");
+    priority.className = "multi-domain-priority";
+    if (data) {
+      const first = (data.findings || []).find(item => item.severity === "error")
+        || (data.findings || []).find(item => item.severity === "warning");
+      priority.textContent = first ? `Fix first: ${first.message}` : "No error or warning findings.";
+    } else {
+      priority.textContent = "Open this domain separately to retry the scan.";
+    }
+    card.appendChild(priority);
+
+    const open = document.createElement("button");
+    open.className = "btn btn-secondary";
+    open.type = "button";
+    open.textContent = data ? "Open report" : "Retry this domain";
+    open.addEventListener("click", () => {
+      if (data) {
+        renderResults(data);
+        results.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      else {
+        domainInput.value = row.domain;
+        runAnalysis();
+      }
+    });
+    card.appendChild(open);
+    multiDomainResults.appendChild(card);
+  }
+  multiDomainDashboard.classList.add("visible");
+  document.body.classList.add("results-active");
+  multiDomainDashboard.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+document.getElementById("clear-multi-domain")?.addEventListener("click", () => {
+  multiDomainDashboard?.classList.remove("visible");
+  document.body.classList.remove("results-active");
+  domainInput.value = "";
+  domainInput.focus();
+});
+
 // ── UI state helpers ──────────────────────────────────────────
 function setLoading(on) {
   analyzeBtn.disabled = on;
   analyzeBtn.classList.toggle("loading", on);
   domainInput.classList.remove("input-error");
   document.querySelector(".hero")?.setAttribute("aria-busy", String(on));
+  document.body.classList.toggle("results-scanning", on);
+  if (stopScanButton) {
+    stopScanButton.hidden = !on;
+    stopScanButton.disabled = false;
+    stopScanButton.querySelector("span").textContent = "Stop scan";
+  }
 
   if (!loadingBar || !loadingStatusText) return;
 
@@ -544,6 +765,13 @@ function setLoading(on) {
   }
 }
 
+stopScanButton?.addEventListener("click", () => {
+  if (!activeAnalysisController) return;
+  stopScanButton.disabled = true;
+  stopScanButton.querySelector("span").textContent = "Stopping…";
+  activeAnalysisController.abort();
+});
+
 function showError(msg) {
   errorMsg.textContent = msg;
   errorBanner.classList.add("visible");
@@ -560,7 +788,9 @@ function hideError() {
 }
 
 function hideResults() {
+  multiDomainDashboard?.classList.remove("visible");
   results.classList.remove("visible");
+  document.body.classList.remove("results-active");
   const panels = document.querySelectorAll(".results-tab-panel");
   panels.forEach((p) => {
     p.classList.remove("active");
@@ -570,6 +800,7 @@ function hideResults() {
 
 // ── Render ────────────────────────────────────────────────────
 function renderResults(data, recheckContext = null) {
+  multiDomainDashboard?.classList.remove("visible");
   currentDomain = data.domain;
   currentScanData = data;
   resultDomain.textContent = data.domain;
@@ -636,6 +867,7 @@ function renderResults(data, recheckContext = null) {
 
   // Security Suite (DNSSEC, Subdomain Takeover, BIMI)
   renderSecuritySuite(data.security);
+  renderExtensionChecks(data.extensions || {});
 
   // TLS & HTTPS Web Security
   renderTLS(data.tls);
@@ -659,6 +891,7 @@ function renderResults(data, recheckContext = null) {
   switchSegmentTab(activeSegmentTabId || "tab-overview");
 
   results.classList.add("visible");
+  document.body.classList.add("results-active");
   results.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -667,9 +900,12 @@ function renderDnsAuthorityAudit(posture) {
   if (!root) return;
   const axfr = posture.axfr || {};
   const consistency = posture.nameserver_consistency || {};
+  const asnDiversity = posture.nameserver_asn_diversity || {};
+  const delegation = posture.parent_child_delegation || {};
   const wildcard = posture.wildcard || {};
   const servers = axfr.servers || [];
   const observations = consistency.observations || [];
+  const asnNameservers = asnDiversity.nameservers || [];
   const tone = status => status === "detected" || status === "transfer_allowed" ? "pill-warn" : status === "inconclusive" || status === "partial" ? "pill-warn" : "pill-info";
   root.innerHTML = `
     <h3>Authoritative DNS Checks</h3>
@@ -682,6 +918,18 @@ function renderDnsAuthorityAudit(posture) {
         <div class="auth-card-row"><span class="auth-card-key">SOA serials</span><span class="auth-card-val">${consistency.serials_match === true ? "Match" : consistency.serials_match === false ? "Differ" : "Not compared"}</span></div>
         <div class="auth-card-row"><span class="auth-card-key">NS sets</span><span class="auth-card-val">${consistency.ns_sets_match === true ? "Match" : consistency.ns_sets_match === false ? "Differ" : "Not compared"}</span></div>
         ${observations.map(item => `<div class="auth-card-row"><span class="auth-card-key">${escapeHtml(item.nameserver)} · ${escapeHtml(item.address || "")}</span><span class="auth-card-val">SOA ${escapeHtml(String(item.soa_serial ?? "unavailable"))}${item.errors ? ` · ${escapeHtml(JSON.stringify(item.errors))}` : ""}</span></div>`).join("")}
+      </article>
+      <article class="auth-card"><div class="auth-card-title"><span class="pill ${asnDiversity.status === "complete" ? (asnDiversity.single_asn ? "pill-warn" : "pill-ok") : "pill-warn"}">${escapeHtml(asnDiversity.status || "unavailable")}</span>Nameserver network diversity</div>
+        <p class="auth-helper-copy">${asnDiversity.single_asn === true ? `All checked addresses map to origin AS${escapeHtml(asnDiversity.asns?.[0] || "")}.` : asnDiversity.single_asn === false ? "Multiple origin ASNs were observed." : "Network origin could not be determined for every nameserver address."} One ASN does not establish a shared physical site.</p>
+        ${asnNameservers.flatMap(server => (server.addresses || []).map(address => `<div class="auth-card-row"><span class="auth-card-key">${escapeHtml(server.nameserver)} · ${escapeHtml(address.ip)}</span><span class="auth-card-val">${address.asns?.length ? `${address.asns.map(asn => `AS${escapeHtml(asn)}`).join(", ")} · ${escapeHtml((address.prefixes || []).join(", "))}` : escapeHtml(address.status || "unavailable")}</span></div>`)).join("") || `<p class="auth-empty">No complete ASN observations are available.</p>`}
+        <p class="auth-helper-copy">Source: Team Cymru BGP origin mapping. This check is informational and does not affect the grade.</p>
+      </article>
+      <article class="auth-card"><div class="auth-card-title"><span class="pill ${delegation.status === "complete" ? (delegation.delegation_matches === false || (delegation.glue || []).some(item => ["missing", "inconsistent"].includes(item.status)) || (delegation.lame_nameservers || []).length ? "pill-warn" : "pill-ok") : "pill-warn"}">${escapeHtml(delegation.status || "unavailable")}</span>Parent-child delegation &amp; glue</div>
+        <div class="auth-card-row"><span class="auth-card-key">Parent zone</span><span class="auth-card-val">${escapeHtml(delegation.parent_zone || "Not determined")}</span></div>
+        <div class="auth-card-row"><span class="auth-card-key">Delegation comparison</span><span class="auth-card-val">${delegation.delegation_matches === true ? "Parent and child NS sets match" : delegation.delegation_matches === false ? "Parent and child NS sets differ" : "Not compared"}</span></div>
+        ${(delegation.lame_nameservers || []).map(host => `<div class="auth-card-row"><span class="auth-card-key">Lame authority</span><span class="auth-card-val">${escapeHtml(host)}</span></div>`).join("")}
+        ${(delegation.glue || []).map(item => `<div class="auth-card-row"><span class="auth-card-key">${escapeHtml(item.nameserver)} glue</span><span class="auth-card-val">${escapeHtml(item.status)}${item.addresses?.length ? ` · ${escapeHtml(item.addresses.join(", "))}` : ""}</span></div>`).join("") || `<p class="auth-empty">Parent referral data is incomplete.</p>`}
+        <p class="auth-helper-copy">Glue is required only for in-bailiwick nameservers. Parent lookups that disagree or fail are inconclusive.</p>
       </article>
       <article class="auth-card"><div class="auth-card-title"><span class="pill ${tone(wildcard.status)}">${escapeHtml(wildcard.status || "unavailable")}</span>Wildcard DNS</div>
         <p class="auth-card-val">${escapeHtml((wildcard.addresses || []).join(", ") || wildcard.reason || "No wildcard address detected.")}</p>
@@ -1265,6 +1513,31 @@ function renderFinding(f) {
     <div class="finding-msg">${msgHtml}</div>
     ${f.explanation ? `<details class="finding-guidance"><summary>${escapeHtml(f.explanation.title || "What this means and what to do")}</summary><p>${escapeHtml(f.explanation.why || "")}</p><p><strong>How it could be abused:</strong> ${escapeHtml(f.explanation.attacker || "")}</p><p><strong>Suggested fix:</strong> ${escapeHtml(f.explanation.fix || "")}</p><small>${escapeHtml(f.explanation.technical || "")}${f.explanation.reference ? ` · ${escapeHtml(f.explanation.reference)}` : ""}</small></details>` : ""}
   `;
+  const fixes = (currentScanData?.remediation || []).filter((fix) => {
+    const type = String(fix.record_type || "").toUpperCase();
+    const findingType = String(f.record_type || "").toUpperCase();
+    return type && (type === findingType || (type === "TXT" && /SPF|DMARC|DKIM|BIMI|TLS-RPT/i.test(findingType)));
+  });
+  if (fixes.length) {
+    const drawer = document.createElement("details");
+    drawer.className = "finding-fix-drawer";
+    const summary = document.createElement("summary");
+    summary.textContent = `View recommended record${fixes.length > 1 ? "s" : ""} (${fixes.length})`;
+    drawer.appendChild(summary);
+    fixes.forEach((fix) => {
+      const item = document.createElement("div");
+      item.className = "finding-fix-item";
+      const title = document.createElement("strong");
+      title.textContent = fix.title || `${fix.record_type} record`;
+      item.appendChild(title);
+      const content = document.createElement("p");
+      content.textContent = fix.guidance_only ? (fix.guidance || "Review before changing DNS.") : `${fix.name || currentDomain || "@"} ${fix.record_type} ${fix.value || ""}`;
+      item.appendChild(content);
+      if (!fix.guidance_only && fix.value) item.appendChild(makeCopyBlock(fix.value));
+      drawer.appendChild(item);
+    });
+    div.appendChild(drawer);
+  }
   return div;
 }
 
@@ -1380,6 +1653,7 @@ function renderRecordCard(rtype, entry) {
     <div class="record-card-header">
       <div style="display:flex;align-items:center;gap:8px;">
         <span class="record-type-label">${escapeHtml(rtype)}</span>
+        <button class="record-dig-btn" type="button" aria-label="Copy dig command for ${escapeHtml(rtype)}" title="Copy dig command"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="m5 4-3 4 3 4m6-8 3 4-3 4M9.5 3l-3 10"/></svg></button>
         ${countLabel ? `<span class="records-meta-tag">${countLabel}</span>` : ""}
       </div>
       <div style="display:flex;align-items:center;gap:10px;">
@@ -1391,6 +1665,10 @@ function renderRecordCard(rtype, entry) {
   `;
 
   const body = card.querySelector(`#rcard-${rtype}`);
+  card.querySelector(".record-dig-btn")?.addEventListener("click", (event) => {
+    const command = `dig +noall +answer ${currentDomain || "example.com"} ${rtype}`;
+    copyToClipboard(command, event.currentTarget);
+  });
 
   if (!isOk) {
     body.innerHTML = `<div class="record-empty">No data — ${escapeHtml(entry.status)}</div>`;
@@ -1419,7 +1697,9 @@ function renderRecordCard(rtype, entry) {
     for (const r of entry.records) {
       const row = document.createElement("div");
       row.className = "record-row";
-      const resolvePill = `<span class="resolve-pill ${r.resolves ? "resolve-yes" : "resolve-no"}">${r.resolves ? "✓ resolves" : "✗ unresolvable"}</span>`;
+      const state = r.resolution_status === "inconclusive" ? "unknown" : r.resolves ? "yes" : "no";
+      const label = state === "unknown" ? "? could not verify" : state === "yes" ? `✓ resolves${r.address_families?.length ? ` · ${r.address_families.join("/")}` : ""}` : "✗ unresolvable";
+      const resolvePill = `<span class="resolve-pill resolve-${state}">${label}</span>`;
       const provider = detectMxProvider(r.host);
       row.innerHTML = `
         <span class="record-label">Priority ${escapeHtml(String(r.priority))}</span>
@@ -1434,7 +1714,9 @@ function renderRecordCard(rtype, entry) {
     for (const r of entry.records) {
       const row = document.createElement("div");
       row.className = "record-row";
-      const resolvePill = `<span class="resolve-pill ${r.resolves ? "resolve-yes" : "resolve-no"}">${r.resolves ? "✓ resolves" : "✗ unresolvable"}</span>`;
+      const state = r.resolution_status === "inconclusive" ? "unknown" : r.resolves ? "yes" : "no";
+      const label = state === "unknown" ? "? could not verify" : state === "yes" ? `✓ resolves${r.address_families?.length ? ` · ${r.address_families.join("/")}` : ""}` : "✗ unresolvable";
+      const resolvePill = `<span class="resolve-pill resolve-${state}">${label}</span>`;
       const provider = detectNsProvider(r.host);
       row.innerHTML = `
         <span class="record-value">${escapeHtml(r.host)}</span>
@@ -1709,7 +1991,7 @@ function renderDmarcCard(emailAuth, domain) {
 
   const rows = [
     ["Policy", `${escapeHtml(dmarc.policy || "none")} ${policyPill}`],
-    ["Enforcement", `${dmarc.pct}% of emails`],
+    ["Enforcement", `${escapeHtml(String(Number(dmarc.pct) || 0))}% of emails`],
     ...(dmarc.rua ? [["Reports To", escapeHtml(dmarc.rua)]] : []),
     ["DKIM Alignment", dmarc.adkim === "s" ? "strict" : "relaxed"],
     ["SPF Alignment", dmarc.aspf === "s" ? "strict" : "relaxed"],
@@ -1784,13 +2066,13 @@ if (customDkimInput && customDkimButton) {
     const originalText = customDkimButton.textContent;
     customDkimButton.textContent = "Checking…";
     try {
-      const response = await fetch("/api/email/dkim-selectors", {
+      const response = await apiFetch("/api/email/dkim-selectors", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ domain: currentDomain, selectors }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "Custom DKIM selector check failed.");
+      if (!response.ok) throw new Error(apiErrorMessage(response, data, "Custom DKIM selector check failed."));
       const previous = currentScanData.email_auth.dkim || {};
       const found = new Map([...(previous.selectors_found || []), ...(data.selectors_found || [])].map(item => [item.selector, item]));
       const combinedChecked = [...new Set([...(previous.selectors_checked || []), ...(data.selectors_checked || [])])];
@@ -1884,7 +2166,7 @@ function renderSecuritySuite(security) {
             ? `<span class="pill pill-warn">Could Not Verify</span>`
             : `<span class="pill pill-warn">Unsigned</span>`));
 
-    let desc = "Protects against DNS cache poisoning (Kaminsky attacks) and spoofing.";
+    let desc = "DNSSEC signatures let validating resolvers detect altered DNS data; DNSSEC does not prevent attacks by itself.";
     if (isDelegationVerified) {
       const algo = sec.keys && sec.keys[0] ? sec.keys[0].algorithm : "Standard";
       desc = `Parent DS record matches published DNSKEY digest (${algo}). Parent-child delegation link verified; full RRSIG root anchor chain unvalidated.`;
@@ -1899,7 +2181,7 @@ function renderSecuritySuite(security) {
     card.innerHTML = `
       <div>
         <div class="sec-card-header">
-          <span class="sec-card-title">🔐 DNSSEC Validation <span class="info-badge" title="Cryptographically signs DNS records to prevent spoofing and cache poisoning.">?</span></span>
+          <span class="sec-card-title">${iconSvg("shield")} DNSSEC Validation <span class="info-badge" title="Cryptographically signs DNS records to prevent spoofing and cache poisoning.">?</span></span>
           ${pill}
         </div>
         <div class="sec-card-status">${isDelegationVerified ? "Delegation Link Verified" : (isInconclusive ? "Could Not Verify" : "Not Authenticated")}</div>
@@ -1910,6 +2192,51 @@ function renderSecuritySuite(security) {
       </div>
     `;
     securityCards.appendChild(card);
+    const zoneNodes = (sec.chain_graph?.nodes || []).filter(node => node.type === "zone");
+    if (zoneNodes.length) {
+      const namespace = "http://www.w3.org/2000/svg";
+      const viewport = document.createElement("div");
+      viewport.className = "dnssec-chain-viewport";
+      const svg = document.createElementNS(namespace, "svg");
+      const width = Math.max(220, zoneNodes.length * 180);
+      svg.setAttribute("viewBox", `0 0 ${width} 112`);
+      svg.setAttribute("role", "img");
+      svg.setAttribute("aria-label", "DNSSEC root to zone chain status");
+      (sec.chain_graph.edges || []).filter(edge => edge.type === "delegation").forEach((edge, index) => {
+        const line = document.createElementNS(namespace, "line");
+        line.setAttribute("x1", String(85 + index * 180));
+        line.setAttribute("x2", String(180 + index * 180));
+        line.setAttribute("y1", "48");
+        line.setAttribute("y2", "48");
+        line.setAttribute("class", "dnssec-chain-edge");
+        svg.appendChild(line);
+      });
+      zoneNodes.forEach((node, index) => {
+        const x = 8 + index * 180;
+        const rect = document.createElementNS(namespace, "rect");
+        rect.setAttribute("x", String(x));
+        rect.setAttribute("y", "20");
+        rect.setAttribute("width", "154");
+        rect.setAttribute("height", "56");
+        rect.setAttribute("rx", "8");
+        rect.setAttribute("class", `dnssec-chain-node ${node.status === "secure" ? "is-secure" : node.status === "bogus" ? "is-bogus" : "is-unknown"}`);
+        const label = document.createElementNS(namespace, "text");
+        label.setAttribute("x", String(x + 77));
+        label.setAttribute("y", "42");
+        label.setAttribute("text-anchor", "middle");
+        label.setAttribute("class", "dnssec-chain-label");
+        label.textContent = node.label;
+        const state = document.createElementNS(namespace, "text");
+        state.setAttribute("x", String(x + 77));
+        state.setAttribute("y", "62");
+        state.setAttribute("text-anchor", "middle");
+        state.setAttribute("class", "dnssec-chain-state");
+        state.textContent = node.status;
+        svg.append(rect, label, state);
+      });
+      viewport.appendChild(svg);
+      card.appendChild(viewport);
+    }
   }
 
   // 2. Subdomain Takeover Card
@@ -1923,7 +2250,7 @@ function renderSecuritySuite(security) {
     card.innerHTML = `
       <div>
         <div class="sec-card-header">
-          <span class="sec-card-title">🛡️ Subdomain Takeover <span class="info-badge" title="Detects dangling CNAME records pointing to abandoned cloud services before attackers hijack them.">?</span></span>
+          <span class="sec-card-title">${iconSvg("shield")} Subdomain Takeover <span class="info-badge" title="Detects dangling CNAME records pointing to abandoned cloud services before attackers hijack them.">?</span></span>
           ${pill}
         </div>
         <div class="sec-card-status">${assessment.statusText}</div>
@@ -1976,6 +2303,65 @@ function renderSecuritySuite(security) {
   securitySuiteSection.style.display = "block";
 }
 
+function renderExtensionChecks(extensions) {
+  const section = document.getElementById("extension-checks-section");
+  const container = document.getElementById("extension-checks-cards");
+  if (!section || !container) return;
+  container.replaceChildren();
+
+  const checks = [];
+  const lifecycle = extensions.domain_lifecycle;
+  if (lifecycle) checks.push(["Domain registration expiry (RDAP)", lifecycle]);
+  const extended = extensions.extended_security || {};
+  if (extended.rpki) checks.push(["RPKI route origin", extended.rpki]);
+  if (extended.dane_tlsa) checks.push(["DANE / TLSA", extended.dane_tlsa]);
+  if (extended.smtp_starttls) checks.push(["SMTP STARTTLS", extended.smtp_starttls]);
+  if (extended.dnsbl) checks.push(["MX reputation (DNSBL)", extended.dnsbl]);
+
+  for (const [title, check] of checks) {
+    const card = document.createElement("article");
+    card.className = "security-card";
+    const heading = document.createElement("h3");
+    heading.className = "sec-card-title";
+    heading.textContent = title;
+    const state = document.createElement("div");
+    state.className = "sec-card-status";
+    state.textContent = String(check.status || "unavailable").replaceAll("_", " ");
+    card.append(heading, state);
+
+    const details = document.createElement("div");
+    details.className = "sec-card-desc";
+    const lines = [];
+    if (title.startsWith("Domain registration") && check.expires) {
+      lines.push(`Expires ${check.expires} (${check.days_remaining} days)`);
+    }
+    for (const item of check.observations || []) {
+      if (item.address) lines.push(`${item.address} · ${item.prefix || "no routed prefix"} · AS${item.asn ?? "?"} · ${item.status}`);
+      else if (item.name) lines.push(`${item.name} · ${item.status} · ${item.records?.length || 0} TLSA record(s)`);
+      for (const endpoint of item.addresses || []) {
+        lines.push(`${endpoint.address} · certificate ${endpoint.certificate_sha256 || endpoint.status}`);
+        for (const match of endpoint.matches || []) {
+          const matchText = match.matched === true ? "matched" : match.matched === false ? "mismatch" : "not evaluated";
+          lines.push(`  DANE usage ${match.usage}, selector ${match.selector}, matching ${match.matching_type}: ${matchText}`);
+        }
+      }
+      if (item.lists) {
+        lines.push(`${item.host || "MX"}${item.address ? ` · ${item.address}` : ""}`);
+        for (const list of item.lists) lines.push(`  ${list.provider} · ${list.status}${list.return_codes?.length ? ` · ${list.return_codes.map(code => `127.0.0.${code}`).join(", ")}` : ""}`);
+      }
+    }
+    for (const host of check.hosts || []) {
+      lines.push(`${host.host} · ${host.status}${host.tls_version ? ` · ${host.tls_version} ${host.cipher || ""}` : ""}`);
+    }
+    if (check.reason) lines.push(check.reason);
+    if (check.dnssec_validation === "not_performed") lines.push("Certificate associations may be compared, but DNSSEC authenticity and complete DANE validation are not established.");
+    details.textContent = lines.join("\n") || "No additional evidence was returned.";
+    card.appendChild(details);
+    container.appendChild(card);
+  }
+  section.style.display = checks.length ? "block" : "none";
+}
+
 // ── TLS & HTTPS Diagnostics Rendering ─────────────────────────
 function renderTLS(tls) {
   const tlsSec = document.getElementById("tls-section");
@@ -2010,7 +2396,7 @@ function renderTLS(tls) {
   if (tls.status !== "certificate_error" && cert?.is_expired) {
     statusClass = "badge-red";
     statusText = "Expired";
-  } else if (cert && !cert.is_expired && cert.days_remaining <= 14) {
+  } else if (cert && !cert.is_expired && cert.days_remaining <= 30) {
     statusClass = "badge-amber";
     statusText = "Expiring Soon";
   }
@@ -2026,7 +2412,7 @@ function renderTLS(tls) {
     cardCert.className = "security-card";
     const pill = cert.is_expired
       ? `<span class="pill pill-fail">Expired</span>`
-      : (cert.days_remaining <= 14 ? `<span class="pill pill-warn">${cert.days_remaining}d Left</span>` : `<span class="pill pill-ok">Valid (${cert.days_remaining}d)</span>`);
+      : (cert.days_remaining <= 30 ? `<span class="pill pill-warn">${cert.days_remaining}d Left</span>` : `<span class="pill pill-ok">Valid (${cert.days_remaining}d)</span>`);
 
     cardCert.innerHTML = `
       <div>
@@ -2068,7 +2454,7 @@ function renderTLS(tls) {
   cardProto.innerHTML = `
     <div>
       <div class="sec-card-header">
-        <span class="sec-card-title">🔐 Negotiated Protocol</span>
+        <span class="sec-card-title">${iconSvg("shield")} Negotiated Protocol</span>
         ${protoPill}
       </div>
       <div class="sec-card-status">${escapeHtml(tls.tls_version || "Not negotiated")}</div>
@@ -2076,6 +2462,33 @@ function renderTLS(tls) {
     </div>
   `;
   tlsCards.appendChild(cardProto);
+
+  if (Array.isArray(tls.protocol_sweep)) {
+    const sweepCard = document.createElement("article");
+    sweepCard.className = "security-card";
+    const sweepTitle = document.createElement("h3");
+    sweepTitle.className = "sec-card-title";
+    sweepTitle.textContent = "TLS Protocol Support Sweep";
+    sweepCard.appendChild(sweepTitle);
+    for (const item of tls.protocol_sweep) {
+      const row = document.createElement("div");
+      row.className = "auth-card-row";
+      const version = document.createElement("span");
+      version.className = "auth-card-key";
+      version.textContent = item.protocol;
+      const result = document.createElement("span");
+      result.className = "auth-card-val";
+      const state = item.status === "supported" ? "Supported" : item.status === "probe_unavailable" ? "Probe unavailable" : "Not observed";
+      result.textContent = `${state}${item.cipher ? ` · ${item.cipher}` : ""}${item.weak_cipher_observed ? " · weak cipher" : ""}`;
+      row.append(version, result);
+      sweepCard.appendChild(row);
+    }
+    const note = document.createElement("p");
+    note.className = "sec-card-desc";
+    note.textContent = "One bounded handshake is attempted for each protocol. Not observed can also mean filtered or unavailable from this scanner; this is not an exhaustive cipher or vulnerability sweep.";
+    sweepCard.appendChild(note);
+    tlsCards.appendChild(sweepCard);
+  }
 
   // 3. HTTPS Redirection & Security Headers Card
   const cardHdrs = document.createElement("div");
@@ -2090,7 +2503,7 @@ function renderTLS(tls) {
   cardHdrs.innerHTML = `
     <div>
       <div class="sec-card-header">
-        <span class="sec-card-title">🛡️ Web Security Headers</span>
+        <span class="sec-card-title">${iconSvg("shield")} Web Security Headers</span>
         <span class="pill ${hsts ? "pill-ok" : "pill-warn"}">${hsts ? "HSTS Enforced" : "HSTS Missing"}</span>
       </div>
       <div class="sec-card-status">${redir ? "HTTP → HTTPS 301 Enforced" : "No Automatic HTTPS Redirect"}</div>
@@ -2386,13 +2799,13 @@ async function recheckAfterFix(fix, button) {
   button.textContent = "Re-checking…";
   setLoading(true);
   try {
-    const response = await fetch("/api/analyze", {
+    const response = await apiFetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ domain: currentDomain, force_refresh: true }),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "Fresh scan failed.");
+    if (!response.ok) throw new Error(apiErrorMessage(response, data, "Fresh scan failed."));
     const oldFindings = previous.findings || [];
     const newFindings = data.findings || [];
     const remaining = [...newFindings];
@@ -2435,6 +2848,14 @@ function escapeHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
+function iconSvg(kind) {
+  const paths = {
+    shield: '<path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9Z"/>',
+  };
+  return `<svg class="heading-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">${paths[kind] || paths.shield}</svg>`;
+}
+
 // ── Segmented Tab Controller ──────────────────────────────────
 let activeSegmentTabId = "tab-overview";
 
@@ -2444,10 +2865,15 @@ function switchSegmentTab(targetTabId, shouldFocus = false) {
   const resultsEl = document.getElementById("results");
   if (!tabs.length || !panels.length) return;
 
+  const aliases = {
+    "tab-findings": "tab-overview", "tab-remediation": "tab-overview",
+    "tab-threats": "tab-records", "tab-network": "tab-subdomains",
+  };
+  targetTabId = aliases[targetTabId] || targetTabId;
   const targetTab = document.getElementById(targetTabId);
   if (!targetTab) return;
 
-  const targetPanelId = targetTab.getAttribute("data-target"); // e.g. "panel-overview" or "all"
+  const targetSegment = targetTab.getAttribute("data-target");
   activeSegmentTabId = targetTabId;
 
   tabs.forEach((t) => {
@@ -2462,27 +2888,14 @@ function switchSegmentTab(targetTabId, shouldFocus = false) {
     targetTab.focus();
   }
 
-  if (targetPanelId === "all") {
-    resultsEl?.classList.add("all-mode");
-    panels.forEach((p) => {
-      p.classList.add("active");
-      p.style.display = "block";
-      p.removeAttribute("hidden");
-    });
-  } else {
-    resultsEl?.classList.remove("all-mode");
-    panels.forEach((p) => {
-      if (p.id === targetPanelId) {
-        p.classList.add("active");
-        p.style.display = "block";
-        p.removeAttribute("hidden");
-      } else {
-        p.classList.remove("active");
-        p.style.display = "none";
-        p.setAttribute("hidden", "");
-      }
-    });
-  }
+  resultsEl?.classList.remove("all-mode");
+  panels.forEach((p) => {
+    const active = p.dataset.segment === targetSegment;
+    p.classList.toggle("active", active);
+    p.style.display = active ? "block" : "none";
+    if (active) p.removeAttribute("hidden");
+    else p.setAttribute("hidden", "");
+  });
 
   // Smoothly align with the segment nav if page has scrolled far below
   const nav = document.getElementById("segment-nav");
@@ -2779,10 +3192,53 @@ window.addEventListener("online", () => {
 const listScanInput = document.getElementById("list-scan-input");
 const btnRunListScan = document.getElementById("btn-run-list-scan");
 const btnRunPathScan = document.getElementById("btn-run-path-scan");
+const widePathConfirm = document.getElementById("wide-path-confirm");
+const widePathTokenInput = document.getElementById("wide-path-auth-token");
 const portScanConfirm = document.getElementById("port-scan-confirm");
 const btnRunPortScan = document.getElementById("btn-run-port-scan");
 const networkResults = document.getElementById("network-results");
 const networkPathResults = document.getElementById("network-path-results");
+const stopScopeScanButton = document.getElementById("stop-scope-scan");
+const scopeScanStatus = document.getElementById("scope-scan-status");
+let activeScopeScanController = null;
+
+function beginScopeScan(label) {
+  if (activeScopeScanController) return null;
+  const controller = new AbortController();
+  activeScopeScanController = controller;
+  document.body.classList.add("scope-scanning");
+  if (scopeScanStatus) scopeScanStatus.textContent = `Running ${label}…`;
+  if (stopScopeScanButton) {
+    stopScopeScanButton.hidden = false;
+    stopScopeScanButton.disabled = false;
+    stopScopeScanButton.querySelector("span").textContent = "Stop scan";
+  }
+  [btnRunListScan, btnRunPathScan, btnRunPortScan].forEach(button => { if (button) button.disabled = true; });
+  return controller;
+}
+
+function finishScopeScan(controller, status) {
+  if (activeScopeScanController !== controller) return;
+  activeScopeScanController = null;
+  document.body.classList.remove("scope-scanning");
+  if (scopeScanStatus) scopeScanStatus.textContent = status;
+  if (stopScopeScanButton) {
+    stopScopeScanButton.hidden = true;
+    stopScopeScanButton.disabled = false;
+    stopScopeScanButton.querySelector("span").textContent = "Stop scan";
+  }
+  if (btnRunListScan) btnRunListScan.disabled = false;
+  if (btnRunPathScan) btnRunPathScan.disabled = false;
+  if (btnRunPortScan) btnRunPortScan.disabled = !portScanConfirm?.checked;
+}
+
+stopScopeScanButton?.addEventListener("click", () => {
+  if (!activeScopeScanController) return;
+  stopScopeScanButton.disabled = true;
+  stopScopeScanButton.querySelector("span").textContent = "Stopping…";
+  if (scopeScanStatus) scopeScanStatus.textContent = "Stopping the active scope check…";
+  activeScopeScanController.abort();
+});
 
 if (btnRunPathScan && listScanInput && networkPathResults) {
   btnRunPathScan.addEventListener("click", async () => {
@@ -2796,6 +3252,13 @@ if (btnRunPathScan && listScanInput && networkPathResults) {
       showToast("Common path checks support up to 5 targets per run.");
       return;
     }
+    const wide = Boolean(widePathConfirm?.checked);
+    if (wide && targets.length > 2) {
+      showToast("Wide directory checks support up to 2 targets per run.");
+      return;
+    }
+    const scanController = beginScopeScan("website path check");
+    if (!scanController) return;
 
     btnRunPathScan.disabled = true;
     btnRunPathScan.setAttribute("aria-busy", "true");
@@ -2804,17 +3267,24 @@ if (btnRunPathScan && listScanInput && networkPathResults) {
     networkPathResults.innerHTML = `
       <div class="audit-card path-scan-loading" role="status" aria-live="polite">
         <span class="mini-spinner" aria-hidden="true"></span>
-        <span>Checking fixed HTTPS paths and same-host redirects. No directory crawling.</span>
+        <span>${wide ? "Checking a bounded 64-path directory list and same-host redirects." : "Checking common HTTPS paths and same-host redirects."} No recursive crawling.</span>
       </div>`;
 
+    let finalStatus = "Website path check complete";
     try {
-      const resp = await fetch("/api/network/path-scan", {
+      const resp = await apiFetch("/api/network/path-scan", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ targets }),
+        signal: scanController.signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...(wide && document.getElementById("wide-path-auth-token")?.value?.trim()
+            ? { "X-Wide-Path-Token": document.getElementById("wide-path-auth-token").value.trim() }
+            : {}),
+        },
+        body: JSON.stringify({ targets, wide, confirmed: wide }),
       });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || "Common path check failed.");
+      if (!resp.ok) throw new Error(apiErrorMessage(resp, data, "Common path check failed."));
 
       if (currentScanData) {
         currentScanData.path_scan = data;
@@ -2871,9 +3341,16 @@ if (btnRunPathScan && listScanInput && networkPathResults) {
         </section>`;
       }).join("");
     } catch (err) {
-      networkPathResults.innerHTML = `<div class="audit-card path-scan-error" role="alert">${escapeHtml(err.message || "Common path check failed.")}</div>`;
-      showToast(err.message || "Common path check failed.", "danger");
+      if (err.name === "AbortError") {
+        finalStatus = "Website path check stopped";
+        networkPathResults.innerHTML = `<div class="audit-card" role="status">Scan stopped. The server has been asked to cancel the request.</div>`;
+      } else {
+        finalStatus = "Website path check failed";
+        networkPathResults.innerHTML = `<div class="audit-card path-scan-error" role="alert">${escapeHtml(err.message || "Common path check failed.")}</div>`;
+        showToast(err.message || "Common path check failed.", "danger");
+      }
     } finally {
+      finishScopeScan(scanController, finalStatus);
       btnRunPathScan.disabled = false;
       btnRunPathScan.removeAttribute("aria-busy");
       btnRunPathScan.innerHTML = `
@@ -2888,8 +3365,14 @@ if (btnRunPathScan && listScanInput && networkPathResults) {
 
 if (portScanConfirm && btnRunPortScan) {
   portScanConfirm.addEventListener("change", () => {
-    btnRunPortScan.disabled = !portScanConfirm.checked;
+    btnRunPortScan.disabled = Boolean(activeScopeScanController) || !portScanConfirm.checked;
   });
+}
+
+if (widePathConfirm && widePathTokenInput) {
+  const updateWideTokenVisibility = () => { widePathTokenInput.hidden = !widePathConfirm.checked; };
+  widePathConfirm.addEventListener("change", updateWideTokenVisibility);
+  updateWideTokenVisibility();
 }
 
 if (btnRunListScan && listScanInput && networkResults) {
@@ -2905,17 +3388,23 @@ if (btnRunListScan && listScanInput && networkResults) {
       listScanInput.focus();
       return;
     }
+    const scanController = beginScopeScan("public target resolution");
+    if (!scanController) return;
     btnRunListScan.disabled = true;
     btnRunListScan.textContent = "Resolving Scope...";
+    networkResults.style.display = "block";
+    networkResults.innerHTML = `<div class="audit-card path-scan-loading" role="status" aria-live="polite"><span class="mini-spinner" aria-hidden="true"></span> Resolving targets and filtering non-public addresses…</div>`;
 
+    let finalStatus = "Target resolution complete";
     try {
-      const resp = await fetch("/api/network/list-scan", {
+      const resp = await apiFetch("/api/network/list-scan", {
         method: "POST",
+        signal: scanController.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ targets }),
       });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || "List scan failed.");
+      if (!resp.ok) throw new Error(apiErrorMessage(resp, data, "List scan failed."));
 
       networkResults.style.display = "block";
       networkResults.innerHTML = `
@@ -3019,8 +3508,16 @@ if (btnRunListScan && listScanInput && networkResults) {
         });
       });
     } catch (err) {
-      showToast(err.message, "danger");
+      if (err.name === "AbortError") {
+        finalStatus = "Target resolution stopped";
+        networkResults.style.display = "block";
+        networkResults.innerHTML = `<div class="audit-card" role="status">Scan stopped. The server has been asked to cancel the request.</div>`;
+      } else {
+        finalStatus = "Target resolution failed";
+        showToast(err.message, "danger");
+      }
     } finally {
+      finishScopeScan(scanController, finalStatus);
       btnRunListScan.disabled = false;
       btnRunListScan.innerHTML = `
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
@@ -3040,25 +3537,35 @@ if (btnRunPortScan && listScanInput && networkResults) {
       showToast("Please provide a target to verify standard ports.");
       return;
     }
+    const scanController = beginScopeScan("authorized port check");
+    if (!scanController) return;
     btnRunPortScan.disabled = true;
-    btnRunPortScan.textContent = "Probing Standard Ports...";
+    btnRunPortScan.textContent = "Running Service Scan…";
+    networkResults.style.display = "block";
+    networkResults.innerHTML = `<div class="audit-card path-scan-loading" role="status" aria-live="polite"><span class="mini-spinner" aria-hidden="true"></span> Checking the first target with the selected TCP method…</div>`;
 
     const authToken = document.getElementById("port-scan-auth-token")?.value?.trim() || null;
 
+    let finalStatus = "Port check complete";
     try {
-      const resp = await fetch("/api/network/port-scan", {
+      const resp = await apiFetch("/api/network/port-scan", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        signal: scanController.signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...(authToken ? { "X-Port-Scan-Token": authToken } : {}),
+        },
         body: JSON.stringify({
           target: firstTarget,
           confirmed: true,
-          auth_token: authToken,
+          scanner: document.getElementById("port-scan-mode")?.value || "nmap",
         }),
       });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || "Port scan failed.");
+      if (!resp.ok) throw new Error(apiErrorMessage(resp, data, "Port scan failed."));
 
       if (data.status !== "completed") {
+        finalStatus = `Port check ${data.status || "unavailable"}`;
         networkResults.style.display = "block";
         let pillClass = "pill-warn", titleText = "Active Scan Refused";
         if (data.status === "disabled") {
@@ -3073,6 +3580,9 @@ if (btnRunPortScan && listScanInput && networkResults) {
         } else if (data.status === "confirmation_required") {
           pillClass = "pill-warn";
           titleText = "Confirmation Required";
+        } else if (data.status === "nmap_unavailable") {
+          pillClass = "pill-info";
+          titleText = "Nmap Unavailable";
         }
 
         networkResults.innerHTML = `
@@ -3121,7 +3631,7 @@ if (btnRunPortScan && listScanInput && networkResults) {
             <span class="audit-stat-sep">/</span>
             <div class="audit-stat-chip">
               <span>Ports Probed:</span>
-              <strong>${(data.ports || []).length} Ports</strong>
+              <strong>${data.probed_ports_count ?? (data.ports || []).length} Ports Probed</strong>
             </div>
             <span class="audit-stat-sep">/</span>
             <div class="audit-stat-chip">
@@ -3182,8 +3692,16 @@ if (btnRunPortScan && listScanInput && networkResults) {
         </div>
       `;
     } catch (err) {
-      showToast(err.message, "danger");
+      if (err.name === "AbortError") {
+        finalStatus = "Port check stopped";
+        networkResults.style.display = "block";
+        networkResults.innerHTML = `<div class="audit-card" role="status">Scan stopped. The server has been asked to cancel the request.</div>`;
+      } else {
+        finalStatus = "Port check failed";
+        showToast(err.message, "danger");
+      }
     } finally {
+      finishScopeScan(scanController, finalStatus);
       btnRunPortScan.disabled = !portScanConfirm?.checked;
       btnRunPortScan.innerHTML = `
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">

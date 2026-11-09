@@ -8,17 +8,17 @@ from typing import Any
 import dns.exception
 
 DEFAULT_DNS_QUERY_BUDGET = 500
-DEFAULT_HTTP_REQUEST_BUDGET = 25
+DEFAULT_HTTP_REQUEST_BUDGET = 37
 
 # Each allocation is protected from other modules. Sums equal the defaults.
 DNS_MODULE_SHARES = {
     "records": 60, "spf": 70, "dkim": 45, "dmarc": 15, "bimi": 5,
-    "dnssec": 70, "subdomains": 120, "takeover": 20, "tls": 25,
-    "mail_transport": 15, "dns_posture": 25, "network_scan": 10, "shared": 20,
+    "dnssec": 70, "subdomains": 100, "takeover": 18, "tls": 25,
+    "mail_transport": 15, "dnsbl": 24, "dns_posture": 25, "network_scan": 10, "shared": 18,
 }
 HTTP_MODULE_SHARES = {
-    "ct": 2, "takeover": 15, "tls": 4, "mail_transport": 1,
-    "network_scan": 2, "shared": 1,
+    "ct": 1, "ct_secondary": 1, "takeover": 12, "tls": 4, "mail_transport": 1,
+    "network_scan": 2, "shared": 1, "rdap": 2, "rpki": 5, "tlsa_probe": 8,
 }
 
 

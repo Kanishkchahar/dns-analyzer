@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
-from typing import Any
 
 
 _CATALOG: dict[str, dict[str, str]] = {
@@ -34,6 +32,10 @@ _CATALOG: dict[str, dict[str, str]] = {
     "AXFR": {"code": "DNS-AXFR-001", "title": "Zone transfer access", "why": "An unrestricted AXFR can disclose the zone's DNS inventory.", "attacker": "An attacker could enumerate hosts and infrastructure from the transferred zone.", "fix": "Restrict transfers to approved secondary-server IP addresses or require TSIG.", "technical": "The scanner records only the nameserver and RR count, never record contents.", "reference": "RFC 5936"},
     "WILDCARD DNS": {"code": "DNS-WILDCARD-001", "title": "Wildcard DNS response", "why": "Catch-all DNS can make nonexistent hostnames appear real in inventories.", "attacker": "It can obscure real assets and help abuse of arbitrary subdomains.", "fix": "Keep wildcard records only when required and account for them when reviewing inventory.", "technical": "A high-entropy label is checked; matching CT IPs are marked wildcard-only when no explicit CNAME exists.", "reference": "RFC 1034"},
     "NS CONSISTENCY": {"code": "DNS-NS-002", "title": "Authoritative server consistency", "why": "Different authoritative answers can cause intermittent routing behavior.", "attacker": "Drift can hide malicious or stale records on a subset of servers.", "fix": "Synchronize zone data and verify every delegated nameserver answers authoritatively.", "technical": "SOA serial and NS RRset are queried directly from each public nameserver address.", "reference": "RFC 1034, RFC 1035"},
+    "NS DIVERSITY": {"code": "DNS-NS-ASN-001", "title": "Nameserver network diversity", "why": "Nameservers announced by one network may share a routing-level failure domain.", "attacker": "A provider or routing outage could affect every observed authoritative address.", "fix": "Consider using authoritative service with independently routed providers, while preserving reliable zone synchronization.", "technical": "A warning is emitted only when complete Team Cymru origin lookups for at least two nameservers return the same ASN; this does not establish physical-site diversity.", "reference": "Team Cymru IP-to-ASN Mapping Service"},
+    "NS DELEGATION": {"code": "DNS-NS-DELEGATION-001", "title": "Parent-child delegation and glue", "why": "Parent delegations and glue records guide resolvers to the authoritative child zone.", "attacker": "A stale or inconsistent delegation can cause resolution failures or direct clients to unintended authority.", "fix": "Synchronize registrar delegation, authoritative NS records, and required in-bailiwick glue with the DNS provider.", "technical": "The check compares referrals from two parent authorities with direct authoritative child answers; missing glue is reported only for in-bailiwick nameserver targets. Incomplete observations are inconclusive.", "reference": "RFC 1034, RFC 1035"},
+    "MAIL-DNSBL": {"code": "MAIL-DNSBL-001", "title": "Mail server DNS blacklist listing", "why": "A listed mail server may have reduced deliverability or indicate abuse that needs review.", "attacker": "Abuse or compromised mail accounts can damage the domain's sender reputation.", "fix": "Review the listing provider's evidence and the MX host's sending role; remedy the underlying issue or use an authorized outbound relay where appropriate.", "technical": "Only source-specific positive A-record return codes are reported as listed; Spamhaus PBL codes are warnings, while query errors and provider blocking responses remain inconclusive.", "reference": "RFC 5782"},
+    "DANE/TLSA": {"code": "MAIL-DANE-001", "title": "DANE TLSA certificate match", "why": "TLSA records can bind a service to a certificate or public key when DNSSEC authenticates the records.", "attacker": "A mismatch can indicate stale TLSA data or an unexpected certificate change.", "fix": "Verify the service certificate and TLSA association, then update DNS carefully and confirm DNSSEC validation with an independent validator.", "technical": "Supported DANE-EE certificate and SPKI associations are compared, but DNSSEC and full chain validation are not performed; other DANE usages remain inconclusive.", "reference": "RFC 7671, RFC 6698"},
     "INVENTORY": {"code": "RECON-CT-001", "title": "Certificate Transparency inventory", "why": "Public certificates can reveal hostnames outside the main website.", "attacker": "Forgotten development or staging hosts may expose weaker services.", "fix": "Review each hostname, remove stale records, and protect environments that should not be public.", "technical": "CT data is historical and does not prove a hostname is currently active.", "reference": "RFC 6962"},
     "SUBDOMAINS": {"code": "RECON-SUB-001", "title": "Subdomain inventory", "why": "Exposed or stale subdomains can expand the public attack surface.", "attacker": "A forgotten hostname may point to an abandoned service.", "fix": "Review, secure, or remove each stale hostname.", "technical": "Inventory is assembled from CT data and current DNS observations.", "reference": "RFC 6962"},
     "BIMI": {"code": "MAIL-007", "title": "BIMI brand indicator", "why": "BIMI can display a domain's brand mark in supported mail clients.", "attacker": "Incorrect policy or logo records can undermine brand presentation.", "fix": "Publish a valid BIMI record and meet the mail provider's DMARC and logo requirements.", "technical": "Client support and VMC requirements vary by provider.", "reference": "RFC 8617"},
@@ -55,9 +57,11 @@ _CONDITION_CODES: tuple[tuple[str, str, str], ...] = (
     ("NS", "no nameservers found", "DNS-NS-001"),
     ("NS", "only one nameserver", "DNS-NS-003"),
     ("NS", "does not resolve", "DNS-NS-004"),
+    ("NS", "could not verify address records for nameserver", "DNS-NS-006"),
     ("NS", "operates under authoritative zone", "DNS-NS-005"),
     ("MX", "no mx records found", "MAIL-MX-001"),
     ("MX", "does not resolve", "MAIL-MX-002"),
+    ("MX", "could not verify address records for mail server", "MAIL-MX-003"),
     ("CNAME", "coexists with other record types", "DNS-CNAME-001"),
     ("SOA", "no soa record found", "DNS-SOA-001"),
     ("SOA", "refresh interval", "DNS-SOA-002"),
@@ -126,6 +130,15 @@ _CONDITION_CODES: tuple[tuple[str, str, str], ...] = (
     ("NS CONSISTENCY", "different soa serial numbers", "DNS-NSCONS-002"),
     ("NS CONSISTENCY", "disagree on soa mname", "DNS-NSCONS-003"),
     ("NS CONSISTENCY", "different ns record sets", "DNS-NSCONS-004"),
+    ("NS DIVERSITY", "all public addresses for", "DNS-NS-ASN-001"),
+    ("NS DELEGATION", "parent and child nameserver sets differ", "DNS-NS-DELEGATION-002"),
+    ("NS DELEGATION", "missing glue in the parent referral", "DNS-NS-DELEGATION-003"),
+    ("NS DELEGATION", "parent authorities disagree on glue", "DNS-NS-DELEGATION-005"),
+    ("NS DELEGATION", "did not serve the child zone authoritatively", "DNS-NS-DELEGATION-004"),
+    ("NS DELEGATION", "check could not complete", "SCAN-NS-DELEGATION-001"),
+    ("MAIL-DNSBL", "is listed by", "MAIL-DNSBL-001"),
+    ("DANE/TLSA", "matches a supported DANE-EE TLSA association", "MAIL-DANE-001"),
+    ("DANE/TLSA", "does not match an observed service certificate", "MAIL-DANE-002"),
     ("MTA-STS", "no mta-sts dns record", "MAIL-MTASTS-002"),
     ("MTA-STS", "policy file status is valid (mode=enforce)", "MAIL-MTASTS-001"),
     ("MTA-STS", "policy file status is valid", "MAIL-MTASTS-003"),
@@ -194,8 +207,9 @@ _CONDITION_CODES: tuple[tuple[str, str, str], ...] = (
 )
 
 _LEGACY_CODE_BY_CONDITION = {
-    (record_type, code): _CATALOG.get(record_type, {"code": "GEN-001"})["code"]
+    (record_type, code): legacy_code
     for record_type, _marker, code in _CONDITION_CODES
+    if (legacy_code := _CATALOG.get(record_type, {}).get("code")) and legacy_code != code
 }
 _LEGACY_CODE_BY_CONDITION.update({("DMARC", code): _CATALOG["DMARC"]["code"] for _marker, code, *_ in _DMARC_RULES})
 _logger = logging.getLogger(__name__)

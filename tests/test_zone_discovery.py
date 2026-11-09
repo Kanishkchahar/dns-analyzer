@@ -1,7 +1,7 @@
 """Tests for Authoritative Zone Apex Discovery and Subdomain Delegation."""
 
 import pytest
-from app.resolver import discover_zone_apex, resolve_domain
+from app.resolver import discover_zone_apex
 from tests.conftest import MockAnswer, MockResolver, MockRR
 
 
