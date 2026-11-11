@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Report optional scan readiness through `GET /api/network/capabilities` and show it in the Network Scope panel, which now disables controls the server would refuse and explains the environment variables that enable them.
+- Add a fixed 100-port extended `connect` profile (`wide: true`) for authorized targets when Nmap is unavailable; the authorization policy and per-scan caps are unchanged.
+- Enable active and wide scans automatically in local trust mode (no `DNS_ANALYZER_API_KEYS` configured) so a default local run works without extra environment variables or tokens.
+
 - Honor `TRUST_REVERSE_PROXY` with configurable `TRUSTED_PROXY_COUNT`; malformed forwarded entries are ignored and insufficient chains fall back to the socket peer.
 - Add a Docker test stage that gates the runtime build, and split development tools from runtime requirements.
 - Add Python 3.11–3.13 CI, a core Ruff check, advisory pip-audit and Bandit jobs, and weekly Dependabot updates.

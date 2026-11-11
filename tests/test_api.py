@@ -149,6 +149,31 @@ def test_dashboard_uses_canonical_inconclusive_check_count():
     assert 'currentFindings.filter((finding) => finding.severity === "inconclusive")' not in source
 
 
+def test_dashboard_scope_panel_reports_and_respects_server_policy():
+    root = Path(__file__).parents[1] / "static"
+    html = (root / "index.html").read_text(encoding="utf-8")
+    js = (root / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="scope-readiness"' in html
+    assert "ENABLE_WIDE_DIRECTORY_SCAN=true" in html
+    assert "ENABLE_ACTIVE_PORT_SCAN=true" in html
+    assert '<option value="connect-wide">' in html
+
+    assert 'apiFetch("/api/network/capabilities")' in js
+    assert "renderScanCapabilities" in js
+    assert "widePathConfirm.disabled = !wide.enabled" in js
+    assert "portScanConfirm.disabled = !port.enabled" in js
+    assert "wide: widePorts" in js
+
+
+def test_dashboard_deep_links_report_sections_in_url_hash():
+    source = (Path(__file__).parents[1] / "static" / "app.js").read_text(encoding="utf-8")
+    assert "SEGMENT_HASH_ALIASES" in source
+    assert 'window.addEventListener("hashchange"' in source
+    assert "segmentTabFromHash() || activeSegmentTabId" in source
+    assert "syncSegmentHash(targetTabId)" in source
+
+
 def test_dashboard_exposes_tab_scoped_api_key_for_protected_deployments():
     root = Path(__file__).parents[1]
     html = (root / "static" / "index.html").read_text(encoding="utf-8")
@@ -534,8 +559,42 @@ class TestAPIEndpoints:
         assert data["total_targets"] == 2
         assert data["in_scope_count"] == 1
 
+    async def test_network_capabilities_endpoint_reports_policy_without_secrets(self, monkeypatch):
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        monkeypatch.setenv("PORT_SCAN_API_KEY", "capabilities-secret-sentinel")
+        monkeypatch.setenv("ENABLE_WIDE_DIRECTORY_SCAN", "true")
+        monkeypatch.setenv("WIDE_PATH_SCAN_ALLOWED_DOMAINS", "example.com")
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/network/capabilities")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["active_port_scan"]["enabled"] is True
+        assert data["active_port_scan"]["authorized"] is True
+        assert data["active_port_scan"]["max_wide_ports"] == 100
+        assert data["wide_directory_scan"]["path_count"] == 64
+        assert "capabilities-secret-sentinel" not in resp.text
+        assert "example.com" not in resp.text
+
+    async def test_post_network_port_scan_forwards_wide_flag(self, monkeypatch):
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        monkeypatch.setenv("PORT_SCAN_ALLOWED_DOMAINS", "*")
+        result = {"status": "completed", "scanner": "wide_connect", "target": "example.com", "ports": []}
+        with patch("app.main.run_port_scan", new=AsyncMock(return_value=result)) as mocked:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post(
+                    "/api/network/port-scan",
+                    json={"target": "example.com", "confirmed": True, "scanner": "connect", "wide": True},
+                )
+
+        assert resp.status_code == 200
+        assert mocked.await_args.kwargs["wide"] is True
+        assert mocked.await_args.kwargs["scanner"] == "connect"
+
     async def test_post_network_port_scan_disabled_by_default(self, monkeypatch):
-        monkeypatch.delenv("ENABLE_ACTIVE_PORT_SCAN", raising=False)
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "false")
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post("/api/network/port-scan", json={"target": "93.184.216.34", "confirmed": False})

@@ -12,10 +12,10 @@
 | Variable | Default | Purpose |
 |---|---|---|
 | `DNS_ANALYZER_HOST` | `127.0.0.1` | Host interface used by `run.sh`. |
-| `ENABLE_ACTIVE_PORT_SCAN` | `false` | Master switch for active TCP port checks. |
+| `ENABLE_ACTIVE_PORT_SCAN` | auto (on in local trust mode) | Master switch for active TCP port checks, including the extended 100-port list. Unset defaults to enabled when no `DNS_ANALYZER_API_KEYS` are configured, and disabled otherwise. |
 | `PORT_SCAN_API_KEY` | unset | Bearer token required by the port-scan policy. |
 | `PORT_SCAN_ALLOWED_DOMAINS` | unset | Comma-separated approved target domains. |
-| `ENABLE_WIDE_DIRECTORY_SCAN` | `false` | Enable the fixed 64-path directory list. Requires an API key and/or an explicit approved-domain list. |
+| `ENABLE_WIDE_DIRECTORY_SCAN` | auto (on in local trust mode) | Enable the fixed 64-path directory list. Unset defaults to enabled when no `DNS_ANALYZER_API_KEYS` are configured, and disabled otherwise. |
 | `WIDE_PATH_SCAN_API_KEY` | unset | Optional bearer token required for wide directory scans. |
 | `WIDE_PATH_SCAN_ALLOWED_DOMAINS` | unset | Comma-separated approved domains for wide directory scans. |
 | `CERTSPOTTER_API_KEY` | unset | Optional SSLMate Cert Spotter API bearer token for higher CT query availability. |
@@ -57,6 +57,8 @@ docker run --rm -p 127.0.0.1:8000:8000 \
 ```
 
 The 64-path option is separate. To enable it, set `ENABLE_WIDE_DIRECTORY_SCAN=true`, configure `WIDE_PATH_SCAN_ALLOWED_DOMAINS` and/or `WIDE_PATH_SCAN_API_KEY`, restart the server, and provide the configured key in the extended-scan field. Leave the extended-list checkbox off to use the standard seven-path check without wide-scan authorization. Never use `*` or a domain you do not control in the allowlist.
+
+The dashboard reads `GET /api/network/capabilities` on load, so the Network Scope panel shows whether each optional check is enabled, disabled, or waiting for a key/allowlist, and disables controls the server would refuse. This reporting is informational only; every probe is still re-authorized server-side on each request. There is deliberately no UI toggle that overrides the policy — enabling a feature means changing the server environment and restarting.
 
 ### Public deployment threat model
 

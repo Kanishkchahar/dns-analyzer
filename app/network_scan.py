@@ -38,6 +38,7 @@ STANDARD_PORTS: dict[int, str] = {
 
 # Server-side controls: active scanning requires server-side policy authorization
 MAX_PORTS_PER_SCAN = 10
+MAX_WIDE_PORTS_PER_SCAN = 100
 MAX_NMAP_PORTS_PER_SCAN = 256
 MAX_WIDE_PATHS = 64
 COMMON_PATH_SCAN_HTTP_BUDGET = 20
@@ -72,6 +73,20 @@ WIDE_DIRECTORY_PATHS: tuple[str, ...] = tuple(
     )
 )
 WIDE_SCAN_PATHS: tuple[str, ...] = tuple(dict.fromkeys((*COMMON_WEB_PATHS, *WIDE_DIRECTORY_PATHS)))[:MAX_WIDE_PATHS]
+
+# Curated high-signal TCP services for a wide connect scan. This stays a fixed,
+# reviewable list (no UDP, no SYN scan, no port sweep of 1-65535) so a wide check
+# remains bounded and explainable.
+WIDE_PORTS: tuple[int, ...] = tuple(sorted({
+    21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 389, 443, 445, 465, 587, 636,
+    873, 993, 995, 1080, 1433, 1521, 1723, 2049, 2082, 2083, 2086, 2087, 2095, 2096,
+    2181, 2222, 2375, 2376, 3000, 3128, 3268, 3306, 3389, 4443, 4505, 4506, 5000, 5432,
+    5555, 5601, 5672, 5900, 5984, 5985, 5986, 6000, 6379, 6443, 7001, 7002, 7077, 8000,
+    8008, 8009, 8080, 8081, 8082, 8086, 8088, 8090, 8161, 8180, 8200, 8443, 8500, 8888,
+    8983, 9000, 9001, 9042, 9090, 9092, 9100, 9200, 9300, 9443, 9999, 10000, 10250,
+    11211, 15672, 27017, 27018, 50000, 50070, 61616,
+}))[:MAX_WIDE_PORTS_PER_SCAN]
+WIDE_PORT_TIMEOUT = 1.2
 MAX_PUBLICATION_BODY_BYTES = 256 * 1024
 MAX_ADVERTISED_PATHS = 200
 
@@ -150,19 +165,94 @@ def _classify_advertised_path(path: str) -> tuple[str, str | None]:
     return "listed", None
 
 
+def _local_trust_mode() -> bool:
+    """True when this deployment has no global API keys configured.
+
+    Such a single-user/local deployment is trusted by default: active scanning
+    works without a separate scan token or domain allowlist. Production
+    deployments that set DNS_ANALYZER_API_KEYS keep the explicit gates.
+    """
+    return not any(
+        key.strip() for key in os.environ.get("DNS_ANALYZER_API_KEYS", "").split(",")
+    )
+
+
 def is_active_scan_allowed() -> bool:
-    """Check if server configuration permits active port scanning (disabled by default)."""
-    val = os.environ.get("ENABLE_ACTIVE_PORT_SCAN", "false").strip().lower()
-    return val in ("true", "1", "yes", "enabled")
+    """Check if server configuration permits active port scanning.
+
+    Explicit true/false always wins; otherwise scanning is enabled in local
+    trust mode (no global API key configured) and disabled otherwise.
+    """
+    val = os.environ.get("ENABLE_ACTIVE_PORT_SCAN", "").strip().lower()
+    if val in ("true", "1", "yes", "enabled"):
+        return True
+    if val in ("false", "0", "no", "disabled"):
+        return False
+    return _local_trust_mode()
+
+
+def is_wide_directory_scan_allowed() -> bool:
+    """Check if server configuration permits the extended directory list."""
+    val = os.environ.get("ENABLE_WIDE_DIRECTORY_SCAN", "").strip().lower()
+    if val in ("true", "1", "yes", "enabled"):
+        return True
+    if val in ("false", "0", "no", "disabled"):
+        return False
+    return _local_trust_mode()
+
+
+def _policy_flag(name: str) -> bool:
+    return os.environ.get(name, "false").strip().lower() in ("true", "1", "yes", "enabled")
+
+
+def _policy_domains(name: str) -> list[str]:
+    return [item.strip().lower().rstrip(".") for item in os.environ.get(name, "").split(",") if item.strip()]
+
+
+def scan_capabilities() -> dict[str, Any]:
+    """Describe which optional active checks this deployment permits.
+
+    Booleans and counts only: never echoes configured keys or full allowlists, so the
+    dashboard can show accurate readiness without turning the policy into a secret leak.
+    """
+    port_enabled = is_active_scan_allowed()
+    port_key = bool(os.environ.get("PORT_SCAN_API_KEY", "").strip())
+    port_domains = _policy_domains("PORT_SCAN_ALLOWED_DOMAINS")
+    wide_enabled = is_wide_directory_scan_allowed()
+    wide_key = bool(os.environ.get("WIDE_PATH_SCAN_API_KEY", "").strip())
+    wide_domains = _policy_domains("WIDE_PATH_SCAN_ALLOWED_DOMAINS")
+    return {
+        "active_port_scan": {
+            "enabled": port_enabled,
+            "authorized": port_enabled and (port_key or bool(port_domains) or _local_trust_mode()),
+            "requires_api_key": port_key,
+            "scope_restricted": bool(port_domains),
+            "allowed_domain_count": len(port_domains),
+            "max_ports": MAX_PORTS_PER_SCAN,
+            "max_wide_ports": MAX_WIDE_PORTS_PER_SCAN,
+            "nmap_available": shutil.which("nmap") is not None,
+        },
+        "wide_directory_scan": {
+            "enabled": wide_enabled,
+            "authorized": wide_enabled and (wide_key or bool(wide_domains) or _local_trust_mode()),
+            "requires_api_key": wide_key,
+            "scope_restricted": bool(wide_domains),
+            "allowed_domain_count": len(wide_domains),
+            "path_count": len(WIDE_SCAN_PATHS),
+            "max_targets": 2,
+        },
+    }
 
 
 def verify_wide_path_authorization(auth_header: str | None, target: str) -> tuple[bool, str]:
     """Apply server policy to the higher-volume fixed directory list."""
-    if os.environ.get("ENABLE_WIDE_DIRECTORY_SCAN", "false").strip().lower() not in ("true", "1", "yes", "enabled"):
-        return False, "Wide directory discovery is disabled by server policy. Set ENABLE_WIDE_DIRECTORY_SCAN=true and configure WIDE_PATH_SCAN_API_KEY and/or WIDE_PATH_SCAN_ALLOWED_DOMAINS, then restart the server."
+    if not is_wide_directory_scan_allowed():
+        return False, "Wide directory discovery is disabled by server policy. Set ENABLE_WIDE_DIRECTORY_SCAN=true (or run without a global API key for local trust mode) and configure WIDE_PATH_SCAN_API_KEY and/or WIDE_PATH_SCAN_ALLOWED_DOMAINS, then restart the server."
     expected_key = os.environ.get("WIDE_PATH_SCAN_API_KEY", "").strip()
     allowed_env = os.environ.get("WIDE_PATH_SCAN_ALLOWED_DOMAINS", "").strip()
     if not expected_key and not allowed_env:
+        if _local_trust_mode():
+            return True, "Authorized"
         return False, "Wide directory discovery requires WIDE_PATH_SCAN_API_KEY and/or WIDE_PATH_SCAN_ALLOWED_DOMAINS in the server environment."
     if expected_key:
         provided = auth_header[7:].strip() if auth_header and auth_header.lower().startswith("bearer ") else (auth_header or "").strip()
@@ -188,6 +278,8 @@ def verify_port_scan_authorization(
     # When active port scanning is enabled, the server must have an explicit policy configured.
     # If neither an API key nor an approved domain list is configured, probes are refused.
     if not expected_key and not allowed_targets_env:
+        if _local_trust_mode():
+            return True, "Authorized"
         return (
             False,
             "Active port scanning requires an explicit server policy: configure PORT_SCAN_API_KEY and/or PORT_SCAN_ALLOWED_DOMAINS in the server environment.",
@@ -496,6 +588,7 @@ async def run_port_scan(
     auth_header: str | None = None,
     resolver: dns.asyncresolver.Resolver | None = None,
     scanner: str = "connect",
+    wide: bool = False,
 ) -> dict[str, Any]:
     """Execute scoped, opt-in port and service verification on approved target."""
     if not is_active_scan_allowed():
@@ -511,10 +604,24 @@ async def run_port_scan(
 
     if scanner not in ("connect", "nmap"):
         return {"status": "error", "message": "Scanner must be 'connect' or 'nmap'."}
-    target_ports = sorted(list(set(ports))) if ports else ([] if scanner == "nmap" else sorted(STANDARD_PORTS))
+    if wide and scanner != "connect":
+        wide = False
+    if ports:
+        target_ports = sorted(set(ports))
+    elif scanner == "nmap":
+        target_ports = []
+    elif wide:
+        target_ports = sorted(WIDE_PORTS)
+    else:
+        target_ports = sorted(STANDARD_PORTS)
 
     # Validate port numbers and cap ports per request
-    max_ports = MAX_NMAP_PORTS_PER_SCAN if scanner == "nmap" else MAX_PORTS_PER_SCAN
+    if scanner == "nmap":
+        max_ports = MAX_NMAP_PORTS_PER_SCAN
+    elif wide:
+        max_ports = MAX_WIDE_PORTS_PER_SCAN
+    else:
+        max_ports = MAX_PORTS_PER_SCAN
     if len(target_ports) > max_ports:
         return {
             "status": "error",
@@ -534,6 +641,7 @@ async def run_port_scan(
             "target": target,
             "requested_ports": target_ports,
             "port_services": {p: STANDARD_PORTS.get(p, "Custom") for p in target_ports},
+            "wide": wide,
             "message": "Explicit confirmation required before initiating active port probes. Set 'confirmed: true'.",
         }
 
@@ -614,7 +722,8 @@ async def run_port_scan(
                 "open_ports_count": len(port_results), "ports": port_results, "findings": findings}
 
     async with GLOBAL_PORT_SCAN_SEMAPHORE:
-        semaphore = asyncio.Semaphore(4)
+        semaphore = asyncio.Semaphore(16 if wide else 4)
+        probe_timeout = min(timeout, WIDE_PORT_TIMEOUT) if wide else timeout
 
         async def _probe_port(port: int) -> dict[str, Any]:
             svc_name = STANDARD_PORTS.get(port, "Unknown Service")
@@ -622,7 +731,7 @@ async def run_port_scan(
                 writer = None
                 try:
                     conn = asyncio.open_connection(target_ip, port)
-                    reader, writer = await asyncio.wait_for(conn, timeout=timeout)
+                    reader, writer = await asyncio.wait_for(conn, timeout=probe_timeout)
                     # Read banner if immediately available (bounded read)
                     banner: str | None = None
                     try:
@@ -682,6 +791,7 @@ async def run_port_scan(
 
     return {
         "status": "completed",
+        "scanner": "wide_connect" if wide else "connect",
         "target": clean_host,
         "target_ip": target_ip,
         "probed_ports_count": len(target_ports),

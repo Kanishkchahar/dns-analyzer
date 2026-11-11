@@ -226,3 +226,4 @@ class PortScanRequest(BaseModel):
     confirmed: bool = False
     auth_token: str | None = None
     scanner: str = "connect"
+    wide: bool = False

@@ -57,6 +57,7 @@ from app.network_scan import (
     run_common_path_scan,
     run_list_scan,
     run_port_scan,
+    scan_capabilities,
     verify_port_scan_authorization,
     verify_wide_path_authorization,
 )
@@ -734,6 +735,14 @@ async def api_analyze_batch(req: BatchAnalyzeRequest, request: Request) -> dict[
     return {"results": results}
 
 
+@app.get("/api/network/capabilities")
+async def api_network_capabilities(request: Request) -> dict[str, Any]:
+    """Report which optional active checks this deployment permits (no secrets returned)."""
+    require_api_key(request)
+    _enforce_rate_limit(request)
+    return scan_capabilities()
+
+
 @app.post("/api/network/list-scan")
 async def api_network_list_scan(req: ListScanRequest, request: Request) -> dict[str, Any]:
     """Execute non-intrusive DNS list scan across user-specified target scope."""
@@ -841,6 +850,7 @@ async def api_network_port_scan(req: PortScanRequest, request: Request) -> dict[
                 auth_header=auth_header,
                 resolver=resolver,
                 scanner=req.scanner,
+                wide=req.wide,
             )
 
     return await _await_scan_or_disconnect(request, execute())

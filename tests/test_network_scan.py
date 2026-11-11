@@ -1,15 +1,22 @@
 """Tests for Scoped Network Inventory & Port Service Verification (app/network_scan.py)."""
 
+import json
+
 import pytest
 import dns.exception
 from app.network_scan import (
     COMMON_WEB_PATHS,
+    MAX_WIDE_PORTS_PER_SCAN,
+    STANDARD_PORTS,
+    WIDE_PORTS,
+    WIDE_SCAN_PATHS,
     _parse_robots,
     _parse_sitemap,
     _same_origin_https_url,
     run_common_path_scan,
     run_list_scan,
     run_port_scan,
+    scan_capabilities,
 )
 
 
@@ -177,6 +184,7 @@ class TestNetworkScan:
         assert budget.http_remaining == 0
 
     async def test_port_scan_disabled_by_default(self, monkeypatch):
+        monkeypatch.setenv("DNS_ANALYZER_API_KEYS", "test-key")
         monkeypatch.delenv("ENABLE_ACTIVE_PORT_SCAN", raising=False)
         res = await run_port_scan("93.184.216.34", ports=[80], confirmed=True)
         assert res["status"] == "disabled"
@@ -210,7 +218,57 @@ class TestNetworkScan:
         assert res_invalid["status"] == "error"
         assert "Invalid port number" in res_invalid["message"]
 
+    async def test_wide_port_profile_is_bounded_and_respects_port_gates(self, monkeypatch):
+        assert 8 < len(WIDE_PORTS) <= MAX_WIDE_PORTS_PER_SCAN
+        assert len(set(WIDE_PORTS)) == len(WIDE_PORTS)
+        assert all(1 <= port <= 65535 for port in WIDE_PORTS)
+        assert set(STANDARD_PORTS).issubset(set(WIDE_PORTS))
+
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        monkeypatch.setenv("PORT_SCAN_ALLOWED_DOMAINS", "*")
+        confirmation = await run_port_scan("93.184.216.34", confirmed=False, wide=True)
+        assert confirmation["status"] == "confirmation_required"
+        assert confirmation["wide"] is True
+        assert sorted(confirmation["requested_ports"]) == sorted(WIDE_PORTS)
+
+        # The explicit-ports cap still applies to wide runs, just at the higher bound.
+        res = await run_port_scan("93.184.216.34", ports=list(range(1, 102)), confirmed=True, wide=True)
+        assert res["status"] == "error"
+        assert "maximum 100 ports" in res["message"]
+
+    async def test_scan_capabilities_reports_policy_without_secrets(self, monkeypatch):
+        monkeypatch.setenv("DNS_ANALYZER_API_KEYS", "test-key")
+        monkeypatch.delenv("ENABLE_ACTIVE_PORT_SCAN", raising=False)
+        monkeypatch.delenv("ENABLE_WIDE_DIRECTORY_SCAN", raising=False)
+        monkeypatch.delenv("PORT_SCAN_API_KEY", raising=False)
+        monkeypatch.delenv("PORT_SCAN_ALLOWED_DOMAINS", raising=False)
+        monkeypatch.delenv("WIDE_PATH_SCAN_API_KEY", raising=False)
+        monkeypatch.delenv("WIDE_PATH_SCAN_ALLOWED_DOMAINS", raising=False)
+        defaults = scan_capabilities()
+        assert defaults["active_port_scan"]["enabled"] is False
+        assert defaults["active_port_scan"]["authorized"] is False
+        assert defaults["wide_directory_scan"]["enabled"] is False
+        assert defaults["wide_directory_scan"]["path_count"] == len(WIDE_SCAN_PATHS) == 64
+
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        monkeypatch.setenv("PORT_SCAN_API_KEY", "secret-token-123")
+        monkeypatch.setenv("PORT_SCAN_ALLOWED_DOMAINS", "example.com, target.org")
+        monkeypatch.setenv("ENABLE_WIDE_DIRECTORY_SCAN", "true")
+        monkeypatch.setenv("WIDE_PATH_SCAN_ALLOWED_DOMAINS", "example.com")
+        enabled = scan_capabilities()
+        assert enabled["active_port_scan"]["enabled"] is True
+        assert enabled["active_port_scan"]["authorized"] is True
+        assert enabled["active_port_scan"]["requires_api_key"] is True
+        assert enabled["active_port_scan"]["allowed_domain_count"] == 2
+        assert enabled["wide_directory_scan"]["enabled"] is True
+        assert enabled["wide_directory_scan"]["authorized"] is True
+        assert enabled["wide_directory_scan"]["scope_restricted"] is True
+        serialized = json.dumps(enabled)
+        assert "secret-token-123" not in serialized
+        assert "example.com" not in serialized
+
     async def test_port_scan_requires_explicit_server_policy(self, monkeypatch):
+        monkeypatch.setenv("DNS_ANALYZER_API_KEYS", "test-key")
         monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
         monkeypatch.delenv("PORT_SCAN_API_KEY", raising=False)
         monkeypatch.delenv("PORT_SCAN_ALLOWED_DOMAINS", raising=False)

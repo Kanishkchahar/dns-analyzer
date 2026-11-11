@@ -443,6 +443,19 @@
             </div>
             <textarea id="list-scan-input" class="scope-textarea" rows="2" placeholder="example.com&#10;www.example.com&#10;93.184.216.34" aria-describedby="scope-safety-note"></textarea>
             <p class="scope-safety-note" id="scope-safety-note">Private, loopback, link-local, and other non-public addresses are blocked. Use only targets you are authorized to assess.</p>
+
+            <div class="scope-readiness" id="scope-readiness" hidden>
+              <div class="scope-readiness-chips" id="scope-readiness-chips"></div>
+              <details class="scope-readiness-help">
+                <summary>Why some checks are unavailable, and how to enable them</summary>
+                <p>The server decides which checks may run — this dashboard cannot override that policy. On your own deployment, set these variables and restart:</p>
+                <ul>
+                  <li><code>ENABLE_ACTIVE_PORT_SCAN=true</code> plus <code>PORT_SCAN_API_KEY</code> and/or <code>PORT_SCAN_ALLOWED_DOMAINS=example.com</code> for active TCP checks and the extended port list. On a local run with no <code>DNS_ANALYZER_API_KEYS</code> configured, scanning is enabled automatically.</li>
+                  <li><code>ENABLE_WIDE_DIRECTORY_SCAN=true</code> plus <code>WIDE_PATH_SCAN_API_KEY</code> and/or <code>WIDE_PATH_SCAN_ALLOWED_DOMAINS=example.com</code> for the extended directory list.</li>
+                </ul>
+                <p>Keep allowlists to domains you control. Without a key or allowlist the server still refuses active probes, by design.</p>
+              </details>
+            </div>
             
             <div class="scope-actions-bar">
               <div class="scope-scan-options">
@@ -467,7 +480,7 @@
                   <p>Checks 7 common HTTPS paths and same-host redirects. Optional extended mode checks up to 64 paths on 2 targets; it never crawls or follows off-host redirects.</p>
                   <label class="scope-confirm-label" for="wide-path-confirm">
                     <input type="checkbox" id="wide-path-confirm" class="scope-checkbox" />
-                    <span>Use the extended list (requires server enablement and authorization).</span>
+                    <span id="wide-path-confirm-label">Use the extended list (requires server enablement and authorization).</span>
                   </label>
                   <input type="password" id="wide-path-auth-token" class="port-scan-auth-input" placeholder="Extended scan key (if configured)" aria-label="Extended scan API key" autocomplete="off" />
                   <p class="scope-option-note">If disabled by the server, the standard 7-path check remains available.</p>
@@ -494,7 +507,9 @@
                 <select id="port-scan-mode" class="port-scan-auth-input">
                   <option value="nmap">Nmap service detection (top 100 TCP ports)</option>
                   <option value="connect">Basic TCP check (8 common ports)</option>
+                  <option value="connect-wide">Extended TCP check (up to 100 common service ports)</option>
                 </select>
+                <p class="scope-option-note" id="port-scan-policy-note" hidden></p>
                 <div class="port-scan-auth-row">
                   <input
                     type="password"

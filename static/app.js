@@ -150,6 +150,8 @@ if (saveDashboardApiKeyButton && dashboardApiKeyInput) {
     } catch (_) {
       dashboardApiKeyStatus.textContent = "This browser cannot store the key for this tab.";
     }
+    // Capability reporting is key-protected too, so re-read it with the new key.
+    loadScanCapabilities();
   });
 }
 if (clearDashboardApiKeyButton && dashboardApiKeyInput) {
@@ -157,6 +159,7 @@ if (clearDashboardApiKeyButton && dashboardApiKeyInput) {
     try { sessionStorage.removeItem(API_KEY_STORAGE_KEY); } catch (_) {}
     dashboardApiKeyInput.value = "";
     if (dashboardApiKeyStatus) dashboardApiKeyStatus.textContent = "Key cleared.";
+    loadScanCapabilities();
   });
 }
 
@@ -2859,6 +2862,50 @@ function iconSvg(kind) {
 // ── Segmented Tab Controller ──────────────────────────────────
 let activeSegmentTabId = "tab-overview";
 
+// Older links and card links used tab ids; the URL hash uses the panel segment.
+const SEGMENT_HASH_ALIASES = {
+  "tab-findings": "overview",
+  "tab-remediation": "overview",
+  "tab-threats": "dns",
+  "tab-network": "scope",
+  findings: "overview",
+  remediation: "overview",
+  threats: "dns",
+  network: "scope",
+  records: "dns",
+  tls: "web",
+  subdomains: "scope",
+};
+
+function segmentTabFromHash() {
+  let hash = "";
+  try {
+    hash = (window.location.hash || "").replace(/^#/, "").toLowerCase();
+  } catch (_) {
+    return null;
+  }
+  if (!hash) return null;
+  const segment = SEGMENT_HASH_ALIASES[hash] || hash;
+  const tabs = Array.from(document.querySelectorAll(".segment-tab"));
+  const match = tabs.find((t) => t.getAttribute("data-target") === segment)
+    || tabs.find((t) => t.id === `tab-${segment}`);
+  return match ? match.id : null;
+}
+
+function syncSegmentHash(tabId) {
+  const segment = SEGMENT_HASH_ALIASES[tabId]
+    || document.getElementById(tabId)?.getAttribute("data-target");
+  if (!segment) return;
+  try {
+    const url = new URL(window.location);
+    // Keep the default section out of the URL until another one is chosen.
+    const nextHash = segment === "overview" ? "" : `#${segment}`;
+    if (url.hash === nextHash) return;
+    url.hash = nextHash;
+    window.history.replaceState(window.history.state, "", url);
+  } catch (_) {}
+}
+
 function switchSegmentTab(targetTabId, shouldFocus = false) {
   const tabs = Array.from(document.querySelectorAll(".segment-tab"));
   const panels = document.querySelectorAll(".results-tab-panel");
@@ -2887,6 +2934,7 @@ function switchSegmentTab(targetTabId, shouldFocus = false) {
   if (shouldFocus) {
     targetTab.focus();
   }
+  syncSegmentHash(targetTabId);
 
   resultsEl?.classList.remove("all-mode");
   panels.forEach((p) => {
@@ -2910,6 +2958,18 @@ function switchSegmentTab(targetTabId, shouldFocus = false) {
 function initSegmentedTabs() {
   const nav = document.getElementById("segment-nav");
   if (!nav) return;
+
+  // A #section deep link picks the opening tab, including on shared scans that
+  // start with ?domain= and close the report mid-run.
+  activeSegmentTabId = segmentTabFromHash() || activeSegmentTabId;
+
+  // Browser back/forward or an edited hash re-selects the section.
+  window.addEventListener("hashchange", () => {
+    const hashTabId = segmentTabFromHash();
+    if (hashTabId && hashTabId !== activeSegmentTabId) {
+      switchSegmentTab(hashTabId);
+    }
+  });
 
   const tabs = Array.from(nav.querySelectorAll(".segment-tab"));
   tabs.forEach((tab) => {
@@ -3196,6 +3256,99 @@ const widePathConfirm = document.getElementById("wide-path-confirm");
 const widePathTokenInput = document.getElementById("wide-path-auth-token");
 const portScanConfirm = document.getElementById("port-scan-confirm");
 const btnRunPortScan = document.getElementById("btn-run-port-scan");
+const portScanModeSelect = document.getElementById("port-scan-mode");
+const portScanTokenInput = document.getElementById("port-scan-auth-token");
+const portScanPolicyNote = document.getElementById("port-scan-policy-note");
+const scopeReadiness = document.getElementById("scope-readiness");
+const scopeReadinessChips = document.getElementById("scope-readiness-chips");
+const SCAN_TOKEN_STORAGE = { port: "dns-analyzer:port-scan-token", wide: "dns-analyzer:wide-path-token" };
+
+function readScanToken(key) {
+  try { return sessionStorage.getItem(key) || ""; } catch (_) { return ""; }
+}
+
+function rememberScanToken(key, value) {
+  try {
+    if (value) sessionStorage.setItem(key, value);
+    else sessionStorage.removeItem(key);
+  } catch (_) {}
+}
+
+function capabilityChip(label, state, detail) {
+  const stateClass = state === "on" ? "is-on" : (state === "partial" ? "is-partial" : "is-off");
+  return `<span class="scope-ready-chip ${stateClass}" title="${escapeHtml(detail)}">
+    <span class="scope-ready-dot" aria-hidden="true"></span>
+    <span>${escapeHtml(label)}</span>
+  </span>`;
+}
+
+function renderScanCapabilities(caps) {
+  if (!caps) return;
+  const port = caps.active_port_scan || {};
+  const wide = caps.wide_directory_scan || {};
+  const portState = !port.enabled ? "off" : (port.authorized ? "on" : "partial");
+  const portLabel = !port.enabled
+    ? "Active port checks: disabled by server policy"
+    : (port.authorized ? `Active port checks: ready (up to ${port.max_wide_ports} ports)` : "Active port checks: server has no key or allowlist");
+  const portDetail = !port.enabled
+    ? "Set ENABLE_ACTIVE_PORT_SCAN=true on the server to permit active TCP checks."
+    : (port.authorized ? "Active probes are authorized for this deployment." : "Configure PORT_SCAN_API_KEY and/or PORT_SCAN_ALLOWED_DOMAINS to authorize probes.");
+  const wideState = !wide.enabled ? "off" : (wide.authorized ? "on" : "partial");
+  const wideLabel = !wide.enabled
+    ? "Extended directory list: disabled by server policy"
+    : (wide.authorized ? `Extended directory list: ready (${wide.path_count} paths)` : "Extended directory list: server has no key or allowlist");
+  const wideDetail = !wide.enabled
+    ? "Set ENABLE_WIDE_DIRECTORY_SCAN=true on the server to permit the extended list."
+    : (wide.authorized ? "Extended path checks are authorized for this deployment." : "Configure WIDE_PATH_SCAN_API_KEY and/or WIDE_PATH_SCAN_ALLOWED_DOMAINS to authorize extended path checks.");
+
+  if (scopeReadinessChips) {
+    scopeReadinessChips.innerHTML = capabilityChip(portLabel, portState, portDetail)
+      + capabilityChip(wideLabel, wideState, wideDetail);
+  }
+  if (scopeReadiness) scopeReadiness.hidden = false;
+
+  // Reflect server policy in the controls instead of letting a click fail later.
+  if (portScanConfirm) {
+    portScanConfirm.disabled = !port.enabled;
+    if (!port.enabled) portScanConfirm.checked = false;
+  }
+  if (btnRunPortScan) btnRunPortScan.disabled = !port.enabled || !portScanConfirm?.checked;
+  if (portScanPolicyNote) {
+    portScanPolicyNote.hidden = Boolean(port.enabled);
+    portScanPolicyNote.textContent = port.enabled
+      ? ""
+      : "Active TCP checks are disabled on this server. The readiness note above shows the variables that enable them.";
+  }
+  if (portScanModeSelect) {
+    const nmapOption = Array.from(portScanModeSelect.options).find(option => option.value === "nmap");
+    if (nmapOption && port.nmap_available === false) {
+      nmapOption.disabled = true;
+      nmapOption.textContent = "Nmap service detection (not installed on this server)";
+      if (portScanModeSelect.value === "nmap") portScanModeSelect.value = "connect";
+    }
+  }
+  if (widePathConfirm) {
+    widePathConfirm.disabled = !wide.enabled;
+    if (!wide.enabled) {
+      widePathConfirm.checked = false;
+      if (widePathTokenInput) widePathTokenInput.hidden = true;
+    }
+    const label = document.getElementById("wide-path-confirm-label");
+    if (label) {
+      label.textContent = wide.enabled
+        ? "Use the extended list (requires server enablement and authorization)."
+        : "Extended list is disabled on this server; the standard 7 paths still run.";
+    }
+  }
+}
+
+async function loadScanCapabilities() {
+  try {
+    const resp = await apiFetch("/api/network/capabilities");
+    if (!resp.ok) return;
+    renderScanCapabilities(await resp.json());
+  } catch (_) {}
+}
 const networkResults = document.getElementById("network-results");
 const networkPathResults = document.getElementById("network-path-results");
 const stopScopeScanButton = document.getElementById("stop-scope-scan");
@@ -3272,19 +3425,25 @@ if (btnRunPathScan && listScanInput && networkPathResults) {
 
     let finalStatus = "Website path check complete";
     try {
+      const wideToken = wide ? (widePathTokenInput?.value || "").trim() : "";
+      if (wide) rememberScanToken(SCAN_TOKEN_STORAGE.wide, wideToken);
       const resp = await apiFetch("/api/network/path-scan", {
         method: "POST",
         signal: scanController.signal,
         headers: {
           "Content-Type": "application/json",
-          ...(wide && document.getElementById("wide-path-auth-token")?.value?.trim()
-            ? { "X-Wide-Path-Token": document.getElementById("wide-path-auth-token").value.trim() }
-            : {}),
+          ...(wideToken ? { "X-Wide-Path-Token": wideToken } : {}),
         },
         body: JSON.stringify({ targets, wide, confirmed: wide }),
       });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(apiErrorMessage(resp, data, "Common path check failed."));
+      if (!resp.ok) {
+        const message = apiErrorMessage(resp, data, "Common path check failed.");
+        if (resp.status === 403 && wide) {
+          throw new Error(`${message} Extended directory checks are a server-side policy; clear the extended-list checkbox to run the standard 7 paths.`);
+        }
+        throw new Error(message);
+      }
 
       if (currentScanData) {
         currentScanData.path_scan = data;
@@ -3544,7 +3703,10 @@ if (btnRunPortScan && listScanInput && networkResults) {
     networkResults.style.display = "block";
     networkResults.innerHTML = `<div class="audit-card path-scan-loading" role="status" aria-live="polite"><span class="mini-spinner" aria-hidden="true"></span> Checking the first target with the selected TCP method…</div>`;
 
-    const authToken = document.getElementById("port-scan-auth-token")?.value?.trim() || null;
+    const authToken = (portScanTokenInput?.value || "").trim() || null;
+    rememberScanToken(SCAN_TOKEN_STORAGE.port, authToken || "");
+    const portMode = portScanModeSelect?.value || "nmap";
+    const widePorts = portMode === "connect-wide";
 
     let finalStatus = "Port check complete";
     try {
@@ -3558,7 +3720,8 @@ if (btnRunPortScan && listScanInput && networkResults) {
         body: JSON.stringify({
           target: firstTarget,
           confirmed: true,
-          scanner: document.getElementById("port-scan-mode")?.value || "nmap",
+          scanner: widePorts ? "connect" : portMode,
+          wide: widePorts,
         }),
       });
       const data = await resp.json();
@@ -3601,6 +3764,9 @@ if (btnRunPortScan && listScanInput && networkResults) {
             </div>
             <div style="padding: 16px 20px; font-size: 13px; color: var(--text-secondary); line-height: 1.5;">
               ${escapeHtml(data.message || "Active port scanning could not be executed for this target.")}
+              ${["disabled", "unauthorized"].includes(data.status)
+                ? `<p class="port-scan-result-note">Enablement is server-side: set <code>ENABLE_ACTIVE_PORT_SCAN=true</code> with <code>PORT_SCAN_API_KEY</code> and/or <code>PORT_SCAN_ALLOWED_DOMAINS</code>, then restart — or run locally without <code>DNS_ANALYZER_API_KEYS</code> for automatic local trust. If a key is configured, paste it in the field above.</p>`
+                : ""}
             </div>
           </div>
         `;
@@ -3715,6 +3881,9 @@ if (btnRunPortScan && listScanInput && networkResults) {
 }
 
 // ── Initialize ─────────────────────────────────────────────────
+if (portScanTokenInput) portScanTokenInput.value = readScanToken(SCAN_TOKEN_STORAGE.port);
+if (widePathTokenInput) widePathTokenInput.value = readScanToken(SCAN_TOKEN_STORAGE.wide);
 renderRecentChips();
 initSegmentedTabs();
 checkUrlParams();
+loadScanCapabilities();
