@@ -43,9 +43,11 @@ from app.models import (
     EmailScore,
     DkimSelectorRequest,
     Finding,
+    FfufPathRequest,
     ListScanRequest,
     PortScanRequest,
     PathScanRequest,
+    SubdomainEnumerateRequest,
     SecurityAudit,
     Summary,
 )
@@ -54,18 +56,20 @@ from app.network_scan import (
     COMMON_PATH_SCAN_HTTP_BUDGET,
     WIDE_PATH_SCAN_HTTP_BUDGET,
     is_active_scan_allowed,
+    is_wide_directory_scan_allowed,
     run_common_path_scan,
     run_list_scan,
     run_port_scan,
     scan_capabilities,
     verify_port_scan_authorization,
     verify_wide_path_authorization,
+    run_ffuf_scan,
 )
 from app.remediation import generate_bind_zone_file, generate_remediation_fixes
 from app.report import build_report
 from app.resolver import resolve_domain
 from app.spf import analyze_spf, count_spf_lookups, flatten_spf, parse_spf
-from app.subdomains import discover_passive_subdomains
+from app.subdomains import discover_passive_subdomains, enumerate_active_subdomains
 from app.takeover import check_subdomain_takeover
 from app.tls_check import audit_tls_and_https
 from app.work_budget import ScanWorkBudget
@@ -789,11 +793,42 @@ async def api_network_path_scan(req: PathScanRequest, request: Request) -> dict[
                 http_budget = WIDE_PATH_SCAN_HTTP_BUDGET if req.wide else COMMON_PATH_SCAN_HTTP_BUDGET
                 budget = ScanWorkBudget(profile="network_scan", http_requests=http_budget)
                 resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
-                result = await asyncio.wait_for(run_common_path_scan(req.targets, resolver=resolver, work_budget=budget, wide=req.wide), timeout=60.0 if req.wide else 30.0)
+                result = await asyncio.wait_for(run_common_path_scan(req.targets, resolver=resolver, work_budget=budget, wide=req.wide), timeout=100.0 if req.wide else 30.0)
                 _store_path_scan_results(result)
                 return result
             except asyncio.TimeoutError as exc:
                 raise HTTPException(status_code=504, detail="Common web path checks timed out. Retry with fewer targets.") from exc
+
+    return await _await_scan_or_disconnect(request, execute())
+
+
+@app.post("/api/network/ffuf-path-scan")
+async def api_network_ffuf_path_scan(req: FfufPathRequest, request: Request) -> dict[str, Any]:
+    """Execute ffuf fast fuzzing against a target using a wordlist of paths."""
+    require_api_key(request)
+    _enforce_rate_limit(request, limit=_configured_limit("DNS_ANALYZER_EXPENSIVE_RATE_LIMIT_PER_MIN", 10))
+    if not req.target or len(req.target) > 253:
+        raise HTTPException(status_code=400, detail="Invalid target provided.")
+    if not req.confirmed:
+        raise HTTPException(status_code=400, detail="Explicit confirmation is required for ffuf directory discovery.")
+    async def execute() -> dict[str, Any]:
+        async with _scan_slot():
+            if not is_wide_directory_scan_allowed():
+                raise HTTPException(status_code=403, detail="Wide directory discovery is disabled by server policy.")
+            wide_token = request.headers.get("x-wide-path-token")
+            auth_header = f"Bearer {wide_token}" if wide_token else request.headers.get("authorization")
+            auth_ok, auth_msg = verify_wide_path_authorization(auth_header, req.target)
+            if not auth_ok:
+                raise HTTPException(status_code=403, detail=auth_msg)
+            import dns.asyncresolver
+            budget = ScanWorkBudget(profile="network_scan")
+            budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
+            result = await asyncio.wait_for(
+                run_ffuf_scan(req.target, wordlist=req.wordlist, rate=req.rate, timeout=req.timeout, auth_header=auth_header),
+                timeout=60.0,
+            )
+            _store_path_scan_results(result)
+            return result
 
     return await _await_scan_or_disconnect(request, execute())
 
@@ -880,6 +915,30 @@ async def api_subdomains(domain: str, request: Request) -> dict[str, Any]:
         except Exception as exc:
             logger.exception("Subdomain discovery failed for domain: %s", req.domain)
             raise HTTPException(status_code=500, detail="Failed to retrieve subdomain records.") from exc
+
+
+@app.post("/api/subdomains/enumerate")
+async def api_subdomains_enumerate(req: SubdomainEnumerateRequest, request: Request) -> dict[str, Any]:
+    """Actively enumerate common high-signal subdomains using fast DNS probes."""
+    require_api_key(request)
+    _enforce_rate_limit(request)
+    async with _scan_slot():
+        try:
+            import dns.asyncresolver
+            budget = ScanWorkBudget(profile="network_scan")
+            resolver = budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
+            return await _await_scan_or_disconnect(
+                request,
+                enumerate_active_subdomains(
+                    req.domain,
+                    resolver=resolver,
+                    wordlist=req.custom_words,
+                    work_budget=budget,
+                ),
+            )
+        except Exception as exc:
+            logger.exception("Subdomain enumeration failed for domain: %s", req.domain)
+            raise HTTPException(status_code=500, detail="Failed to enumerate subdomains.") from exc
 
 
 @app.get("/api/badge/{domain}", response_class=Response)

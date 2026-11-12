@@ -15,7 +15,7 @@
 | `ENABLE_ACTIVE_PORT_SCAN` | auto (on in local trust mode) | Master switch for active TCP port checks, including the extended 100-port list. Unset defaults to enabled when no `DNS_ANALYZER_API_KEYS` are configured, and disabled otherwise. |
 | `PORT_SCAN_API_KEY` | unset | Bearer token required by the port-scan policy. |
 | `PORT_SCAN_ALLOWED_DOMAINS` | unset | Comma-separated approved target domains. |
-| `ENABLE_WIDE_DIRECTORY_SCAN` | auto (on in local trust mode) | Enable the fixed 64-path directory list. Unset defaults to enabled when no `DNS_ANALYZER_API_KEYS` are configured, and disabled otherwise. |
+| `ENABLE_WIDE_DIRECTORY_SCAN` | auto (on in local trust mode) | Enable the fixed 96-path directory list. Unset defaults to enabled when no `DNS_ANALYZER_API_KEYS` are configured, and disabled otherwise. |
 | `WIDE_PATH_SCAN_API_KEY` | unset | Optional bearer token required for wide directory scans. |
 | `WIDE_PATH_SCAN_ALLOWED_DOMAINS` | unset | Comma-separated approved domains for wide directory scans. |
 | `CERTSPOTTER_API_KEY` | unset | Optional SSLMate Cert Spotter API bearer token for higher CT query availability. |
@@ -33,7 +33,7 @@ For active port scans, the dashboard sends `PORT_SCAN_API_KEY` in `X-Port-Scan-T
 
 ### Enabling optional network scans
 
-These checks stay disabled until the server operator enables them and defines an authorization policy. `nmap` is an operating-system executable, not a Python package: the Docker runtime installs it already. On a Debian/Ubuntu host running `bash run.sh`, install it with `sudo apt-get install nmap` if you want Nmap service/version detection; the basic TCP mode does not require Nmap.
+These checks stay disabled until the server operator enables them and defines an authorization policy. `nmap` and `ffuf` are operating-system executables, not Python packages; the Docker runtime installs both. On a Debian/Ubuntu host running `bash run.sh`, install them with `sudo apt-get install nmap ffuf` if you want Nmap service/version identification and ffuf directory discovery. The basic TCP mode does not require Nmap.
 
 Set the scan-policy variables directly in the shell before starting the server. `bash run.sh` uses inherited variables, and `bash run.sh --docker` forwards the scan-policy variables into the container. No environment file is required.
 
@@ -56,7 +56,7 @@ docker run --rm -p 127.0.0.1:8000:8000 \
   dns-analyzer
 ```
 
-The 64-path option is separate. To enable it, set `ENABLE_WIDE_DIRECTORY_SCAN=true`, configure `WIDE_PATH_SCAN_ALLOWED_DOMAINS` and/or `WIDE_PATH_SCAN_API_KEY`, restart the server, and provide the configured key in the extended-scan field. Leave the extended-list checkbox off to use the standard seven-path check without wide-scan authorization. Never use `*` or a domain you do not control in the allowlist.
+The 96-path option is separate. To enable it, set `ENABLE_WIDE_DIRECTORY_SCAN=true`, configure `WIDE_PATH_SCAN_ALLOWED_DOMAINS` and/or `WIDE_PATH_SCAN_API_KEY`, restart the server, and provide the configured key in the extended-scan field. Leave the extended-list checkbox off to use the standard seven-path check without wide-scan authorization. Never use `*` or a domain you do not control in the allowlist.
 
 The dashboard reads `GET /api/network/capabilities` on load, so the Network Scope panel shows whether each optional check is enabled, disabled, or waiting for a key/allowlist, and disables controls the server would refuse. This reporting is informational only; every probe is still re-authorized server-side on each request. There is deliberately no UI toggle that overrides the policy — enabling a feature means changing the server environment and restarting.
 
@@ -82,7 +82,7 @@ For a single Nginx proxy, set `TRUST_REVERSE_PROXY=true` and `TRUSTED_PROXY_COUN
 
 ## Work limits
 
-The full scan has a shared budget of 500 DNS queries and 37 outbound HTTP requests, with reserved module shares. Unused module shares are not borrowed. Standalone common-path checks have a 20-request HTTP budget for seven standard paths, same-host redirects, and up to three advertised sitemap paths. The optional 64-path mode has a 160-request cap. Other standalone network diagnostics use a separate, bounded network-scan budget. Exhausted checks are reported as incomplete or inconclusive.
+The full scan has a shared budget of 500 DNS queries and 37 outbound HTTP requests, with reserved module shares. Unused module shares are not borrowed. Standalone common-path checks have a 20-request HTTP budget for seven standard paths, same-host redirects, and up to three advertised sitemap paths. The optional 96-path mode has a 256-request cap. Other standalone network diagnostics use a separate, bounded network-scan budget. Exhausted checks are reported as incomplete or inconclusive.
 
 The scan concurrency limit is eight requests per process, with a bounded queue wait and a 60-second full-scan timeout. The API rate limiter allows 60 requests per minute per client IP, or 120 for loopback; it is also per process. Full scans allow up to 37 outbound HTTP requests, including RDAP, RPKI and plugin checks.
 
@@ -90,7 +90,7 @@ The scan concurrency limit is eight requests per process, with a bounded queue w
 
 ## Docker
 
-The default Docker build runs the test suite in an isolated test stage before assembling the runtime image. The runtime image does not contain pytest or development tools. To run the test stage directly, use `docker build --target test .`. The image includes Nmap for optional service/version identification. Build and run with:
+The default Docker build runs the test suite in an isolated test stage before assembling the runtime image. The runtime image does not contain pytest or development tools. To run the test stage directly, use `docker build --target test .`. The image includes Nmap and ffuf for optional service identification and authorized path discovery. Build and run with:
 
 ```bash
 docker build -t dns-analyzer .

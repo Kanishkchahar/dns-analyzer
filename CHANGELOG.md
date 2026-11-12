@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add active high-signal subdomain DNS enumeration (`POST /api/subdomains/enumerate`) with automatic wildcard DNS detection to uncover active hosts (such as `student`, `mail`, `erp`, `portal`) that do not appear in passive Certificate Transparency logs due to wildcard certificates.
+- Add real-time client-side subdomain search filtering and direct one-click `⚡ Ports` verification buttons on every discovered subdomain in the dashboard.
+- Supercharge Nmap and port scans with custom port list inputs, quick-select service presets (Web, Mail, Remote, Database, Defaults), Common Platform Enumeration (CPE) extraction, extraports (filtered/closed) summaries, and sensitive service exposure risk warnings.
+- Normalize URL and host:port targets in scoped network scans, preserving custom ports for path and port checks while enforcing consistent server authorization and SSRF validation.
+- Identify SSL/TLS tunneled services (e.g. `tunnel="ssl"` or standard HTTPS ports) in Nmap XML output and label them as `https`.
+- Automatically reset the Network Scope panel and abort in-flight scans when switching domains or hiding results in the dashboard.
 - Report optional scan readiness through `GET /api/network/capabilities` and show it in the Network Scope panel, which now disables controls the server would refuse and explains the environment variables that enable them.
 - Add a fixed 100-port extended `connect` profile (`wide: true`) for authorized targets when Nmap is unavailable; the authorization policy and per-scan caps are unchanged.
 - Enable active and wide scans automatically in local trust mode (no `DNS_ANALYZER_API_KEYS` configured) so a default local run works without extra environment variables or tokens.

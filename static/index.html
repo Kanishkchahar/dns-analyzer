@@ -405,10 +405,18 @@
               <p class="remediation-sub">Discovered via public Certificate Transparency (CT) logs. Zero packets transmitted to target hosts.</p>
               <p class="subdomains-meta" id="subdomains-meta"></p>
             </div>
-            <div class="subdomain-actions">
+            <div class="subdomain-actions" style="display:flex; align-items:center; gap:8px;">
               <span class="pill pill-info" id="subdomain-count-pill" style="font-size:12px;">0 Hosts</span>
+              <button class="btn btn-secondary" id="btn-probe-subdomains" type="button" style="padding:5px 11px; font-size:12px; display:inline-flex; align-items:center; gap:5px;" title="Actively probe 90+ common subdomains (e.g. student, mail, erp, portal, api) via fast DNS queries">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 2a5 5 0 110 10A5 5 0 018 3zm0 2a3 3 0 100 6 3 3 0 000-6z"/></svg>
+                <span>⚡ Probe Active Subdomains</span>
+              </button>
               <button class="btn btn-secondary" id="export-subdomains-csv-btn" type="button" disabled>Export CSV</button>
             </div>
+          </div>
+          <div class="subdomain-filter-row" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:8px;">
+            <input type="text" id="subdomain-filter-input" placeholder="🔍 Filter subdomains (e.g. student, mail, 103...)" class="port-scan-auth-input" style="max-width:280px; padding:6px 10px; font-size:12px;" />
+            <span id="subdomain-filter-stats" style="font-size:12px; color:var(--text-muted);"></span>
           </div>
           <div id="subdomains-list" class="subdomains-table-container"></div>
         </div>
@@ -477,7 +485,7 @@
                     <h3>Check common website paths</h3>
                     <span class="scope-option-limit">Up to 5 targets</span>
                   </div>
-                  <p>Checks 7 common HTTPS paths and same-host redirects. Optional extended mode checks up to 64 paths on 2 targets; it never crawls or follows off-host redirects.</p>
+                  <p>Checks 7 common HTTPS paths and same-host redirects. Optional extended mode checks up to 96 curated paths on 2 targets; it never crawls or follows off-host redirects.</p>
                   <label class="scope-confirm-label" for="wide-path-confirm">
                     <input type="checkbox" id="wide-path-confirm" class="scope-checkbox" />
                     <span id="wide-path-confirm-label">Use the extended list (requires server enablement and authorization).</span>
@@ -490,6 +498,9 @@
                       <path d="M5 9h2m2 0h2m-6 2h2" stroke-linecap="round"/>
                     </svg>
                     <span>Check website paths</span>
+                  </button>
+                  <button class="btn btn-secondary" id="btn-run-ffuf-scan" type="button" style="margin-top:6px;">
+                    <span>Run ffuf directory discovery</span>
                   </button>
                 </article>
               </div>
@@ -505,10 +516,25 @@
                 </label>
                 <label class="scope-label" for="port-scan-mode">Scan method</label>
                 <select id="port-scan-mode" class="port-scan-auth-input">
-                  <option value="nmap">Nmap service detection (top 100 TCP ports)</option>
+                  <option value="nmap">Nmap service detection (top 200 TCP ports, -Pn)</option>
                   <option value="connect">Basic TCP check (8 common ports)</option>
                   <option value="connect-wide">Extended TCP check (up to 100 common service ports)</option>
                 </select>
+                <label class="scope-label" for="port-scan-custom-ports" style="margin-top:6px;">Target Ports <span class="scope-hint" style="font-weight:normal; font-size:11px;">(Comma-separated list; leave blank for defaults)</span></label>
+                <input
+                  type="text"
+                  id="port-scan-custom-ports"
+                  class="port-scan-auth-input"
+                  placeholder="e.g. 80, 443, 8080, 8443 (default: method preset)"
+                  autocomplete="off"
+                />
+                <div class="port-preset-chips" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; margin-bottom:8px;">
+                  <button type="button" class="btn btn-secondary preset-port-btn" style="padding:2px 8px; font-size:11px;" data-ports="80, 443, 8080, 8443">⚡ Web (80,443,8080,8443)</button>
+                  <button type="button" class="btn btn-secondary preset-port-btn" style="padding:2px 8px; font-size:11px;" data-ports="25, 465, 587, 993, 995">✉️ Mail (25,465,587,993,995)</button>
+                  <button type="button" class="btn btn-secondary preset-port-btn" style="padding:2px 8px; font-size:11px;" data-ports="21, 22, 23, 3389">🛡️ Remote (21,22,23,3389)</button>
+                  <button type="button" class="btn btn-secondary preset-port-btn" style="padding:2px 8px; font-size:11px;" data-ports="3306, 5432, 6379, 27017">🗄️ Database (3306,5432,6379,27017)</button>
+                  <button type="button" class="btn btn-secondary preset-port-btn" style="padding:2px 8px; font-size:11px;" data-ports="">🌐 Defaults</button>
+                </div>
                 <p class="scope-option-note" id="port-scan-policy-note" hidden></p>
                 <div class="port-scan-auth-row">
                   <input

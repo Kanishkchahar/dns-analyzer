@@ -48,7 +48,8 @@ This trimmed response excerpt shows the backward-compatible response shape; real
 | `GET /api/badge/{domain}` | SVG image | Return a badge only when a recent scan exists in this process; otherwise return `404`. |
 | `GET /api/network/capabilities` | JSON booleans and counts | Report whether active port checks and the extended directory list are enabled and authorized on this deployment. Never returns keys or allowlist entries. |
 | `POST /api/network/list-scan` | `{"targets":["example.com"]}` | DNS-only scope checks for up to 50 targets. |
-| `POST /api/network/path-scan` | `{"targets":["example.com"]}` | Common-path checks for up to 5 targets. `wide:true` enables the fixed 64-path list for up to 2 targets, requires `confirmed:true`, and is subject to wide-scan server policy. |
+| `POST /api/network/path-scan` | `{"targets":["example.com"]}` | Common-path checks for up to 5 targets. `wide:true` enables the fixed 96-path list for up to 2 targets, requires `confirmed:true`, and is subject to wide-scan server policy. |
+| `POST /api/network/ffuf-path-scan` | `{"target":"example.com","confirmed":true,"wordlist":["admin","api"]}` | Optional ffuf path discovery, capped at 96 relative paths and 20 requests/second. Requires explicit confirmation, ffuf installed, and wide-directory server policy; accepts `X-Wide-Path-Token`. |
 | `POST /api/network/port-scan` | See below | Authorized, opt-in TCP port checks. |
 | `GET /health/live` | `{"status":"alive"}` | Process liveness. |
 | `GET /health/ready` | JSON readiness status | Check that dashboard assets are present. |
@@ -61,13 +62,13 @@ This trimmed response excerpt shows the backward-compatible response shape; real
 
 Port checks are disabled unless the server operator enables the required policy. Configure an authorization token and/or allowed domains. The dashboard sends a port-specific token in `X-Port-Scan-Token`; the body `auth_token` field is deprecated. Global API authentication, when enabled, is sent separately in `Authorization: Bearer <token>`. Private, loopback, and other non-public targets are blocked; only scan systems you own or are authorized to assess.
 
-Set `scanner` to `nmap` to request top-100 TCP service/version identification (requires the Nmap binary), or use `connect` for the eight common TCP ports. Add `"wide":true` with `connect` to probe the fixed 100-port curated service list instead; it is the same authorization policy, only more ports. Nmap scans use TCP connect mode and light version probes; vulnerability scripts, UDP scans, and full 1-65535 sweeps are not enabled.
+Set `scanner` to `nmap` to request top-200 TCP service/version identification (requires the Nmap binary), or use `connect` for the eight common TCP ports. Nmap uses `-Pn` and reports service confidence and port-state reasons when available. Add `"wide":true` with `connect` to probe the fixed 100-port curated service list instead; it is the same authorization policy, only more ports. Nmap scans use TCP connect mode and light version probes; vulnerability scripts, UDP scans, and full 1-65535 sweeps are not enabled.
 
 `GET /api/network/capabilities` is the supported way for a client to learn what the server permits before offering a control:
 
 ```json
 {"active_port_scan":{"enabled":true,"authorized":true,"requires_api_key":true,"scope_restricted":false,"allowed_domain_count":0,"max_ports":10,"max_wide_ports":100,"nmap_available":true},
- "wide_directory_scan":{"enabled":false,"authorized":false,"requires_api_key":false,"scope_restricted":false,"allowed_domain_count":0,"path_count":64,"max_targets":2}}
+ "wide_directory_scan":{"enabled":false,"authorized":false,"requires_api_key":false,"scope_restricted":false,"allowed_domain_count":0,"path_count":96,"max_targets":2}}
 ```
 
 Wide path requests use `ENABLE_WIDE_DIRECTORY_SCAN`, `WIDE_PATH_SCAN_ALLOWED_DOMAINS`, and/or `WIDE_PATH_SCAN_API_KEY`. The dashboard sends a configured extended-scan token in `X-Wide-Path-Token`. The UI confirmation alone does not override server policy, and there is no client-side switch that bypasses it: enable the feature on the server you operate.

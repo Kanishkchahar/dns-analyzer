@@ -79,11 +79,13 @@ async def discover_passive_subdomains(
         "state": "SOURCE_UNAVAILABLE",
         "discovered_count": 0,
         "subdomains": [],
+        "wildcards": [],
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         "attempts": 0,
     }
 
     discovered_names: dict[str, str | None] = {}
+    wildcards: set[str] = set()
     sources_succeeded: list[str] = []
     sources_failed: list[str] = []
     budget = work_budget or ScanWorkBudget()
@@ -121,7 +123,10 @@ async def discover_passive_subdomains(
                         name_val = item.get("name_value", "")
                         first_seen = str(item.get("entry_timestamp") or item.get("not_before") or "") or None
                         for line in name_val.splitlines():
-                            clean_name = line.strip().lower().lstrip("*.")
+                            raw_line = line.strip().lower()
+                            if raw_line.startswith("*.") and (raw_line == f"*.{norm_domain}" or raw_line.endswith(f".{norm_domain}")):
+                                wildcards.add(raw_line)
+                            clean_name = raw_line.lstrip("*.")
                             if clean_name.endswith(f".{norm_domain}") and clean_name != norm_domain:
                                 prior = discovered_names.get(clean_name)
                                 if clean_name not in discovered_names or (first_seen and (not prior or first_seen < prior)):
@@ -197,7 +202,10 @@ async def discover_passive_subdomains(
                 for name in issuance["dns_names"]:
                     if not isinstance(name, str):
                         continue
-                    clean_name = name.strip().lower().lstrip("*.").rstrip(".")
+                    raw_name = name.strip().lower().rstrip(".")
+                    if raw_name.startswith("*.") and (raw_name == f"*.{norm_domain}" or raw_name.endswith(f".{norm_domain}")):
+                        wildcards.add(raw_name)
+                    clean_name = raw_name.lstrip("*.")
                     if clean_name.endswith(f".{norm_domain}") and clean_name != norm_domain:
                         prior = discovered_names.get(clean_name)
                         if clean_name not in discovered_names or (first_seen and (not prior or first_seen < prior)):
@@ -209,6 +217,13 @@ async def discover_passive_subdomains(
         logger.info("Secondary CT source unavailable (%s)", type(exc).__name__)
 
     result["sources"] = sources_succeeded
+    result["wildcards"] = sorted(wildcards)
+    if wildcards:
+        findings.append(Finding(
+            severity="info",
+            record_type="Inventory",
+            message=f"Wildcard certificate ({', '.join(sorted(wildcards))}) detected in Certificate Transparency logs. Subdomains covered by a wildcard do not generate individual CT log entries and will not appear in passive discovery unless individually certified.",
+        ))
     if sources_succeeded and sources_failed and result["status"] == "complete":
         result["status"] = "partial"
         result["state"] = "PARTIAL_RESULTS"
@@ -316,3 +331,135 @@ async def discover_passive_subdomains(
         ))
 
     return result, findings
+
+
+HIGH_SIGNAL_SUBDOMAINS: tuple[str, ...] = (
+    # Academic, University & Education
+    "student", "students", "faculty", "staff", "alumni", "admission", "admissions",
+    "library", "result", "results", "exam", "exams", "portal", "lms", "moodle",
+    "canvas", "blackboard", "erp", "hostel", "summer", "campus", "course", "courses",
+    # Core Infrastructure & Web Services
+    "www", "app", "apps", "web", "cloud", "dashboard", "panel", "my", "account",
+    "user", "members", "member", "login", "auth", "sso", "idp", "iam", "connect",
+    "access", "mobile", "m", "gateway",
+    # Mail & Communications
+    "mail", "webmail", "email", "smtp", "pop", "imap", "mx", "owa", "exchange",
+    "office", "newsletter",
+    # Engineering, Tech & Administration
+    "admin", "administrator", "api", "dev", "developer", "test", "staging", "stage",
+    "beta", "demo", "git", "gitlab", "github", "jenkins", "jira", "wiki", "docs",
+    "status", "health", "monitor", "grafana", "kibana", "prometheus",
+    # Remote Access & Security
+    "vpn", "vpn1", "vpn2", "remote", "direct", "secure", "server", "cpanel", "whm",
+    # Finance, Billing & Commerce
+    "pay", "payment", "payments", "fees", "fee", "billing", "store", "shop", "checkout",
+    # Content & Media
+    "blog", "news", "media", "static", "cdn", "assets", "files", "download",
+    "help", "support", "contact", "careers", "jobs", "intranet", "internal"
+)
+
+
+async def enumerate_active_subdomains(
+    domain: str,
+    resolver: dns.asyncresolver.Resolver | None = None,
+    wordlist: list[str] | None = None,
+    concurrency: int = 15,
+    timeout: float = 2.0,
+    work_budget: ScanWorkBudget | None = None,
+) -> dict[str, Any]:
+    """Actively probe high-signal subdomain candidates via bounded DNS resolution.
+
+    Detects DNS wildcards first to prevent false positives.
+    """
+    import random
+    import string
+    from app.network_scan import is_safe_ip
+
+    norm_domain = domain.strip().lower().rstrip(".")
+    budget = work_budget or ScanWorkBudget(profile="network_scan")
+    res = resolver or budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
+    res.timeout = timeout
+    res.lifetime = timeout + 0.5
+
+    candidates = list(dict.fromkeys(
+        [w.strip().lower() for w in (wordlist or HIGH_SIGNAL_SUBDOMAINS) if w.strip()]
+    ))[:150]
+
+    # Detect DNS Wildcards (e.g. *.domain -> fixed IP)
+    wildcard_probe = f"_wildcard_{''.join(random.choices(string.ascii_lowercase + string.digits, k=12))}.{norm_domain}"
+    wildcard_ips: set[str] = set()
+    try:
+        w_ans = await res.resolve(wildcard_probe, "A")
+        wildcard_ips = {str(rr.address) for rr in w_ans if hasattr(rr, "address")}
+    except Exception:
+        pass
+
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _probe_candidate(prefix: str) -> dict[str, Any] | None:
+        target = f"{prefix}.{norm_domain}"
+        async with sem:
+            a_task = _safe_query(res, target, "A")
+            aaaa_task = _safe_query(res, target, "AAAA")
+            cname_task = _safe_query(res, target, "CNAME")
+            a_res, aaaa_res, cname_res = await asyncio.gather(a_task, aaaa_task, cname_task)
+
+            raw_ips = (a_res.get("records", []) if a_res.get("status") == "ok" else []) + \
+                      (aaaa_res.get("records", []) if aaaa_res.get("status") == "ok" else [])
+            cnames = cname_res.get("records", []) if cname_res.get("status") == "ok" else []
+            cname_target = cnames[0] if cnames else None
+
+            # Discard if it only resolves to the wildcard IP
+            if raw_ips and wildcard_ips and set(raw_ips).issubset(wildcard_ips):
+                return None
+
+            if not raw_ips and not cname_target:
+                return None
+
+            # Filter for safe public IPs
+            safe_ips = [ip for ip in raw_ips if is_safe_ip(ip)[0]]
+            status = "resolving" if safe_ips else ("dangling" if cname_target else "inactive")
+
+            takeover_data = None
+            if cname_target:
+                takeover_data, _ = await check_subdomain_takeover(
+                    target,
+                    {"CNAME": {"status": "ok", "records": cnames}},
+                    res,
+                    budget=budget,
+                )
+
+            labels = set(target.split("."))
+            risk_tags = sorted(labels.intersection({
+                "student", "faculty", "admin", "dev", "staging", "test", "internal",
+                "vpn", "auth", "login", "portal", "erp", "lms", "pay", "billing"
+            }))
+
+            return {
+                "subdomain": target,
+                "source": "Active Wordlist Enumeration",
+                "ips": safe_ips or raw_ips,
+                "cname": cname_target,
+                "cnames": cnames,
+                "status": status,
+                "first_seen": "Active DNS probe",
+                "risk_tags": risk_tags,
+                "takeover": takeover_data,
+                "is_active_probe": True,
+            }
+
+    tasks = [_probe_candidate(c) for c in candidates]
+    results = await asyncio.gather(*tasks)
+    discovered = [r for r in results if r is not None]
+    discovered.sort(key=lambda item: (0 if item["status"] == "resolving" else 1, item["subdomain"]))
+
+    return {
+        "status": "completed",
+        "domain": norm_domain,
+        "wildcard_dns_detected": bool(wildcard_ips),
+        "wildcard_dns_ips": sorted(wildcard_ips),
+        "probed_count": len(candidates),
+        "discovered_count": len(discovered),
+        "subdomains": discovered,
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+    }

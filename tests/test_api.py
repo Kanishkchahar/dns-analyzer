@@ -285,6 +285,7 @@ class TestAPIEndpoints:
         [
             ("post", "/api/analyze", {"domain": "example.com"}, "app.main.run_full_scan"),
             ("get", "/api/subdomains/example.com", None, "app.main.discover_passive_subdomains"),
+            ("post", "/api/subdomains/enumerate", {"domain": "example.com"}, "app.main.enumerate_active_subdomains"),
             ("post", "/api/email/dkim-selectors", {"domain": "example.com", "selectors": ["custom"]}, "app.main.check_dkim_selectors"),
             ("get", "/api/report/example.com", None, "app.main.run_full_scan"),
             ("post", "/api/network/list-scan", {"targets": ["example.com"]}, "app.main.run_list_scan"),
@@ -668,6 +669,32 @@ class TestAPIEndpoints:
                 resp = await client.get("/api/subdomains/example.com")
             assert resp.status_code == 200
             assert resp.json()["domain"] == "example.com"
+
+    async def test_api_subdomains_enumerate_endpoint(self):
+        mock_data = {
+            "status": "completed",
+            "domain": "example.com",
+            "wildcard_dns_detected": False,
+            "probed_count": 5,
+            "discovered_count": 1,
+            "subdomains": [
+                {
+                    "subdomain": "student.example.com",
+                    "source": "Active Wordlist Enumeration",
+                    "ips": ["93.184.216.34"],
+                    "status": "resolving",
+                }
+            ],
+        }
+        with patch("app.main.enumerate_active_subdomains", return_value=mock_data):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post("/api/subdomains/enumerate", json={"domain": "example.com"})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "completed"
+            assert data["discovered_count"] == 1
+            assert data["subdomains"][0]["subdomain"] == "student.example.com"
 
     def test_extract_client_ip_proxy_trust(self, monkeypatch):
         from app.main import _extract_client_ip

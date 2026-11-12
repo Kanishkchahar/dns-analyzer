@@ -79,7 +79,7 @@ The scanner also reports NXDOMAIN nameserver and MX targets as unverified dangli
 
 ### TLS and HTTPS
 
-The TLS/HTTPS check first resolves the hostname and blocks non-public or mixed unsafe address results. It connects to validated public addresses and reports the negotiated protocol and cipher, certificate issuer and validity dates, and whether the certificate names cover the hostname. Certificates expiring within 30 days are flagged. A certificate failure, unreachable service, and a completed handshake are different outcomes. The optional authorized Nmap mode checks the top 100 TCP ports with light service/version probes; it does not run vulnerability scripts or a UDP scan.
+The TLS/HTTPS check first resolves the hostname and blocks non-public or mixed unsafe address results. It connects to validated public addresses and reports the negotiated protocol and cipher, certificate issuer and validity dates, and whether the certificate names cover the hostname. Certificates expiring within 30 days are flagged. A certificate failure, unreachable service, and a completed handshake are different outcomes. The optional authorized Nmap mode checks the top 200 TCP ports with `-Pn` and light service/version probes; it does not run vulnerability scripts or a UDP scan.
 
 The HTTP checks inspect whether the HTTP endpoint redirects toward HTTPS, selected response headers (including HSTS, CSP, frame/content-type/referrer and browser-isolation policies), and security attributes on observed cookies. CSP review checks for selected common weaknesses; it is not a full policy audit. TLS performs separate bounded handshakes for TLS 1.0 through TLS 1.3 and reports weak ciphers when observed. This is not an exhaustive cipher-suite or vulnerability sweep.
 
@@ -91,7 +91,7 @@ RPKI results come from RIPEstat's observed route prefix/origin ASN and its RPKI 
 
 MX reputation checks use DNS queries for up to three MX hosts and up to two public IPv4 addresses per host against Spamhaus ZEN, Barracuda BRBL, and SpamCop. A source-specific positive DNS return code is required before the scanner reports a listing. DNSBL access-limit responses, timeouts, and budget exhaustion are inconclusive; they are not treated as clean results. The DNSBL operators can observe the queried mail-server IP addresses through the configured recursive resolver.
 
-The separate wide path mode is a fixed, non-recursive list of at most 64 same-host HTTPS paths. It is disabled by default and requires server-side policy, an approved target list and/or an API key, plus user confirmation in the dashboard. Nmap mode performs a bounded TCP connect scan of the top 100 ports with light service/version probes. It uses the configured active-scan authorization and does not run vulnerability scripts or UDP probes.
+The separate wide path mode is a fixed, non-recursive list of at most 96 same-host HTTPS paths. It is disabled by default and requires server-side policy, an approved target list and/or an API key, plus user confirmation in the dashboard. Nmap mode performs a bounded TCP connect scan of the top 200 ports with light service/version probes and `-Pn`; results include service confidence, CPE, and port-state reasons when Nmap provides them. It uses the configured active-scan authorization and does not run vulnerability scripts or UDP probes. The ffuf API option uses the same wide-path authorization, a pinned public IP, and a capped 96-entry wordlist/rate.
 
 ## Check plugins
 

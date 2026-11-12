@@ -295,3 +295,83 @@ class TestNetworkScan:
         assert res_bad_scope["status"] == "unauthorized"
         assert "not in approved server scan scope" in res_bad_scope["message"]
 
+    async def test_nmap_xml_maps_ssl_tunnel_to_https(self, monkeypatch):
+        from unittest.mock import AsyncMock, patch
+
+        nmap_xml = b"""<?xml version="1.0"?>
+        <nmaprun scanner="nmap" version="7.99">
+          <host>
+            <status state="up"/>
+            <address addr="103.196.215.223" addrtype="ipv4"/>
+            <ports>
+              <extraports state="filtered" count="98"/>
+              <port protocol="tcp" portid="443">
+                <state state="open"/>
+                <service name="http" product="nginx" version="1.27.2" tunnel="ssl">
+                  <cpe>cpe:/a:igor_sysoev:nginx:1.27.2</cpe>
+                </service>
+              </port>
+              <port protocol="tcp" portid="80">
+                <state state="open"/>
+                <service name="http" product="nginx" version="1.27.2"/>
+              </port>
+            </ports>
+          </host>
+        </nmaprun>"""
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (nmap_xml, b"")
+        mock_proc.returncode = 0
+
+        monkeypatch.setenv("ENABLE_ACTIVE_PORT_SCAN", "true")
+        monkeypatch.setenv("PORT_SCAN_ALLOWED_DOMAINS", "*")
+
+        with patch("shutil.which", return_value="/usr/bin/nmap"):
+            with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+                res = await run_port_scan("103.196.215.223", ports=[443, 80], confirmed=True, scanner="nmap")
+
+        assert res["status"] == "completed"
+        assert res["extraports_summary"]["filtered"] == 98
+        ports = {p["port"]: p for p in res["ports"]}
+        assert ports[443]["service"] == "https"
+        assert ports[443]["banner"] == "nginx 1.27.2"
+        assert ports[443]["cpe"] == "cpe:/a:igor_sysoev:nginx:1.27.2"
+        assert ports[80]["service"] == "http"
+
+    def test_normalize_network_target(self):
+        from app.network_scan import _normalize_network_target
+
+        assert _normalize_network_target("example.com") == ("example.com", None)
+        assert _normalize_network_target("EXAMPLE.COM.") == ("example.com", None)
+        assert _normalize_network_target("https://example.com/test") == ("example.com", None)
+        assert _normalize_network_target("http://example.com:8080/test") == ("example.com", 8080)
+        assert _normalize_network_target("example.com:443") == ("example.com", 443)
+        assert _normalize_network_target("93.184.216.34:80") == ("93.184.216.34", 80)
+        assert _normalize_network_target("2001:db8::1") == ("2001:db8::1", None)
+        assert _normalize_network_target("[2001:db8::1]:9000") == ("2001:db8::1", 9000)
+        assert _normalize_network_target("https://[2001:db8::1]:8443/api") == ("2001:db8::1", 8443)
+        assert _normalize_network_target("") == ("", None)
+
+    def test_authorization_with_normalized_targets(self, monkeypatch):
+        from app.network_scan import verify_port_scan_authorization, verify_wide_path_authorization
+
+        monkeypatch.setenv("DNS_ANALYZER_API_KEYS", "global-key")
+        monkeypatch.setenv("PORT_SCAN_API_KEY", "port-secret")
+        monkeypatch.setenv("PORT_SCAN_ALLOWED_DOMAINS", "example.com")
+        monkeypatch.setenv("ENABLE_WIDE_DIRECTORY_SCAN", "true")
+        monkeypatch.setenv("WIDE_PATH_SCAN_API_KEY", "wide-secret")
+        monkeypatch.setenv("WIDE_PATH_SCAN_ALLOWED_DOMAINS", "example.com")
+
+        # URL and host:port with allowed domain should pass scope check
+        ok, _ = verify_port_scan_authorization("Bearer port-secret", "https://sub.example.com:8443/path")
+        assert ok is True
+
+        ok, _ = verify_wide_path_authorization("Bearer wide-secret", "https://example.com:443/")
+        assert ok is True
+
+        # Target not matching scope should fail
+        not_ok, msg = verify_port_scan_authorization("Bearer port-secret", "https://other.org:8080")
+        assert not_ok is False
+        assert "not in approved server scan scope" in msg
+
+

@@ -11,8 +11,10 @@ import hmac
 import os
 import re
 import shutil
+import tempfile
+from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlsplit
 import defusedxml.ElementTree as ET
 from defusedxml.common import DefusedXmlException
 import dns.asyncresolver
@@ -20,6 +22,7 @@ import dns.exception
 import dns.resolver
 import httpx
 
+from app.models import FFUF_DEFAULT_RATE, FFUF_DEFAULT_TIMEOUT
 from app.tls_check import PinnedIPTransport, is_safe_ip, resolve_and_verify_all_ips
 from app.http_config import outbound_http_headers
 from app.work_budget import ScanBudgetExhausted, ScanWorkBudget
@@ -40,9 +43,9 @@ STANDARD_PORTS: dict[int, str] = {
 MAX_PORTS_PER_SCAN = 10
 MAX_WIDE_PORTS_PER_SCAN = 100
 MAX_NMAP_PORTS_PER_SCAN = 256
-MAX_WIDE_PATHS = 64
+MAX_WIDE_PATHS = 96
 COMMON_PATH_SCAN_HTTP_BUDGET = 20
-WIDE_PATH_SCAN_HTTP_BUDGET = 160
+WIDE_PATH_SCAN_HTTP_BUDGET = 256
 GLOBAL_PORT_SCAN_SEMAPHORE = asyncio.Semaphore(4)
 TARGET_SYNTAX_REGEX = re.compile(r"^[a-zA-Z0-9.\-_:\[\]]+$")
 
@@ -59,7 +62,7 @@ COMMON_WEB_PATHS: tuple[str, ...] = (
 )
 WIDE_DIRECTORY_PATHS: tuple[str, ...] = tuple(
     "/" + path for path in (
-        "admin/", "login", "dashboard/", "api/", "api/v1/", "docs/", "openapi.json",
+        "admin/", "login", "dashboard/", "api/", "api/v1/", "api/v2/", "docs/", "openapi.json",
         "swagger/", "graphql", "health", "status", "metrics", "debug/", "server-status",
         "backup/", "backups/", "old/", "archive/", "tmp/", "temp/", "test/", "staging/",
         "dev/", "config/", "settings/", ".env", ".git/HEAD", ".well-known/",
@@ -70,6 +73,12 @@ WIDE_DIRECTORY_PATHS: tuple[str, ...] = tuple(
         "cgi-bin/", "console/", "manage/", "oauth/", "auth/", "register", "search",
         "actuator/", "actuator/health", "actuator/env", ".DS_Store", "web.config",
         "error.log", "access.log", "dump.sql", "database.sql",
+        "api/docs", "api/swagger.json", "swagger.json", "v1/", "v2/", "graphql/",
+        "healthz", "readyz", "livez", "version", "server-info", "status/",
+        ".well-known/assetlinks.json", ".well-known/change-password", "security.txt",
+        "_next/", "static/robots.txt", "console/", "portal/", "account/", "users/",
+        "login/", "logout", "oauth2/", "sso/", "callback/", "monitoring/",
+        "actuator/info", "actuator/metrics", "nginx_status", "server-status/",
     )
 )
 WIDE_SCAN_PATHS: tuple[str, ...] = tuple(dict.fromkeys((*COMMON_WEB_PATHS, *WIDE_DIRECTORY_PATHS)))[:MAX_WIDE_PATHS]
@@ -222,6 +231,7 @@ def scan_capabilities() -> dict[str, Any]:
     wide_key = bool(os.environ.get("WIDE_PATH_SCAN_API_KEY", "").strip())
     wide_domains = _policy_domains("WIDE_PATH_SCAN_ALLOWED_DOMAINS")
     return {
+        "local_trust_mode": _local_trust_mode(),
         "active_port_scan": {
             "enabled": port_enabled,
             "authorized": port_enabled and (port_key or bool(port_domains) or _local_trust_mode()),
@@ -244,6 +254,35 @@ def scan_capabilities() -> dict[str, Any]:
     }
 
 
+def _normalize_network_target(target: str) -> tuple[str, int | None]:
+    """Extract clean hostname/IP and optional port from a URL, hostname, or host:port string."""
+    t = target.strip()
+    if not t:
+        return "", None
+    try:
+        ip = ipaddress.ip_address(t)
+        return str(ip), None
+    except ValueError:
+        pass
+
+    port: int | None = None
+    try:
+        candidate = t if "://" in t else f"//{t}"
+        parsed = urlsplit(candidate)
+        if parsed.hostname:
+            t = parsed.hostname
+        if parsed.port:
+            port = parsed.port
+    except Exception:
+        if ":" in t and not t.startswith("[") and t.count(":") == 1:
+            parts = t.split(":", 1)
+            if parts[1].isdigit():
+                port = int(parts[1])
+                t = parts[0]
+
+    return t.strip("/").strip("[]").strip().lower().rstrip("."), port
+
+
 def verify_wide_path_authorization(auth_header: str | None, target: str) -> tuple[bool, str]:
     """Apply server policy to the higher-volume fixed directory list."""
     if not is_wide_directory_scan_allowed():
@@ -260,8 +299,8 @@ def verify_wide_path_authorization(auth_header: str | None, target: str) -> tupl
             return False, "Authorization required for wide directory discovery."
     if allowed_env:
         allowed = [item.strip().lower().rstrip(".") for item in allowed_env.split(",") if item.strip()]
-        normalized = target.strip().lower().rstrip(".")
-        if not any(normalized == item or normalized.endswith(f".{item}") for item in allowed):
+        clean_target, _ = _normalize_network_target(target)
+        if not any(clean_target == item or clean_target.endswith(f".{item}") for item in allowed):
             return False, "Target is outside the server's approved wide directory scan scope."
     return True, "Authorized"
 
@@ -300,7 +339,7 @@ def verify_port_scan_authorization(
 
     if allowed_targets_env:
         allowed = [d.strip().lower() for d in allowed_targets_env.split(",") if d.strip()]
-        clean_target = target.strip().lower().rstrip(".")
+        clean_target, _ = _normalize_network_target(target)
         if "*" not in allowed and not any(clean_target == a or clean_target.endswith(f".{a}") for a in allowed):
             return (
                 False,
@@ -308,7 +347,6 @@ def verify_port_scan_authorization(
             )
 
     return True, "Authorized"
-
 
 
 async def run_list_scan(
@@ -330,14 +368,16 @@ async def run_list_scan(
             "reasons": [],
         }
 
+        norm_target, _ = _normalize_network_target(target)
+
         # Validate input length and basic characters
-        if len(target) > 253 or not TARGET_SYNTAX_REGEX.fullmatch(target):
+        if len(norm_target) > 253 or not TARGET_SYNTAX_REGEX.fullmatch(norm_target):
             target_info["reasons"].append("Invalid target syntax or length exceeds 253 characters.")
             target_info["status"] = "invalid"
             return target_info
 
         # Check if target is already an IP
-        ip_candidate = target[1:-1] if target.startswith("[") and target.endswith("]") else target
+        ip_candidate = norm_target[1:-1] if norm_target.startswith("[") and norm_target.endswith("]") else norm_target
         is_ip_direct, reason = is_safe_ip(ip_candidate)
         if is_ip_direct:
             target_info["resolved_ips"].append({"ip": ip_candidate, "safe": True, "reason": "Public IP"})
@@ -353,7 +393,7 @@ async def run_list_scan(
 
         # Reject malformed DNS names before spending resolver budget. A trailing
         # dot is allowed because it denotes an absolute DNS name.
-        hostname = target.rstrip(".")
+        hostname = norm_target.rstrip(".")
         labels = hostname.split(".")
         if (
             not hostname
@@ -368,7 +408,7 @@ async def run_list_scan(
         async with list_semaphore:
             async def query(rdtype: str) -> tuple[list[str], str]:
                 try:
-                    answer = await asyncio.wait_for(resolver.resolve(target, rdtype), timeout=2.5)
+                    answer = await asyncio.wait_for(resolver.resolve(norm_target, rdtype), timeout=2.5)
                     records = [str(record.address) for record in answer if hasattr(record, "address")]
                     return records, "resolved" if records else "no_answer"
                 except dns.resolver.NXDOMAIN:
@@ -445,24 +485,26 @@ async def run_common_path_scan(
     resolver = resolver or budget.resolver_for(dns.asyncresolver.Resolver(), "network_scan")
 
     async def _scan_target(target: str) -> dict[str, Any]:
-        if len(target) > 253 or not TARGET_SYNTAX_REGEX.fullmatch(target):
+        norm_target, url_port = _normalize_network_target(target)
+        if len(norm_target) > 253 or not TARGET_SYNTAX_REGEX.fullmatch(norm_target):
             return {"target": target, "status": "invalid", "reason": "Invalid target syntax or length.", "paths": []}
 
         async with target_semaphore:
-            safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(target, port=443, resolver=resolver)
+            scan_port = url_port or 443
+            safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(norm_target, port=scan_port, resolver=resolver)
             if not safe_all or not resolved_ips:
                 exhausted = budget.dns_remaining <= 0
                 return {"target": target, "status": "inconclusive" if exhausted else "blocked", "reason": "DNS query budget exhausted; target resolution is inconclusive." if exhausted else reason, "paths": []}
 
             path_semaphore = asyncio.Semaphore(7)
-            url_host = target.strip("[]")
+            url_host = norm_target.strip("[]")
             try:
                 if ipaddress.ip_address(url_host).version == 6:
                     url_host = f"[{url_host}]"
             except ValueError:
                 pass
-            origin = f"https://{url_host}"
-            target_host = target.strip("[]")
+            origin = f"https://{url_host}:{scan_port}" if url_port and url_port != 443 else f"https://{url_host}"
+            target_host = norm_target.strip("[]")
             advertised: dict[str, dict[str, str | None]] = {}
             declared_sitemap_paths: set[str] = set()
 
@@ -604,10 +646,13 @@ async def run_port_scan(
 
     if scanner not in ("connect", "nmap"):
         return {"status": "error", "message": "Scanner must be 'connect' or 'nmap'."}
+    clean_host, url_port = _normalize_network_target(target)
     if wide and scanner != "connect":
         wide = False
     if ports:
         target_ports = sorted(set(ports))
+    elif url_port:
+        target_ports = [url_port]
     elif scanner == "nmap":
         target_ports = []
     elif wide:
@@ -646,7 +691,6 @@ async def run_port_scan(
         }
 
     # Resolve target and enforce strict SSRF check across all resolved IPs
-    clean_host = target.strip().lower().rstrip(".")
     safe_all, resolved_ips, reason = await resolve_and_verify_all_ips(clean_host, port=target_ports[0] if target_ports else 443, resolver=resolver)
     if not safe_all or not resolved_ips:
         return {
@@ -662,24 +706,24 @@ async def run_port_scan(
             return {"status": "nmap_unavailable", "target": clean_host,
                     "message": "Nmap is not installed on this server. Install Nmap or select the basic TCP check."}
         port_arg = ",".join(str(port) for port in target_ports)
-        args = [nmap, "-sT", "-sV", "--version-light", "-Pn", "--open", "-T3",
-                "--max-retries", "1", "--host-timeout", "45s", "-oX", "-"]
+        args = [nmap, "-sT", "-sV", "--version-light", "-Pn", "--reason", "--open", "-T4",
+                "--max-retries", "1", "--host-timeout", "40s", "-oX", "-"]
         if port_arg:
             args.extend(["-p", port_arg])
         else:
-            args.extend(["--top-ports", "100"])
+            args.extend(["--top-ports", "200"])
         args.append(target_ip)
         async with GLOBAL_PORT_SCAN_SEMAPHORE:
             try:
                 process = await asyncio.create_subprocess_exec(
                     *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
                 )
-                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=55.0)
+                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=50.0)
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
                 return {"status": "timeout", "target": clean_host,
-                        "message": "Nmap service identification exceeded the 55 second limit."}
+                        "message": "Nmap service identification exceeded the 50 second limit."}
             except asyncio.CancelledError:
                 if process.returncode is None:
                     with suppress(ProcessLookupError):
@@ -702,24 +746,79 @@ async def run_port_scan(
                     continue
                 service_node = port_node.find("service")
                 service = service_node.get("name", "unknown") if service_node is not None else "unknown"
+                tunnel = service_node.get("tunnel") if service_node is not None else None
+                port_id = int(port_node.get("portid", "0"))
+                if tunnel == "ssl":
+                    service = "https" if service in ("http", "unknown") else f"ssl/{service}"
+                elif service == "http" and port_id in (443, 8443):
+                    service = "https"
                 parts = [service_node.get(key, "") for key in ("product", "version", "extrainfo")] if service_node is not None else []
                 banner = " ".join(part for part in parts if part).strip() or None
-                port_results.append({"port": int(port_node.get("portid", "0")),
-                                     "service": service, "state": "open", "banner": banner,
-                                     "confidence": "nmap_version_probe"})
+                cpe_node = service_node.find("cpe") if service_node is not None else None
+                cpe = cpe_node.text.strip() if cpe_node is not None and cpe_node.text else None
+                scripts = {
+                    s.get("id"): s.get("output", "").strip()
+                    for s in port_node.findall("script")
+                    if s.get("id") and s.get("output")
+                }
+                port_results.append({
+                    "port": port_id,
+                    "service": service,
+                    "state": "open",
+                    "banner": banner,
+                    "cpe": cpe,
+                    "scripts": scripts if scripts else None,
+                    "service_method": service_node.get("method") if service_node is not None else None,
+                    "service_confidence": service_node.get("conf") if service_node is not None else None,
+                    "reason": state_node.get("reason"),
+                    "confidence": "nmap_version_probe",
+                })
         except (ET.ParseError, ValueError):
             return {"status": "error", "target": clean_host,
                     "message": "Nmap returned unparseable results."}
+
+        extraports_summary = {}
+        for ep_node in root.findall(".//extraports"):
+            st = ep_node.get("state", "filtered")
+            cnt = int(ep_node.get("count", "0"))
+            extraports_summary[st] = extraports_summary.get(st, 0) + cnt
+
         port_results.sort(key=lambda item: item["port"])
-        findings = [{"severity": "info", "category": "NETWORK",
-                     "target": f"{target_ip}:{item['port']}",
-                     "message": f"Nmap identified {item['service']} on TCP/{item['port']}: {item['banner'] or 'version not identified'}.",
-                     "evidence": item["banner"] or "TCP service probe response",
-                     "confidence": item["confidence"]} for item in port_results]
-        return {"status": "completed", "scanner": "nmap -sT -sV --version-light",
-                "target": clean_host, "target_ip": target_ip,
-                "probed_ports_count": len(target_ports) if target_ports else 100,
-                "open_ports_count": len(port_results), "ports": port_results, "findings": findings}
+        findings = []
+        for item in port_results:
+            p = item["port"]
+            svc = item["service"]
+            ban = item["banner"] or "version not identified"
+            is_sensitive = p in (21, 23, 3389, 2375, 3306, 5432, 6379, 27017)
+            sev = "warning" if is_sensitive else "info"
+            msg = f"Nmap identified {svc} on TCP/{p}: {ban}."
+            if p in (3306, 5432, 6379, 27017):
+                msg += " Caution: Database port is exposed to the public internet."
+            elif p in (21, 23):
+                msg += " Caution: Legacy plaintext administration protocol is exposed."
+            elif p in (3389, 2375):
+                msg += " Caution: Remote management/Docker interface exposed to the public network."
+            findings.append({
+                "severity": sev,
+                "category": "NETWORK",
+                "target": f"{target_ip}:{p}",
+                "message": msg,
+                "evidence": item["banner"] or "TCP service probe response",
+                "cpe": item.get("cpe"),
+                "confidence": item["confidence"],
+            })
+
+        return {
+            "status": "completed",
+            "scanner": "nmap -sT -sV --version-light -Pn",
+            "target": clean_host,
+            "target_ip": target_ip,
+            "probed_ports_count": len(target_ports) if target_ports else 200,
+            "open_ports_count": len(port_results),
+            "extraports_summary": extraports_summary,
+            "ports": port_results,
+            "findings": findings,
+        }
 
     async with GLOBAL_PORT_SCAN_SEMAPHORE:
         semaphore = asyncio.Semaphore(16 if wide else 4)
@@ -798,4 +897,120 @@ async def run_port_scan(
         "open_ports_count": len(open_ports),
         "ports": port_results,
         "findings": findings,
+    }
+
+
+
+async def run_ffuf_scan(
+    target: str,
+    wordlist: list[str] | None = None,
+    rate: int = FFUF_DEFAULT_RATE,
+    timeout: int = FFUF_DEFAULT_TIMEOUT,
+    auth_header: str | None = None,
+) -> dict[str, Any]:
+    """Run one bounded ffuf path pass against a pinned, approved public address."""
+    import json
+
+    if wordlist is None:
+        wordlist = [path.lstrip("/") for path in WIDE_SCAN_PATHS]
+
+    if not 1 <= rate <= 20 or not 1 <= timeout <= 10:
+        return {"status": "error", "message": "ffuf rate must be 1–20 requests/second and timeout must be 1–10 seconds."}
+    if not wordlist or len(wordlist) > MAX_WIDE_PATHS:
+        return {"status": "error", "message": f"Provide between 1 and {MAX_WIDE_PATHS} paths."}
+    clean_words: list[str] = []
+    for entry in wordlist:
+        word = str(entry).strip().strip("/")
+        if not word or len(word) > 120 or not re.fullmatch(r"[A-Za-z0-9._~/-]+", word) or ".." in word.split("/"):
+            return {"status": "error", "message": "Wordlist entries must be simple relative path names (no query strings or traversal)."}
+        clean_words.append(word)
+    clean_words = list(dict.fromkeys(clean_words))
+
+    # Normalize target
+    clean_host, url_port = _normalize_network_target(target)
+    if not clean_host:
+        return {"status": "error", "message": "Invalid target provided."}
+
+    # Apply the same separate server-side policy as wide directory discovery.
+    if not is_wide_directory_scan_allowed():
+        return {
+            "status": "disabled",
+            "message": "Wide directory discovery is disabled by server deployment policy.",
+        }
+
+    auth_ok, auth_msg = verify_wide_path_authorization(auth_header, target)
+    if not auth_ok:
+        return {"status": "unauthorized", "message": auth_msg}
+    ffuf = shutil.which("ffuf")
+    if not ffuf:
+        return {"status": "ffuf_unavailable", "target": clean_host, "message": "ffuf is not installed on this server."}
+
+    safe, resolved_ips, reason = await resolve_and_verify_all_ips(clean_host, port=url_port or 443)
+    if not safe or not resolved_ips:
+        return {"status": "blocked", "target": clean_host, "message": f"SSRF guard blocked ffuf: {reason}"}
+    host_for_url = resolved_ips[0]
+    if ":" in host_for_url:
+        host_for_url = f"[{host_for_url}]"
+    port_suffix = f":{url_port}" if url_port and url_port != 443 else ""
+    ffuf_cmd = [
+        ffuf, "-w", "", "-u", f"https://{host_for_url}{port_suffix}/FUZZ",
+        "-H", f"Host: {clean_host}", "-sni", clean_host, "-k",
+        "-mc", "all", "-fc", "404", "-rate", str(rate), "-t", str(min(rate, 10)),
+        "-timeout", str(timeout), "-maxtime", "50", "-noninteractive", "-json",
+    ]
+    discovered: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(prefix="dns-analyzer-ffuf-") as temp_dir:
+        wordlist_path = Path(temp_dir) / "paths.txt"
+        wordlist_path.write_text("\n".join(clean_words) + "\n", encoding="utf-8")
+        ffuf_cmd[2] = str(wordlist_path)
+        process = None
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *ffuf_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=55.0)
+        except asyncio.TimeoutError:
+            if process and process.returncode is None:
+                process.kill()
+                await process.wait()
+            return {"status": "timeout", "target": clean_host, "message": "ffuf exceeded its 55 second limit."}
+        except OSError:
+            return {"status": "ffuf_unavailable", "target": clean_host, "message": "ffuf could not be started on this server."}
+        except asyncio.CancelledError:
+            if process and process.returncode is None:
+                with suppress(ProcessLookupError):
+                    process.kill()
+                with suppress(Exception):
+                    await process.communicate()
+            raise
+        if process.returncode not in (0, 1):
+            return {"status": "error", "target": clean_host, "message": "ffuf did not complete successfully."}
+        for line in stdout.decode("utf-8", errors="replace").splitlines():
+            try:
+                item = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            status = int(item.get("status", 0) or 0)
+            if status < 200 or status >= 500:
+                continue
+            discovered.append({
+                "path": "/" + str(item.get("input", {}).get("FUZZ", "")).lstrip("/"),
+                "url": item.get("url"),
+                "status_code": status,
+                "length": item.get("length", 0),
+                "lines": item.get("lines", 0),
+                "words": item.get("words", 0),
+                "content_type": item.get("content-type"),
+                "redirect_location": item.get("redirectlocation"),
+            })
+    open_endpoints = [item for item in discovered if 200 <= item["status_code"] < 300]
+
+    return {
+        "status": "completed" if discovered else "no_results",
+        "target": target,
+        "total_paths_checked": len(clean_words),
+        "discovered_paths": discovered,
+        "open_endpoints": open_endpoints,
+        "total_open": len(open_endpoints),
+        "scanner": "ffuf",
     }

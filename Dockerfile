@@ -64,7 +64,7 @@ COPY app ./app
 COPY static ./static
 
 # Nmap is optional at runtime but enables bounded service/version identification.
-RUN apt-get update && apt-get install -y --no-install-recommends nmap \
+RUN apt-get update && apt-get install -y --no-install-recommends nmap ffuf \
     && nmap --version >/dev/null \
     && rm -rf /var/lib/apt/lists/*
 

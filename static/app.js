@@ -70,6 +70,33 @@ const digDomainLabel   = document.getElementById("dig-domain-label");
 const digTerminalBody  = document.getElementById("dig-terminal-body");
 const copyDigBtn       = document.getElementById("copy-dig-btn");
 
+// Network Scope & Port Scan DOM refs
+const listScanInput = document.getElementById("list-scan-input");
+const networkResults = document.getElementById("network-results");
+const networkPathResults = document.getElementById("network-path-results");
+const stopScopeScanButton = document.getElementById("stop-scope-scan");
+const scopeScanStatus = document.getElementById("scope-scan-status");
+const portScanConfirm = document.getElementById("port-scan-confirm");
+const btnRunPortScan = document.getElementById("btn-run-port-scan");
+const portScanModeSelect = document.getElementById("port-scan-mode");
+const portScanCustomPorts = document.getElementById("port-scan-custom-ports");
+const portScanTokenInput = document.getElementById("port-scan-auth-token");
+const portScanPolicyNote = document.getElementById("port-scan-policy-note");
+const widePathConfirm = document.getElementById("wide-path-confirm");
+const widePathTokenInput = document.getElementById("wide-path-auth-token");
+const btnRunListScan = document.getElementById("btn-run-list-scan");
+const btnRunPathScan = document.getElementById("btn-run-path-scan");
+const btnRunFfufScan = document.getElementById("btn-run-ffuf-scan");
+const scopeReadiness = document.getElementById("scope-readiness");
+const scopeReadinessChips = document.getElementById("scope-readiness-chips");
+const btnProbeSubdomains = document.getElementById("btn-probe-subdomains");
+const subdomainFilterInput = document.getElementById("subdomain-filter-input");
+const subdomainFilterStats = document.getElementById("subdomain-filter-stats");
+let activeScopeScanController = null;
+let currentSubdomainData = null;
+let currentSubdomainsList = [];
+
+
 // ── State ─────────────────────────────────────────────────────
 let currentDomain = "";
 let currentFindings = [];
@@ -790,7 +817,59 @@ function hideError() {
   errorMsg.textContent = "";
 }
 
+function resetScopePanel(newDomain = "") {
+  if (activeScopeScanController) {
+    try { activeScopeScanController.abort(); } catch (_) {}
+    activeScopeScanController = null;
+  }
+  document.body.classList.remove("scope-scanning");
+
+  if (listScanInput && newDomain) {
+    listScanInput.value = newDomain;
+  }
+  if (portScanCustomPorts) {
+    portScanCustomPorts.value = "";
+  }
+  if (subdomainFilterInput) {
+    subdomainFilterInput.value = "";
+  }
+  if (subdomainFilterStats) {
+    subdomainFilterStats.textContent = "";
+  }
+  currentSubdomainData = null;
+  currentSubdomainsList = [];
+
+  if (networkResults) {
+    networkResults.style.display = "none";
+    networkResults.innerHTML = "";
+  }
+  if (networkPathResults) {
+    networkPathResults.style.display = "none";
+    networkPathResults.innerHTML = "";
+  }
+  if (scopeScanStatus) {
+    scopeScanStatus.textContent = "";
+  }
+  if (stopScopeScanButton) {
+    stopScopeScanButton.hidden = true;
+    stopScopeScanButton.disabled = true;
+  }
+  if (portScanConfirm) {
+    portScanConfirm.checked = false;
+  }
+  if (btnRunPortScan) {
+    btnRunPortScan.disabled = true;
+  }
+  if (widePathConfirm) {
+    widePathConfirm.checked = false;
+    if (widePathTokenInput) widePathTokenInput.hidden = true;
+  }
+  if (btnRunListScan) btnRunListScan.disabled = false;
+  if (btnRunPathScan) btnRunPathScan.disabled = false;
+}
+
 function hideResults() {
+  resetScopePanel();
   multiDomainDashboard?.classList.remove("visible");
   results.classList.remove("visible");
   document.body.classList.remove("results-active");
@@ -878,11 +957,8 @@ function renderResults(data, recheckContext = null) {
   // Passive Subdomain Footprint
   renderSubdomains(data.subdomains);
 
-  // Default network scope input
-  const scopeInput = document.getElementById("list-scan-input");
-  if (scopeInput && !scopeInput.value.trim()) {
-    scopeInput.value = data.domain;
-  }
+  // Reset network scope input and clear prior port/path scan results
+  resetScopePanel(data.domain);
 
   // 1-Click Remediation Fixes
   renderRemediation(data.remediation, data.bind_zone_snippet);
@@ -1117,6 +1193,7 @@ function updateTabBadges(data) {
     findingsBadge.textContent = String((data.findings || []).length);
     findingsBadge.className = "tab-badge " + (errCount > 0 ? "badge-red" : "badge-green");
   }
+  if (btnRunFfufScan) btnRunFfufScan.disabled = !wide.enabled;
 }
 
 // ── Bento Grid Security Posture Cockpit ───────────────────────
@@ -2544,7 +2621,7 @@ function renderTLS(tls) {
   tlsSec.style.display = "block";
 }
 
-// ── Passive Subdomain Footprint Rendering ─────────────────────
+// ── Passive & Active Subdomain Footprint Rendering ───────────
 function renderSubdomains(subData) {
   const subSec = document.getElementById("subdomains-section");
   const subList = document.getElementById("subdomains-list");
@@ -2557,6 +2634,7 @@ function renderSubdomains(subData) {
   subSec.style.display = "none";
   subList.innerHTML = "";
 
+  currentSubdomainData = subData;
   const inventoryStatus = subData?.status || "unavailable";
   if (subdomainsMeta) {
     const state = String(subData?.state || inventoryStatus).replaceAll("_", " ").toLowerCase();
@@ -2566,6 +2644,7 @@ function renderSubdomains(subData) {
     subdomainsMeta.textContent = `Result: ${state} · Source: ${source} · Checked: ${timestamp}${attempts}`;
   }
   const subs = subData?.subdomains || [];
+  currentSubdomainsList = subs;
   if (exportCsvButton) {
     exportCsvButton.disabled = subs.length === 0;
     exportCsvButton.onclick = () => {
@@ -2574,7 +2653,7 @@ function renderSubdomains(subData) {
         const safe = /^[=+@\-\t\r]/.test(text) ? `'${text}` : text;
         return `"${safe.replaceAll('"', '""')}"`;
       };
-      const rows = [["hostname", "status", "addresses", "cname", "first_seen", "risk_tags", "takeover_status"], ...subs.map(item => [item.subdomain, item.status, (item.ips || []).join("; "), item.cname || "", item.first_seen || "", (item.risk_tags || []).join("; "), item.takeover?.status || "not_checked"])];
+      const rows = [["hostname", "source", "status", "addresses", "cname", "first_seen", "risk_tags", "takeover_status"], ...subs.map(item => [item.subdomain, item.source || "Certificate Transparency", item.status, (item.ips || []).join("; "), item.cname || "", item.first_seen || "", (item.risk_tags || []).join("; "), item.takeover?.status || "not_checked"])];
       const csv = rows.map(row => row.map(cell).join(",")).join("\r\n");
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
       const url = URL.createObjectURL(blob);
@@ -2608,19 +2687,72 @@ function renderSubdomains(subData) {
     return;
   }
 
-  if (subs.length === 0) {
-    subList.innerHTML = `
-      <div class="${inventoryStatus === "partial" ? "tls-unavailable" : "no-issues"}" role="status" style="margin-top:12px;">
-        ${inventoryStatus === "partial"
-          ? "Certificate Transparency returned only a partial inventory; no names were recovered from the available response."
-          : "No publicly logged subdomains detected via Certificate Transparency for this domain apex."}
+  let wildcardsBanner = "";
+  if (subData?.wildcards?.length) {
+    const listStr = subData.wildcards.map(w => `<code>${escapeHtml(w)}</code>`).join(", ");
+    wildcardsBanner = `
+      <div class="subdomain-wildcard-banner" style="margin-top:10px; margin-bottom:12px; padding:10px 14px; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.25); border-radius:6px; font-size:12px; color:var(--text-secondary); line-height:1.5;">
+        <strong style="color:var(--text-primary);">ℹ️ Wildcard certificate (${listStr}) active:</strong>
+        Subdomains served under this wildcard (such as <code>student.${escapeHtml(currentDomain)}</code>) do not generate individual Certificate Transparency log entries.
+        <div style="margin-top:6px;">
+          <button class="btn btn-secondary btn-run-active-sub-probe" type="button" style="padding:3px 10px; font-size:11px;">
+            ⚡ Probe Active Subdomains Now
+          </button>
+        </div>
       </div>
     `;
-    subSec.style.display = "block";
-    return;
+  }
+
+  function renderRows(items) {
+    if (items.length === 0) {
+      return `<tr><td colspan="8" style="text-align:center; padding:18px; color:var(--text-muted);">No matching subdomains found.</td></tr>`;
+    }
+    return items.map(s => {
+      const isDangling = s.status === "dangling" || s.takeover?.vulnerable;
+      const takeoverStatus = s.takeover?.status || "not_checked";
+      const statusPill = isDangling
+        ? `<span class="pill pill-fail"><span class="status-indicator-dot dot-yellow"></span>${s.takeover?.vulnerable ? "Takeover risk" : "Dangling CNAME"}</span>`
+        : (s.status === "wildcard_only"
+            ? `<span class="pill pill-info">Wildcard only</span>`
+            : s.status === "resolving"
+            ? `<span class="pill pill-ok"><span class="status-indicator-dot dot-green"></span> Active</span>`
+            : `<span class="pill pill-warn"><span class="status-indicator-dot dot-yellow"></span> Inactive</span>`);
+
+      const isDnsProbe = s.is_active_probe || s.source === "Active Wordlist Enumeration";
+      const sourceBadge = isDnsProbe
+        ? `<span class="pill pill-info" style="font-size:10px; padding:2px 6px; margin-left:6px;" title="Discovered via direct DNS wordlist probe">DNS Probe</span>`
+        : "";
+
+      const escapedIps = (s.ips || []).map(ip => escapeHtml(ip)).join(", ");
+
+      return `
+        <tr>
+          <td style="font-family:'Geist Mono', monospace; font-weight:600; color:var(--text-primary);">
+            ${escapeHtml(s.subdomain)}${sourceBadge}
+          </td>
+          <td style="font-family:'Geist Mono', monospace; font-size:12px;">${escapedIps || '<span style="color:var(--text-muted)">None</span>'}</td>
+          <td style="font-family:'Geist Mono', monospace; font-size:12px; color:var(--text-muted);">${escapeHtml(s.cname || "—")}</td>
+          <td>${(s.risk_tags || []).map(tag => `<span class="pill pill-warn">${escapeHtml(tag)}</span>`).join(" ") || "—"}</td>
+          <td>${escapeHtml(s.first_seen || "Not reported")}</td>
+          <td>${escapeHtml(takeoverStatus)}</td>
+          <td>${statusPill}</td>
+          <td style="white-space:nowrap;">
+            <div style="display:flex; gap:6px; align-items:center;">
+              <button class="btn btn-secondary btn-add-scope" data-host="${escapeHtml(s.subdomain)}" style="padding:3px 8px; font-size:11px;" type="button" title="Add to target scope list">
+                + Scope
+              </button>
+              <button class="btn btn-secondary btn-quick-port-scan" data-host="${escapeHtml(s.subdomain)}" style="padding:3px 8px; font-size:11px;" type="button" title="Verify open ports on this host">
+                ⚡ Ports
+              </button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join("");
   }
 
   let tableHtml = `
+    ${wildcardsBanner}
     <div class="records-table-container" style="margin-top:14px;">
       <table class="records-table">
         <thead>
@@ -2635,57 +2767,141 @@ function renderSubdomains(subData) {
             <th>Action</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="subdomains-tbody">
+          ${renderRows(subs)}
+        </tbody>
+      </table>
+    </div>
   `;
-
-  for (const s of subs) {
-    const isDangling = s.status === "dangling" || s.takeover?.vulnerable;
-    const takeoverStatus = s.takeover?.status || "not_checked";
-    const statusPill = isDangling
-      ? `<span class="pill pill-fail"><span class="status-indicator-dot dot-yellow"></span>${s.takeover?.vulnerable ? "Takeover risk" : "Dangling CNAME"}</span>`
-      : (s.status === "wildcard_only"
-          ? `<span class="pill pill-info">Wildcard only</span>`
-          : s.status === "resolving"
-          ? `<span class="pill pill-ok"><span class="status-indicator-dot dot-green"></span> Active</span>`
-          : `<span class="pill pill-warn"><span class="status-indicator-dot dot-yellow"></span> Inactive</span>`);
-
-    const escapedIps = (s.ips || []).map(ip => escapeHtml(ip)).join(", ");
-
-    tableHtml += `
-      <tr>
-        <td style="font-family:'Geist Mono', monospace; font-weight:600; color:var(--text-primary);">${escapeHtml(s.subdomain)}</td>
-        <td style="font-family:'Geist Mono', monospace; font-size:12px;">${escapedIps || '<span style="color:var(--text-muted)">None</span>'}</td>
-        <td style="font-family:'Geist Mono', monospace; font-size:12px; color:var(--text-muted);">${escapeHtml(s.cname || "—")}</td>
-        <td>${(s.risk_tags || []).map(tag => `<span class="pill pill-warn">${escapeHtml(tag)}</span>`).join(" ") || "—"}</td>
-        <td>${escapeHtml(s.first_seen || "Not reported")}</td>
-        <td>${escapeHtml(takeoverStatus)}</td>
-        <td>${statusPill}</td>
-        <td>
-          <button class="btn btn-secondary btn-add-scope" data-host="${escapeHtml(s.subdomain)}" style="padding:4px 10px; font-size:11px;" type="button">
-            + Add to Scope
-          </button>
-        </td>
-      </tr>
-    `;
-  }
-
-  tableHtml += `</tbody></table></div>`;
   subList.innerHTML = tableHtml;
 
-  // Add click handlers for "+ Add to Scope"
-  subList.querySelectorAll(".btn-add-scope").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const host = btn.getAttribute("data-host");
-      const scopeInput = document.getElementById("list-scan-input");
-      if (scopeInput && host) {
-        const cur = scopeInput.value.trim();
-        scopeInput.value = cur ? `${cur}\n${host}` : host;
-        switchSegmentTab("tab-network");
-      }
+  function bindTableActions() {
+    subList.querySelectorAll(".btn-add-scope").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const host = btn.getAttribute("data-host");
+        const scopeInput = document.getElementById("list-scan-input");
+        if (scopeInput && host) {
+          const cur = scopeInput.value.trim();
+          scopeInput.value = cur ? `${cur}\n${host}` : host;
+          switchSegmentTab("tab-network");
+          showToast(`Added ${host} to scope.`);
+        }
+      });
     });
-  });
+
+    subList.querySelectorAll(".btn-quick-port-scan").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const host = btn.getAttribute("data-host");
+        if (listScanInput && host) {
+          listScanInput.value = host;
+        }
+        if (portScanConfirm) {
+          portScanConfirm.checked = true;
+        }
+        if (btnRunPortScan) {
+          btnRunPortScan.disabled = false;
+        }
+        switchSegmentTab("tab-network");
+        document.getElementById("panel-network")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        showToast(`Target set to ${host}. Ready to verify ports.`);
+      });
+    });
+
+    subList.querySelectorAll(".btn-run-active-sub-probe").forEach(btn => {
+      btn.addEventListener("click", runActiveSubdomainProbe);
+    });
+  }
+
+  bindTableActions();
+
+  // Setup filter search listener
+  if (subdomainFilterInput) {
+    subdomainFilterInput.oninput = () => {
+      const q = subdomainFilterInput.value.trim().toLowerCase();
+      const tbody = document.getElementById("subdomains-tbody");
+      if (!tbody) return;
+      const filtered = q
+        ? currentSubdomainsList.filter(s =>
+            s.subdomain.toLowerCase().includes(q) ||
+            (s.ips || []).some(ip => ip.toLowerCase().includes(q)) ||
+            (s.risk_tags || []).some(t => t.toLowerCase().includes(q))
+          )
+        : currentSubdomainsList;
+      tbody.innerHTML = renderRows(filtered);
+      bindTableActions();
+      if (subdomainFilterStats) {
+        subdomainFilterStats.textContent = q ? `Showing ${filtered.length} of ${currentSubdomainsList.length}` : "";
+      }
+    };
+  }
 
   subSec.style.display = "block";
+}
+
+async function runActiveSubdomainProbe() {
+  if (!currentDomain) return;
+  const probeBtn = btnProbeSubdomains || document.querySelector(".btn-run-active-sub-probe");
+  const origHtml = probeBtn ? probeBtn.innerHTML : "";
+  if (probeBtn) {
+    probeBtn.disabled = true;
+    probeBtn.innerHTML = `<span class="mini-spinner" aria-hidden="true"></span> Probing…`;
+  }
+  showToast("Probing ~100 common subdomains via direct DNS queries…");
+
+  try {
+    const resp = await apiFetch("/api/subdomains/enumerate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain: currentDomain }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(apiErrorMessage(resp, data, "Subdomain probe failed."));
+
+    const newSubs = data.subdomains || [];
+    if (newSubs.length === 0) {
+      showToast("DNS probe completed: No additional active subdomains found from wordlist.", "info");
+      return;
+    }
+
+    const existingNames = new Set(currentSubdomainsList.map(s => s.subdomain.toLowerCase()));
+    let addedCount = 0;
+    for (const sub of newSubs) {
+      if (!existingNames.has(sub.subdomain.toLowerCase())) {
+        currentSubdomainsList.push(sub);
+        existingNames.add(sub.subdomain.toLowerCase());
+        addedCount++;
+      } else {
+        // Upgrade existing entry if it was inactive but now resolving
+        const idx = currentSubdomainsList.findIndex(s => s.subdomain.toLowerCase() === sub.subdomain.toLowerCase());
+        if (idx !== -1 && currentSubdomainsList[idx].status !== "resolving" && sub.status === "resolving") {
+          currentSubdomainsList[idx] = sub;
+          addedCount++;
+        }
+      }
+    }
+
+    currentSubdomainsList.sort((a, b) => {
+      const order = { resolving: 0, dangling: 1, unverified: 2, inactive: 3 };
+      return (order[a.status] ?? 4) - (order[b.status] ?? 4);
+    });
+
+    if (currentSubdomainData) {
+      currentSubdomainData.subdomains = currentSubdomainsList;
+      renderSubdomains(currentSubdomainData);
+    }
+    showToast(`Discovered ${addedCount} active subdomain(s)!`, "success");
+  } catch (err) {
+    showToast(err.message || "Failed to probe subdomains.", "danger");
+  } finally {
+    if (probeBtn) {
+      probeBtn.disabled = false;
+      probeBtn.innerHTML = origHtml;
+    }
+  }
+}
+
+if (btnProbeSubdomains) {
+  btnProbeSubdomains.addEventListener("click", runActiveSubdomainProbe);
 }
 
 // ── 1-Click Remediation Fix Generator ─────────────────────────
@@ -3249,18 +3465,6 @@ window.addEventListener("online", () => {
 });
 
 // ── Network Scope & Port Scan Handlers ────────────────────────
-const listScanInput = document.getElementById("list-scan-input");
-const btnRunListScan = document.getElementById("btn-run-list-scan");
-const btnRunPathScan = document.getElementById("btn-run-path-scan");
-const widePathConfirm = document.getElementById("wide-path-confirm");
-const widePathTokenInput = document.getElementById("wide-path-auth-token");
-const portScanConfirm = document.getElementById("port-scan-confirm");
-const btnRunPortScan = document.getElementById("btn-run-port-scan");
-const portScanModeSelect = document.getElementById("port-scan-mode");
-const portScanTokenInput = document.getElementById("port-scan-auth-token");
-const portScanPolicyNote = document.getElementById("port-scan-policy-note");
-const scopeReadiness = document.getElementById("scope-readiness");
-const scopeReadinessChips = document.getElementById("scope-readiness-chips");
 const SCAN_TOKEN_STORAGE = { port: "dns-analyzer:port-scan-token", wide: "dns-analyzer:wide-path-token" };
 
 function readScanToken(key) {
@@ -3349,11 +3553,6 @@ async function loadScanCapabilities() {
     renderScanCapabilities(await resp.json());
   } catch (_) {}
 }
-const networkResults = document.getElementById("network-results");
-const networkPathResults = document.getElementById("network-path-results");
-const stopScopeScanButton = document.getElementById("stop-scope-scan");
-const scopeScanStatus = document.getElementById("scope-scan-status");
-let activeScopeScanController = null;
 
 function beginScopeScan(label) {
   if (activeScopeScanController) return null;
@@ -3420,7 +3619,7 @@ if (btnRunPathScan && listScanInput && networkPathResults) {
     networkPathResults.innerHTML = `
       <div class="audit-card path-scan-loading" role="status" aria-live="polite">
         <span class="mini-spinner" aria-hidden="true"></span>
-        <span>${wide ? "Checking a bounded 64-path directory list and same-host redirects." : "Checking common HTTPS paths and same-host redirects."} No recursive crawling.</span>
+        <span>${wide ? "Checking up to 96 curated directory paths and same-host redirects." : "Checking common HTTPS paths and same-host redirects."} No recursive crawling.</span>
       </div>`;
 
     let finalStatus = "Website path check complete";
@@ -3518,6 +3717,75 @@ if (btnRunPathScan && listScanInput && networkPathResults) {
           <path d="M5 9h2m2 0h2m-6 2h2" stroke-linecap="round"/>
         </svg>
         <span>Check website paths</span>`;
+    }
+  });
+}
+
+if (btnRunFfufScan && listScanInput && networkPathResults) {
+  btnRunFfufScan.addEventListener("click", async () => {
+    if (!widePathConfirm?.checked) {
+      showToast("Confirm the extended directory scan before running ffuf.");
+      widePathConfirm?.focus();
+      return;
+    }
+    const target = listScanInput.value.split(/[\n,]+/).map(value => value.trim()).filter(Boolean)[0];
+    if (!target) {
+      showToast("Enter an approved hostname or public IP first.");
+      listScanInput.focus();
+      return;
+    }
+    const scanController = beginScopeScan("ffuf directory discovery");
+    if (!scanController) return;
+    const original = btnRunFfufScan.innerHTML;
+    btnRunFfufScan.disabled = true;
+    btnRunFfufScan.setAttribute("aria-busy", "true");
+    btnRunFfufScan.innerHTML = `<span class="mini-spinner" aria-hidden="true"></span><span>Running ffuf…</span>`;
+    networkPathResults.style.display = "block";
+    networkPathResults.innerHTML = `<div class="audit-card path-scan-loading" role="status" aria-live="polite"><span class="mini-spinner" aria-hidden="true"></span> Running a rate-limited ffuf pass against ${escapeHtml(target)}…</div>`;
+    let finalStatus = "ffuf directory discovery complete";
+    try {
+      const wideToken = (widePathTokenInput?.value || "").trim();
+      rememberScanToken(SCAN_TOKEN_STORAGE.wide, wideToken);
+      const resp = await apiFetch("/api/network/ffuf-path-scan", {
+        method: "POST",
+        signal: scanController.signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...(wideToken ? { "X-Wide-Path-Token": wideToken } : {}),
+        },
+        body: JSON.stringify({ target, confirmed: true }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(apiErrorMessage(resp, data, "ffuf directory discovery failed."));
+      if (data.status !== "completed" && data.status !== "no_results") {
+        throw new Error(data.message || `ffuf scan ${data.status || "failed"}.`);
+      }
+      const rows = (data.discovered_paths || []).map(item => `<tr>
+        <td><code class="path-name">${escapeHtml(item.path)}</code></td>
+        <td><code>${item.status_code}</code></td>
+        <td>${item.length} bytes · ${item.words} words · ${item.lines} lines</td>
+        <td>${escapeHtml(item.content_type || item.redirect_location || "—")}</td>
+      </tr>`).join("");
+      networkPathResults.innerHTML = `<section class="audit-card path-scan-card" aria-label="ffuf results for ${escapeHtml(target)}">
+        <div class="audit-card-header"><div><span class="audit-card-title">ffuf Directory Results <span class="audit-card-target">${escapeHtml(target)}</span></span>
+        <div class="path-scan-summary">${data.total_paths_checked} paths checked · ${data.total_open} successful responses · ${data.discovered_paths?.length || 0} notable responses</div></div>
+        <span class="pill ${data.total_open ? "pill-warn" : "pill-ok"}">${data.total_open ? "Review results" : "No 2xx paths"}</span></div>
+        ${rows ? `<div class="records-table-container path-table-container"><table class="records-table path-results-table"><thead><tr><th>Path</th><th>HTTP</th><th>Response size</th><th>Content type / redirect</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="path-scan-reason">No matching paths were reported.</p>`}
+      </section>`;
+    } catch (err) {
+      if (err.name === "AbortError") {
+        finalStatus = "ffuf scan stopped";
+        networkPathResults.innerHTML = `<div class="audit-card" role="status">ffuf scan stopped.</div>`;
+      } else {
+        finalStatus = "ffuf scan failed";
+        networkPathResults.innerHTML = `<div class="audit-card path-scan-error" role="alert">${escapeHtml(err.message || "ffuf directory discovery failed.")}</div>`;
+        showToast(err.message || "ffuf directory discovery failed.", "danger");
+      }
+    } finally {
+      finishScopeScan(scanController, finalStatus);
+      btnRunFfufScan.disabled = false;
+      btnRunFfufScan.removeAttribute("aria-busy");
+      btnRunFfufScan.innerHTML = original;
     }
   });
 }
@@ -3688,6 +3956,16 @@ if (btnRunListScan && listScanInput && networkResults) {
   });
 }
 
+document.querySelectorAll(".preset-port-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (portScanCustomPorts) {
+      const val = btn.getAttribute("data-ports") || "";
+      portScanCustomPorts.value = val;
+      showToast(val ? `Ports set to ${val}` : "Reset to default port profile");
+    }
+  });
+});
+
 if (btnRunPortScan && listScanInput && networkResults) {
   btnRunPortScan.addEventListener("click", async () => {
     const raw = listScanInput.value.trim();
@@ -3698,10 +3976,29 @@ if (btnRunPortScan && listScanInput && networkResults) {
     }
     const scanController = beginScopeScan("authorized port check");
     if (!scanController) return;
+
+    let customPortsList = null;
+    const rawPorts = (portScanCustomPorts?.value || "").trim();
+    if (rawPorts) {
+      const parts = rawPorts.split(/[\s,]+/).map(x => parseInt(x, 10)).filter(x => !isNaN(x));
+      const invalid = parts.some(p => p < 1 || p > 65535);
+      if (invalid) {
+        showToast("Ports must be numbers between 1 and 65535.", "danger");
+        finishScopeScan(scanController, "Invalid ports specified");
+        return;
+      }
+      if (parts.length > 100) {
+        showToast("Maximum 100 custom ports allowed per scan.", "danger");
+        finishScopeScan(scanController, "Port count limit exceeded");
+        return;
+      }
+      customPortsList = Array.from(new Set(parts));
+    }
+
     btnRunPortScan.disabled = true;
     btnRunPortScan.textContent = "Running Service Scan…";
     networkResults.style.display = "block";
-    networkResults.innerHTML = `<div class="audit-card path-scan-loading" role="status" aria-live="polite"><span class="mini-spinner" aria-hidden="true"></span> Checking the first target with the selected TCP method…</div>`;
+    networkResults.innerHTML = `<div class="audit-card path-scan-loading" role="status" aria-live="polite"><span class="mini-spinner" aria-hidden="true"></span> Checking target ${escapeHtml(firstTarget)} with the selected TCP method…</div>`;
 
     const authToken = (portScanTokenInput?.value || "").trim() || null;
     rememberScanToken(SCAN_TOKEN_STORAGE.port, authToken || "");
@@ -3722,6 +4019,7 @@ if (btnRunPortScan && listScanInput && networkResults) {
           confirmed: true,
           scanner: widePorts ? "connect" : portMode,
           wide: widePorts,
+          ...(customPortsList ? { ports: customPortsList } : {}),
         }),
       });
       const data = await resp.json();
@@ -3774,6 +4072,24 @@ if (btnRunPortScan && listScanInput && networkResults) {
       }
 
       networkResults.style.display = "block";
+      const extraStatsHtml = data.extraports_summary ? Object.entries(data.extraports_summary).map(([st, cnt]) => `
+        <span class="audit-stat-sep">/</span>
+        <div class="audit-stat-chip">
+          <span>${escapeHtml(st)}:</span>
+          <strong>${cnt}</strong>
+        </div>
+      `).join("") : "";
+
+      const warningFindings = (data.findings || []).filter(f => f.severity === "warning");
+      const warningsHtml = warningFindings.length > 0 ? `
+        <div style="margin:12px 16px; padding:10px 14px; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.25); border-radius:6px; font-size:12px; color:var(--text-secondary);">
+          <strong style="color:var(--color-danger, #ef4444);">⚠️ Exposure Warnings:</strong>
+          <ul style="margin:4px 0 0 16px; padding:0;">
+            ${warningFindings.map(f => `<li>${escapeHtml(f.message)}</li>`).join("")}
+          </ul>
+        </div>
+      ` : "";
+
       networkResults.innerHTML = `
         <div class="audit-card">
           <div class="audit-card-header">
@@ -3804,12 +4120,15 @@ if (btnRunPortScan && listScanInput && networkResults) {
               <span>Open Services:</span>
               <strong class="${data.open_ports_count > 0 ? 'color-good' : ''}">${data.open_ports_count || 0} Active</strong>
             </div>
+            ${extraStatsHtml}
             <span class="audit-stat-sep">/</span>
             <div class="audit-stat-chip">
               <span>Safety Filter:</span>
               <strong class="color-good">SSRF Passed</strong>
             </div>
           </div>
+
+          ${warningsHtml}
 
           <p class="port-scan-result-note">An open port means a TCP connection was accepted; it does not by itself prove a vulnerability. Filtered ports may not reveal whether a service is running.</p>
 
@@ -3842,12 +4161,14 @@ if (btnRunPortScan && listScanInput && networkResults) {
                       </td>
                       <td>
                         <span style="font-weight:600; color:var(--text-primary);">${escapeHtml(p.service)}</span>
+                        ${p.cpe ? `<div style="font-size:10px; color:var(--text-muted); font-family:monospace; margin-top:2px;">${escapeHtml(p.cpe)}</div>` : ""}
                       </td>
                       <td>${statePill}</td>
                       <td>
                         <div class="banner-evidence-cell" title="${escapeHtml(p.banner || (isOpen ? 'TCP SYN/ACK Handshake Confirmed' : 'Connection Refused / Filtered'))}">
                           ${escapeHtml(p.banner || (isOpen ? 'TCP SYN/ACK Handshake Confirmed' : 'Connection Refused / Filtered'))}
                         </div>
+                        ${(p.service_method || p.reason) ? `<div style="font-size:10px; color:var(--text-muted); margin-top:3px;">${p.service_method ? `Probe: ${escapeHtml(p.service_method)}${p.service_confidence ? ` (confidence ${escapeHtml(p.service_confidence)}/10)` : ""}` : ""}${p.reason ? `${p.service_method ? " · " : ""}State reason: ${escapeHtml(p.reason)}` : ""}</div>` : ""}
                       </td>
                     </tr>
                   `;

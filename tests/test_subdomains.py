@@ -143,3 +143,84 @@ async def test_ct_timeout_is_reported_as_timeout_after_bounded_retries(monkeypat
     assert attempts == data["attempts"] == 2
     assert data["status"] == "unavailable"
     assert data["state"] == "TIMEOUT"
+
+
+@pytest.mark.asyncio
+async def test_ct_wildcard_detection_reports_wildcard_and_finding(monkeypatch):
+    class WildcardResponse(_CTResponse):
+        async def aiter_bytes(self):
+            yield b'[{"name_value":"*.example.com\\nsub.example.com"}]'
+
+    class WildcardClient(_CTClient):
+        def stream(self, *_args, **_kwargs):
+            return WildcardResponse()
+
+    monkeypatch.setattr("app.subdomains.httpx.AsyncClient", lambda **_kwargs: WildcardClient())
+    data, findings = await discover_passive_subdomains("example.com", MockResolver())
+
+    assert "*.example.com" in data["wildcards"]
+    assert any("Wildcard certificate (*.example.com) detected" in f.message for f in findings)
+    assert any(item["subdomain"] == "sub.example.com" for item in data["subdomains"])
+
+
+@pytest.mark.asyncio
+async def test_enumerate_active_subdomains():
+    from app.subdomains import enumerate_active_subdomains
+
+    class ActiveResolver(MockResolver):
+        async def resolve(self, qname, rdtype, *args, **kwargs):
+            host = qname.rstrip(".").lower()
+            kind = rdtype.upper()
+            if host == "student.example.com" and kind == "A":
+                return MockAnswer([MockRR(address="93.184.216.34")])
+            if host == "mail.example.com" and kind == "A":
+                return MockAnswer([MockRR(address="93.184.216.35")])
+            if host == "dangling.example.com" and kind == "CNAME":
+                return MockAnswer([MockRR(target="unclaimed.github.io.")])
+            raise dns.resolver.NXDOMAIN()
+
+    res = await enumerate_active_subdomains(
+        "example.com",
+        resolver=ActiveResolver(),
+        wordlist=["student", "mail", "dangling", "nonexistent"],
+    )
+
+    assert res["status"] == "completed"
+    assert res["discovered_count"] == 3
+    found_names = [s["subdomain"] for s in res["subdomains"]]
+    assert "student.example.com" in found_names
+    assert "mail.example.com" in found_names
+    assert "dangling.example.com" in found_names
+    assert "nonexistent.example.com" not in found_names
+    assert res["wildcard_dns_detected"] is False
+
+
+@pytest.mark.asyncio
+async def test_enumerate_active_subdomains_wildcard_dns_filtering():
+    from app.subdomains import enumerate_active_subdomains
+
+    class WildcardDNSResolver(MockResolver):
+        async def resolve(self, qname, rdtype, *args, **kwargs):
+            host = qname.rstrip(".").lower()
+            kind = rdtype.upper()
+            if kind == "A":
+                # Real host with unique IP
+                if host == "student.example.com":
+                    return MockAnswer([MockRR(address="93.184.216.50")])
+                # Every other host resolves to wildcard IP 192.0.2.1
+                return MockAnswer([MockRR(address="192.0.2.1")])
+            raise dns.resolver.NXDOMAIN()
+
+    res = await enumerate_active_subdomains(
+        "example.com",
+        resolver=WildcardDNSResolver(),
+        wordlist=["student", "random1", "random2"],
+    )
+
+    assert res["status"] == "completed"
+    assert res["wildcard_dns_detected"] is True
+    # Only student.example.com should be discovered, random1 and random2 should be filtered out
+    found_names = [s["subdomain"] for s in res["subdomains"]]
+    assert "student.example.com" in found_names
+    assert "random1.example.com" not in found_names
+    assert "random2.example.com" not in found_names

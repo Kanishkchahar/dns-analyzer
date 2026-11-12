@@ -9,6 +9,10 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.auth import validate_public_target_name
 from app.finding_catalog import get_finding_guidance, known_finding_codes, legacy_codes_for
+# ffuf defaults
+FFUF_DEFAULT_RATE = 10  # requests per second
+FFUF_DEFAULT_TIMEOUT = 5  # seconds per target
+
 
 _finding_logger = logging.getLogger(__name__)
 
@@ -227,3 +231,46 @@ class PortScanRequest(BaseModel):
     auth_token: str | None = None
     scanner: str = "connect"
     wide: bool = False
+
+
+class SubdomainEnumerateRequest(BaseModel):
+    domain: str
+    custom_words: list[str] | None = None
+
+    @field_validator("domain")
+    @classmethod
+    def validate_domain(cls, value: str) -> str:
+        return AnalyzeRequest(domain=value).domain
+
+    @field_validator("custom_words")
+    @classmethod
+    def validate_custom_words(cls, values: list[str] | None) -> list[str] | None:
+        if not values:
+            return None
+        cleaned = [v.strip().lower() for v in values if v.strip()]
+        if len(cleaned) > 200:
+            raise ValueError("Maximum 200 custom subdomain prefixes allowed.")
+        return cleaned
+
+
+class FfufPathRequest(BaseModel):
+    target: str
+    confirmed: bool = False
+    wordlist: list[str] | None = Field(default=None, max_length=96)
+    rate: int = Field(default=FFUF_DEFAULT_RATE, ge=1, le=20)
+    timeout: int = Field(default=FFUF_DEFAULT_TIMEOUT, ge=1, le=10)
+
+    @field_validator("target")
+    @classmethod
+    def validate_target(cls, value: str) -> str:
+        return AnalyzeRequest(domain=value).domain
+
+    @field_validator("wordlist")
+    @classmethod
+    def validate_wordlist(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        cleaned = [value.strip() for value in values if value.strip()]
+        if not cleaned or any(len(value) > 120 for value in cleaned):
+            raise ValueError("Provide 1–96 non-empty path entries, each no longer than 120 characters.")
+        return cleaned
